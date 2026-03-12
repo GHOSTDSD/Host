@@ -52,12 +52,14 @@ const TERMINAL_HTML = `<!DOCTYPE html>
 <script src="/socket.io/socket.io.js"></script>
 <style>
 body{background:#020602;color:#00ff88;font-family:monospace;margin:0;overflow:hidden;display:flex;flex-direction:column;height:100vh}
-header{padding:10px;border-bottom:1px solid #142014;display:flex;justify-content:space-between;background:#030803}
-#log{flex:1;overflow-y:auto;padding:15px;white-space:pre-wrap;font-size:13px;color:rgba(0,255,136,0.9)}
+header{padding:15px;border-bottom:1px solid #142014;display:flex;justify-content:space-between;background:#030803;font-weight:bold}
+#log{flex:1;overflow-y:auto;padding:20px;white-space:pre-wrap;font-size:13px;color:rgba(0,255,136,0.9);line-height:1.5}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-thumb{background:#142014}
 </style>
 </head>
 <body>
-<header><div>ARES HOST - TERMINAL</div><div id="stats">CONECTANDO...</div></header>
+<header><div>ARES HOST - LIVE TERMINAL</div><div id="stats">CARREGANDO...</div></header>
 <div id="log"></div>
 <script>
 const socket = io();
@@ -78,12 +80,13 @@ app.get("/api/stats", (req, res) => res.json({
 }));
 
 function setupChild(child, botId) {
-  activeBots[botId] = { process: child };
+  activeBots[botId] = { process: child, startedAt: Date.now() };
   child.stdout.on("data", d => {
     const t = `[${botId}] ${d}`;
     process.stdout.write(t);
     io.emit("global-log", t);
   });
+  child.stderr.on("data", d => io.emit("global-log", `[${botId}-ERRO] ${d}`));
   child.on("exit", () => {
     delete activeBots[botId];
     aresBanner();
@@ -93,17 +96,19 @@ function setupChild(child, botId) {
 
 function spawnBot(botId, instancePath) {
   const files = fs.readdirSync(instancePath);
-  const main = files.find(f => ["index.js","main.js","bot.js"].includes(f));
+  const main = files.find(f => ["index.js","main.js","bot.js","start.js"].includes(f));
+  
   if (main) {
-    setupChild(spawn("node", [main], { cwd: instancePath, shell: true }), botId);
+    setupChild(spawn("node", ["--max-old-space-size=128", main], { cwd: instancePath, shell: true }), botId);
   } else if (fs.existsSync(path.join(instancePath, "package.json"))) {
-    const inst = spawn("npm", ["install"], { cwd: instancePath, shell: true });
+    io.emit("global-log", `[${botId}] JS não encontrado, tentando npm start...\\n`);
+    const inst = spawn("npm", ["install", "--omit=dev"], { cwd: instancePath, shell: true });
     inst.on("exit", () => setupChild(spawn("npm", ["start"], { cwd: instancePath, shell: true }), botId));
   }
 }
 
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, "🤖 *ARES HOST ATIVO*\n\nEnvie um arquivo `.zip` com seu bot.\nSe não houver `index.js`, tentarei `npm start`.", { parse_mode: "Markdown" });
+  bot.sendMessage(msg.chat.id, "✨ *ARES HOST ATIVO*\n\nEnvie o arquivo `.zip` do seu bot para hospedar.", { parse_mode: "Markdown" });
 });
 
 bot.on("document", async (msg) => {
@@ -116,9 +121,41 @@ bot.on("document", async (msg) => {
   require("https").get(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, (res) => {
     res.pipe(unzipper.Extract({ path: p })).on("close", () => {
       spawnBot(botId, p);
-      bot.sendMessage(msg.chat.id, `✅ Bot \`${botId}\` online!`, { parse_mode: "Markdown" });
+      const opts = {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔄 Reiniciar", callback_data: `restart:${botId}` }, { text: "🛑 Parar", callback_data: `stop:${botId}` }],
+            [{ text: "📊 Status", callback_data: `status:${botId}` }, { text: "🗑 Deletar", callback_data: `delete:${botId}` }]
+          ]
+        }
+      };
+      bot.sendMessage(msg.chat.id, `✅ *Bot:* \`${botId}\` iniciado com sucesso!`, opts);
     });
   });
+});
+
+bot.on("callback_query", (query) => {
+  const [action, botId] = query.data.split(":");
+  const p = path.resolve(BASE_PATH, botId);
+
+  if (action === "stop") {
+    if (activeBots[botId]) {
+      activeBots[botId].process.kill();
+      bot.answerCallbackQuery(query.id, { text: "Bot parado!" });
+    }
+  } else if (action === "restart") {
+    if (activeBots[botId]) activeBots[botId].process.kill();
+    setTimeout(() => spawnBot(botId, p), 1000);
+    bot.answerCallbackQuery(query.id, { text: "Reiniciando..." });
+  } else if (action === "status") {
+    const isOnline = activeBots[botId] ? "ON" : "OFF";
+    bot.answerCallbackQuery(query.id, { text: `Bot: ${botId} | Status: ${isOnline}`, show_alert: true });
+  } else if (action === "delete") {
+    if (activeBots[botId]) activeBots[botId].process.kill();
+    fs.rmSync(p, { recursive: true, force: true });
+    bot.answerCallbackQuery(query.id, { text: "Instância deletada!" });
+  }
 });
 
 server.listen(PORT, () => aresBanner());
