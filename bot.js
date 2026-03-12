@@ -81,29 +81,40 @@ function spawnBot(botId, instancePath) {
     aresBanner();
 
     if (fs.existsSync(path.join(instancePath, "package.json"))) {
-        writeLog(botId, instancePath, `[SISTEMA] Iniciando instalação...\n`);
+        writeLog(botId, instancePath, `[SISTEMA] Instalando dependências...\n`);
         const install = spawn("npm", ["install", "--production", "--no-audit"], { cwd: instancePath, shell: true, env });
         
         install.stdout.on("data", d => writeLog(botId, instancePath, d.toString()));
         install.on("close", (code) => {
-            if (code === 0) runNode(botId, instancePath, botPort, env);
+            if (code === 0) runInstance(botId, instancePath, botPort, env);
             else {
                 writeLog(botId, instancePath, `[ERRO] NPM falhou: ${code}\n`);
                 releasePort(botPort);
             }
         });
     } else {
-        runNode(botId, instancePath, botPort, env);
+        runInstance(botId, instancePath, botPort, env);
     }
 }
 
-function runNode(botId, instancePath, botPort, env) {
+function runInstance(botId, instancePath, botPort, env) {
     const files = fs.readdirSync(instancePath);
-    let main = files.find(f => ["index.js", "main.js", "bot.js", "start.js", "app.js"].includes(f));
-    if (!main && fs.existsSync(path.join(instancePath, "src/index.js"))) main = "src/index.js";
+    
+    let shellScript = files.find(f => f.endsWith(".sh") || f.endsWith(".bat") || f.endsWith(".bah") || f === "start.sh");
+    let nodeMain = files.find(f => ["index.js", "main.js", "bot.js", "start.js", "app.js"].includes(f));
+    if (!nodeMain && fs.existsSync(path.join(instancePath, "src/index.js"))) nodeMain = "src/index.js";
 
-    if (main) {
-        const child = spawn("node", [main], { cwd: instancePath, shell: true, env });
+    let child;
+
+    if (shellScript) {
+        if (os.platform() !== "win32") fs.chmodSync(path.join(instancePath, shellScript), "755");
+        const cmd = os.platform() === "win32" ? shellScript : `./${shellScript}`;
+        child = spawn(cmd, [], { cwd: instancePath, shell: true, env });
+    } else if (nodeMain) {
+        child = spawn("node", [nodeMain], { cwd: instancePath, shell: true, env });
+    }
+
+    if (child) {
         activeBots[botId] = { process: child, port: botPort, path: instancePath };
 
         child.stdout.on("data", d => writeLog(botId, instancePath, d.toString()));
@@ -116,7 +127,7 @@ function runNode(botId, instancePath, botPort, env) {
         });
         aresBanner();
     } else {
-        writeLog(botId, instancePath, "[ERRO] Arquivo principal não localizado.\n");
+        writeLog(botId, instancePath, "[ERRO] Nenhum script de inicialização (.sh, .js, .bat) encontrado.\n");
         releasePort(botPort);
     }
 }
