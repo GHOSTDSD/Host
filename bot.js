@@ -37,28 +37,27 @@ const aresBanner = () => {
    BOTS: ${Object.keys(activeBots).length} | RAM: ${ram}MB | UP: ${up}s`);
 };
 
-// TERMINAL INDIVIDUAL POR BOT
+// TERMINAL INDIVIDUAL
 app.get("/terminal/:botId", (req, res) => {
   res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-  <title>TERMINAL | \${req.params.botId}</title>
+  <title>ARES | ${req.params.botId}</title>
   <script src="/socket.io/socket.io.js"></script>
   <style>
-    body{background:#000;color:#0f0;font-family:monospace;margin:0;overflow:hidden;display:flex;flex-direction:column;height:100vh}
-    header{background:#111;padding:15px;border-bottom:1px solid #333;font-size:12px;color:#888}
-    #log{flex:1;overflow-y:auto;padding:20px;white-space:pre-wrap;line-height:1.4;font-size:13px}
-    .err{color:#f44}
+    body{background:#000;color:#0f0;font-family:monospace;margin:0;display:flex;flex-direction:column;height:100vh}
+    header{background:#111;padding:15px;border-bottom:1px solid #333;font-size:12px}
+    #log{flex:1;overflow-y:auto;padding:20px;white-space:pre-wrap;font-size:13px}
   </style>
 </head>
 <body>
-  <header>ID: \${req.params.botId} | STATUS: CONECTADO</header>
+  <header>BOT: ${req.params.botId} | STATUS: CONECTADO</header>
   <div id="log"></div>
   <script>
     const socket = io();
-    socket.on('log-\${req.params.botId}', d => { 
-      const log = document.getElementById('log');
+    const log = document.getElementById('log');
+    socket.on('log-${req.params.botId}', d => { 
       log.innerText += d; 
       log.scrollTop = log.scrollHeight; 
     });
@@ -75,50 +74,52 @@ function spawnBot(botId, instancePath) {
   const files = fs.readdirSync(instancePath);
   const main = files.find(f => ["index.js","main.js","bot.js","start.js"].includes(f));
   
-  // SOLUÇÃO EADDRINUSE: Passar uma porta aleatória para o bot filho
+  // Resolve o erro EADDRINUSE dando uma porta aleatória pro bot filho
   const childEnv = { ...process.env, PORT: Math.floor(Math.random() * 5000) + 10000 };
 
   const start = (cmd, args) => {
     const child = spawn(cmd, args, { cwd: instancePath, shell: true, env: childEnv });
     activeBots[botId] = { process: child };
 
-    child.stdout.on("data", d => io.emit(\`log-\${botId}\`, d.toString()));
-    child.stderr.on("data", d => io.emit(\`log-\${botId}\`, d.toString()));
+    child.stdout.on("data", d => io.emit(`log-${botId}`, d.toString()));
+    child.stderr.on("data", d => io.emit(`log-${botId}`, d.toString()));
     
     child.on("exit", () => {
-      io.emit(\`log-\${botId}\`, "\\n[SISTEMA] Bot finalizado.\\n");
+      io.emit(`log-${botId}`, "\n[ARES] Processo encerrado.\n");
       delete activeBots[botId];
       aresBanner();
     });
   };
 
   if (main) {
-    io.emit(\`log-\${botId}\`, "[ARES] Iniciando processo...\\n");
+    io.emit(`log-${botId}`, `[ARES] Iniciando: ${main}\n`);
     start("node", [main]);
   } else if (fs.existsSync(path.join(instancePath, "package.json"))) {
-    io.emit(\`log-\${botId}\`, "[ARES] Instalando NPM...\\n");
+    io.emit(`log-${botId}`, "[ARES] Instalando dependências...\n");
     const inst = spawn("npm", ["install"], { cwd: instancePath, shell: true, env: childEnv });
-    inst.stdout.on("data", d => io.emit(\`log-\${botId}\`, d.toString()));
+    inst.stdout.on("data", d => io.emit(`log-${botId}`, d.toString()));
     inst.on("exit", () => start("npm", ["start"]));
   }
 }
 
 bot.on("document", async (msg) => {
   if (!msg.document.file_name.endsWith(".zip")) return;
-  const botId = (msg.caption || \`bot_\${Date.now()}\`).replace(/[^a-z0-9]/gi, "_");
+  const botId = (msg.caption || `bot_${Date.now()}`).replace(/[^a-z0-9]/gi, "_");
   const p = path.resolve(BASE_PATH, botId);
-  
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-  const file = await bot.getFile(msg.document.file_id);
   
-  require("https").get(\`https://api.telegram.org/file/bot\${TOKEN}/\${file.file_path}\`, (res) => {
+  const file = await bot.getFile(msg.document.file_id);
+  const link = `${DOMAIN}/terminal/${botId}`;
+
+  require("https").get(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, (res) => {
     res.pipe(unzipper.Extract({ path: p })).on("close", () => {
       spawnBot(botId, p);
-      bot.sendMessage(msg.chat.id, \`🚀 Bot \${botId} ONLINE!\\n\\n🔗 Terminal: \${DOMAIN}/terminal/\${botId}\`, {
+      bot.sendMessage(msg.chat.id, `✅ *Bot:* \`${botId}\` ON\n\n🔗 [Ver Terminal](${link})`, {
+        parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [[
-            { text: "🔄 Reiniciar", callback_data: \`restart:\${botId}\` },
-            { text: "🛑 Parar", callback_data: \`stop:\${botId}\` }
+            { text: "🔄 Reiniciar", callback_data: `restart:${botId}` },
+            { text: "🛑 Parar", callback_data: `stop:${botId}` }
           ]]
         }
       });
@@ -132,11 +133,12 @@ bot.on("callback_query", (query) => {
 
   if (action === "stop" && activeBots[botId]) {
     activeBots[botId].process.kill('SIGKILL');
+    bot.answerCallbackQuery(query.id, { text: "Parado!" });
   } else if (action === "restart") {
     if (activeBots[botId]) activeBots[botId].process.kill('SIGKILL');
-    setTimeout(() => spawnBot(botId, p), 2000); // Delay maior para garantir liberação
+    bot.answerCallbackQuery(query.id, { text: "Reiniciando..." });
+    setTimeout(() => spawnBot(botId, p), 2000);
   }
-  bot.answerCallbackQuery(query.id);
 });
 
 server.listen(PORT, "0.0.0.0", () => aresBanner());
