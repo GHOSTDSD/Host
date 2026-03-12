@@ -210,7 +210,7 @@ bot.on("document", async msg => {
   bot.sendMessage(msg.chat.id,
     `✅ *ZIP recebido com sucesso!*\n\n` +
     `📝 Agora envie um *nome* para identificar o seu bot:\n` +
-    `_Ex: meu\\_bot, assistente, vendas..._`,
+    `_Ex: meu_bot, assistente, vendas..._`,
     { parse_mode: "Markdown" }
   )
 })
@@ -283,19 +283,21 @@ bot.on("callback_query", async query => {
 
   // ── Menu: Novo Bot
   if (action === "menu_new") {
+    userState[chatId] = { waitingZip: true }
     bot.editMessageText(
       `➕ *Novo Bot*\n\n` +
       `┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n` +
       `📤 Envie o arquivo *.zip* com o código do seu bot.\n\n` +
       `📌 *Formatos suportados:*\n` +
-      `• Node.js \\(index\\.js, package\\.json\\)\n` +
-      `• Python \\(main\\.py, bot\\.py\\)\n` +
-      `• Shell Script \\(start\\.sh\\)\n` +
-      `┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄`,
+      `• Node.js (index.js, package.json)\n` +
+      `• Python (main.py, bot.py)\n` +
+      `• Shell Script (start.sh)\n` +
+      `┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n` +
+      `_Aguardando envio do ZIP..._`,
       {
         chat_id: chatId,
         message_id: msgId,
-        parse_mode: "MarkdownV2",
+        parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "⬅️  Voltar", callback_data: "menu_home" }]
