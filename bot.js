@@ -43,6 +43,7 @@ function aresBanner() {
     console.clear()
     const up = process.uptime().toFixed(0)
     const ram = ((os.totalmem() - os.freemem()) / 1024 / 1024).toFixed(0)
+    process.stdout.write(`\x1Bc`)
     console.log(`
     ARES HOST
     
@@ -85,11 +86,17 @@ app.get("/terminal/:botId", (req, res) => {
 
 function spawnBot(botId, instancePath) {
     const botPort = getFreePort()
-    const env = { ...process.env, PORT: botPort, PORT0: botPort, PORT1: botPort }
+    const env = { 
+        ...process.env, 
+        PORT: botPort.toString(), 
+        PORT0: botPort.toString(), 
+        PORT1: botPort.toString() 
+    }
     
     aresBanner()
 
     if (fs.existsSync(path.join(instancePath, "package.json"))) {
+        io.emit(`log-${botId}`, `[ARES] Porta designada: ${botPort}\n`)
         io.emit(`log-${botId}`, "[ARES] Instalando dependencias...\n")
         const install = spawn("npm", ["install"], { cwd: instancePath, shell: true, env })
 
@@ -99,6 +106,7 @@ function spawnBot(botId, instancePath) {
                 runNode(botId, instancePath, botPort, env)
             } else {
                 io.emit(`log-${botId}`, "[ARES] Erro no npm install.\n")
+                releasePort(botPort)
             }
         })
     } else {
@@ -132,6 +140,7 @@ function runNode(botId, instancePath, botPort, env) {
         aresBanner()
     } else {
         io.emit(`log-${botId}`, "[ARES] Arquivo principal nao encontrado.\n")
+        releasePort(botPort)
     }
 }
 
@@ -187,7 +196,11 @@ bot.on("callback_query", query => {
         activeBots[botId].process.kill("SIGKILL")
         bot.answerCallbackQuery(query.id, { text: "Bot parado" })
     } else if (action === "restart") {
-        if (activeBots[botId]) activeBots[botId].process.kill("SIGKILL")
+        if (activeBots[botId]) {
+            activeBots[botId].process.kill("SIGKILL")
+            releasePort(activeBots[botId].port)
+            delete activeBots[botId]
+        }
         bot.answerCallbackQuery(query.id, { text: "Reiniciando..." })
         setTimeout(() => spawnBot(botId, instancePath), 2000)
     }
