@@ -29,7 +29,7 @@ const userState = {};
 
 function aresBanner() {
     process.stdout.write('\x1Bc');
-    console.log(`\x1b[1;36m🚀 ARES HOST - BOTAO NOVO REATIVADO\x1b[0m`);
+    console.log(`\x1b[1;36m🚀 ARES HOST - SISTEMA LIMPO\x1b[0m`);
 }
 
 function writeLog(botId, instancePath, data) {
@@ -54,12 +54,16 @@ function spawnBot(botId, instancePath) {
     let child;
     const opt = { cwd: instancePath, env, shell: true, stdio: ['pipe', 'pipe', 'pipe'] };
 
-    // Uso do comando 'script' para forçar modo interativo e permitir digitação
+    let runCmd = "";
     if (shellScript) {
         if (os.platform() !== "win32") fs.chmodSync(path.join(instancePath, shellScript), "755");
-        child = spawn("script", ["-q", "-e", "-c", `bash ./${shellScript}`, "/dev/null"], opt);
+        runCmd = `bash ./${shellScript}`;
     } else if (nodeMain) {
-        child = spawn("script", ["-q", "-e", "-c", `node ${nodeMain}`, "/dev/null"], opt);
+        runCmd = `node ${nodeMain}`;
+    }
+
+    if (runCmd) {
+        child = spawn("script", ["-q", "-c", runCmd, "/dev/null"], opt);
     }
 
     if (child) {
@@ -79,7 +83,6 @@ io.on("connection", (socket) => {
     });
 });
 
-// --- TELEGRAM LOGIC ---
 bot.onText(/\/start/, msg => {
     bot.sendMessage(msg.chat.id, "🤖 *ARES HOST*", {
         parse_mode: "Markdown",
@@ -90,40 +93,6 @@ bot.onText(/\/start/, msg => {
             ]
         }
     });
-});
-
-bot.on("document", async msg => {
-    if (!msg.document.file_name.toLowerCase().endsWith(".zip")) return;
-    userState[msg.chat.id] = { fileId: msg.document.file_id };
-    bot.sendMessage(msg.chat.id, "📝 Digite o nome para esse bot:");
-});
-
-bot.on("message", async msg => {
-    if (msg.document || msg.text?.startsWith("/")) return;
-    const state = userState[msg.chat.id];
-    if (state && state.fileId && !state.botName) {
-        const name = msg.text.trim().replace(/\s+/g, "_").toLowerCase();
-        const instancePath = path.join(BASE_PATH, name);
-        if (fs.existsSync(instancePath)) return bot.sendMessage(msg.chat.id, "❌ Esse nome já existe.");
-        
-        state.botName = name;
-        fs.mkdirSync(instancePath, { recursive: true });
-        
-        const file = await bot.getFile(state.fileId);
-        const zipPath = path.join(instancePath, "bot.zip");
-        const fileStream = fs.createWriteStream(zipPath);
-        
-        https.get(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, res => {
-            res.pipe(fileStream);
-            fileStream.on("finish", () => {
-                fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: instancePath })).on("close", () => {
-                    spawnBot(name, instancePath);
-                    delete userState[msg.chat.id];
-                    bot.sendMessage(msg.chat.id, `✅ Bot **${name}** criado e iniciado!`);
-                });
-            });
-        });
-    }
 });
 
 bot.on("callback_query", async query => {
@@ -147,19 +116,49 @@ bot.on("callback_query", async query => {
         });
     } else if (action === "stop") {
         if (activeBots[id]) activeBots[id].process.kill("SIGKILL");
-        bot.answerCallbackQuery(query.id, { text: "Bot parado." });
+        bot.answerCallbackQuery(query.id, { text: "Parado!" });
     } else if (action === "restart") {
         spawnBot(id, path.join(BASE_PATH, id));
-        bot.answerCallbackQuery(query.id, { text: "Reiniciando..." });
+        bot.answerCallbackQuery(query.id, { text: "Iniciando..." });
     }
 });
 
-// --- EXPRESS / TERMINAL ---
+bot.on("document", async msg => {
+    if (!msg.document.file_name.toLowerCase().endsWith(".zip")) return;
+    userState[msg.chat.id] = { fileId: msg.document.file_id };
+    bot.sendMessage(msg.chat.id, "📝 Nome do bot:");
+});
+
+bot.on("message", async msg => {
+    if (msg.document || msg.text?.startsWith("/")) return;
+    const state = userState[msg.chat.id];
+    if (state && state.fileId && !state.botName) {
+        const name = msg.text.trim().replace(/\s+/g, "_").toLowerCase();
+        const instancePath = path.join(BASE_PATH, name);
+        state.botName = name;
+        fs.mkdirSync(instancePath, { recursive: true });
+        const file = await bot.getFile(state.fileId);
+        https.get(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, res => {
+            const zipPath = path.join(instancePath, "bot.zip");
+            const fileStream = fs.createWriteStream(zipPath);
+            res.pipe(fileStream);
+            fileStream.on("finish", () => {
+                fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: instancePath })).on("close", () => {
+                    spawnBot(name, instancePath);
+                    delete userState[msg.chat.id];
+                    bot.sendMessage(msg.chat.id, `✅ Criado: ${name}`);
+                });
+            });
+        });
+    }
+});
+
 app.get("/terminal/:botId", (req, res) => {
     res.send(`
     <!DOCTYPE html>
     <html>
     <head>
+        <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.1.0/css/xterm.css" />
         <script src="https://cdn.jsdelivr.net/npm/xterm@5.1.0/lib/xterm.js"></script>
@@ -167,12 +166,12 @@ app.get("/terminal/:botId", (req, res) => {
         <script src="/socket.io/socket.io.js"></script>
         <style>
             body { margin: 0; background: #000; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-            #header { background: #1a1a1a; color: #0f0; padding: 12px; font-family: monospace; border-bottom: 2px solid #333; display: flex; justify-content: space-between; }
+            #header { background: #1a1a1a; color: #0f0; padding: 12px; font-family: monospace; border-bottom: 2px solid #333; }
             #terminal { flex: 1; width: 100%; }
         </style>
     </head>
     <body>
-        <div id="header"><span>📟 ARES: ${req.params.botId}</span><span id="status">● CONECTADO</span></div>
+        <div id="header">📟 ARES: ${req.params.botId}</div>
         <div id="terminal"></div>
         <script>
             const socket = io();
@@ -182,10 +181,8 @@ app.get("/terminal/:botId", (req, res) => {
             term.open(document.getElementById('terminal'));
             fitAddon.fit();
             term.focus();
-
             socket.on("log-${req.params.botId}", d => term.write(d));
             term.onData(data => socket.emit("input", { botId: "${req.params.botId}", data }));
-            
             window.addEventListener('resize', () => fitAddon.fit());
             fetch('/logs/${req.params.botId}').then(r => r.text()).then(t => term.write(t));
         </script>
