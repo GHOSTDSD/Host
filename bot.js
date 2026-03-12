@@ -195,10 +195,30 @@ function downloadFile(url, dest) {
   })
 }
 
+function flattenIfNeeded(instancePath) {
+  // Verifica se todos os conteúdos estão dentro de uma única subpasta
+  const entries = fs.readdirSync(instancePath).filter(e => e !== "bot.zip")
+  if (entries.length === 1) {
+    const single = path.join(instancePath, entries[0])
+    const stat = fs.statSync(single)
+    if (stat.isDirectory()) {
+      // Move tudo da subpasta para instancePath
+      const subEntries = fs.readdirSync(single)
+      for (const file of subEntries) {
+        fs.renameSync(path.join(single, file), path.join(instancePath, file))
+      }
+      fs.rmdirSync(single)
+    }
+  }
+}
+
 function extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg) {
   fs.createReadStream(zipPath)
     .pipe(unzipper.Extract({ path: instancePath }))
     .on("close", () => {
+      // Flatten se o ZIP tiver uma pasta raiz (ex: bot.zip/pasta/arquivos)
+      flattenIfNeeded(instancePath)
+
       // Remove node_modules se vier no ZIP
       const nm = path.join(instancePath, "node_modules")
       if (fs.existsSync(nm)) fs.rmSync(nm, { recursive: true, force: true })
