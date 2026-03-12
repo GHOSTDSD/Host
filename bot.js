@@ -1,47 +1,48 @@
-const TelegramBot  = require("node-telegram-bot-api");
-const unzipper     = require("unzipper");
-const { spawn }    = require("child_process");
-const fs           = require("fs");
-const path         = require("path");
-const os           = require("os");
-const express      = require("express");
-const http         = require("http");
-const socketIo     = require("socket.io");
+const TelegramBot = require("node-telegram-bot-api")
+const unzipper = require("unzipper")
+const { spawn } = require("child_process")
+const fs = require("fs")
+const path = require("path")
+const os = require("os")
+const express = require("express")
+const http = require("http")
+const socketIo = require("socket.io")
+const https = require("https")
 
-const TOKEN   = process.env.BOT_TOKEN || "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM";
-const PORT    = process.env.PORT || 3000;
-const DOMAIN  = process.env.RAILWAY_STATIC_URL ? `https://${process.env.RAILWAY_STATIC_URL}` : `http://localhost:${PORT}`;
+const TOKEN = process.env.BOT_TOKEN || "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM"
+const PORT = process.env.PORT || 3000
+const DOMAIN = process.env.RAILWAY_STATIC_URL ? `https://${process.env.RAILWAY_STATIC_URL}` : `http://localhost:${PORT}`
 
-const bot    = new TelegramBot(TOKEN, { polling: true });
-const app    = express();
-const server = http.createServer(app);
-const io     = socketIo(server);
+const bot = new TelegramBot(TOKEN,{ polling:true })
+const app = express()
+const server = http.createServer(app)
+const io = socketIo(server)
 
-app.use(express.json());
+app.use(express.json())
 
-const BASE_PATH = path.resolve(process.cwd(), "instances");
-if (!fs.existsSync(BASE_PATH)) fs.mkdirSync(BASE_PATH, { recursive: true });
+const BASE_PATH = path.resolve(process.cwd(),"instances")
+if(!fs.existsSync(BASE_PATH)) fs.mkdirSync(BASE_PATH,{ recursive:true })
 
-const activeBots = {};
+const activeBots = {}
 
 const aresBanner = () => {
-  console.clear();
-  const up = process.uptime().toFixed(0);
-  const ram = ((os.totalmem() - os.freemem()) / 1024 / 1024).toFixed(0);
-  console.log(`
-  ┌───────────────────────────────────────────┐
-  │   █████╗ ██████╗ ███████╗███████╗        │
-  │  ██╔══██╗██╔══██╗██╔════╝██╔════╝        │
-  │  ███████║██████╔╝█████╗  ███████╗        │
-  │  ██╔══██║██╔══██╗██╔══╝  ╚════██║        │
-  │  ██║  ██║██║  ██║███████╗███████║        │
-  │  ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝  v2.0 │
-  ├───────────────────────────────────────────┤
-  │  BOTS  : ${Object.keys(activeBots).length}                           │
-  │  RAM   : ${ram} MB                           │
-  │  UPTIME: ${up}s                         │
-  └───────────────────────────────────────────┘`);
-};
+
+console.clear()
+
+const up = process.uptime().toFixed(0)
+const ram = ((os.totalmem()-os.freemem())/1024/1024).toFixed(0)
+
+console.log(`
+┌───────────────────────────────────────────┐
+│ ARES HOSTING SYSTEM                       │
+├───────────────────────────────────────────┤
+│ BOTS   : ${Object.keys(activeBots).length}
+│ RAM    : ${ram} MB
+│ UPTIME : ${up}s
+└───────────────────────────────────────────┘
+`)
+
+}
 
 const getTerminalHTML = (botId) => `
 <!DOCTYPE html>
@@ -56,202 +57,214 @@ header{background:#0a0a0a;padding:15px;border-bottom:1px solid #111;display:flex
 </style>
 </head>
 <body>
-<header><div>● TERMINAL: ${botId}</div><div id="status">CONECTADO</div></header>
+<header><div>TERMINAL ${botId}</div></header>
 <div id="log"></div>
 <script>
-const socket = io();
-const log = document.getElementById('log');
-socket.on('log-${botId}', d => { 
-log.innerText += d; 
-log.scrollTop = log.scrollHeight; 
-});
+const socket = io()
+const log = document.getElementById("log")
+socket.on("log-${botId}",d=>{
+log.innerText += d
+log.scrollTop = log.scrollHeight
+})
 </script>
 </body>
-</html>`;
+</html>
+`
 
-app.get("/terminal/:botId", (req, res) => res.send(getTerminalHTML(req.params.botId)));
+app.get("/terminal/:botId",(req,res)=>res.send(getTerminalHTML(req.params.botId)))
 
-app.get("/api/stats", (req, res) => res.json({
-bots: Object.keys(activeBots).length,
-ramUsed: ((os.totalmem() - os.freemem()) / 1024 / 1024).toFixed(0)
-}));
+function spawnBot(botId,instancePath){
 
-function spawnBot(botId, instancePath) {
+const files = fs.readdirSync(instancePath)
+const main = files.find(f => ["index.js","main.js","bot.js","start.js"].includes(f))
 
-const files = fs.readdirSync(instancePath);
-const main = files.find(f => ["index.js","main.js","bot.js","start.js"].includes(f));
+const env = {...process.env}
+delete env.PORT
+delete env.PORT0
+delete env.PORT1
+delete env.PORT2
 
-const env = { ...process.env };
-delete env.PORT;
-delete env.PORT0;
-delete env.PORT1;
-delete env.PORT2;
+const handleProcess = (child)=>{
 
-const handleProcess = (child) => {
+activeBots[botId] = { process:child }
 
-activeBots[botId] = { process: child };
+const logFile = path.join(instancePath,"terminal.log")
 
-const logFile = path.join(instancePath,"terminal.log");
+child.stdout.on("data",d=>{
+fs.appendFileSync(logFile,d.toString())
+io.emit(`log-${botId}`,d.toString())
+})
 
-child.stdout.on("data", d => {
-fs.appendFileSync(logFile,d.toString());
-io.emit(`log-${botId}`, d.toString());
-});
+child.stderr.on("data",d=>{
+fs.appendFileSync(logFile,d.toString())
+io.emit(`log-${botId}`,d.toString())
+})
 
-child.stderr.on("data", d => {
-fs.appendFileSync(logFile,d.toString());
-io.emit(`log-${botId}`, d.toString());
-});
+child.on("exit",()=>{
+delete activeBots[botId]
+aresBanner()
+})
 
-child.on("exit", () => {
-delete activeBots[botId];
-aresBanner();
-});
+}
 
-};
+if(main){
 
-if (main) {
-
-io.emit(`log-${botId}`, `[SISTEMA] Iniciando via node ${main}\n`);
+io.emit(`log-${botId}`,`[SISTEMA] Iniciando ${main}\n`)
 
 handleProcess(
 spawn("node",[main],{
-cwd: instancePath,
+cwd:instancePath,
 shell:true,
 env
 })
-);
+)
 
-} else if (fs.existsSync(path.join(instancePath,"package.json"))) {
+}
 
-io.emit(`log-${botId}`, `[SISTEMA] Instalando dependências\n`);
+else if(fs.existsSync(path.join(instancePath,"package.json"))){
+
+io.emit(`log-${botId}`,"[SISTEMA] Instalando dependências\n")
 
 const inst = spawn("npm",["install"],{
-cwd: instancePath,
+cwd:instancePath,
 shell:true,
 env
-});
+})
 
-inst.stdout.on("data", d => io.emit(`log-${botId}`, d.toString()));
+inst.stdout.on("data",d=>io.emit(`log-${botId}`,d.toString()))
 
-inst.on("exit", () => {
+inst.on("exit",()=>{
 
-io.emit(`log-${botId}`, `[SISTEMA] Iniciando via npm start\n`);
+io.emit(`log-${botId}`,"[SISTEMA] Iniciando npm start\n")
 
 handleProcess(
 spawn("npm",["start"],{
-cwd: instancePath,
+cwd:instancePath,
 shell:true,
 env
 })
-);
+)
 
-});
-
-}
+})
 
 }
 
-bot.onText(/\/start/, (msg) => {
+}
+
+bot.onText(/\/start/,msg=>{
 
 bot.sendMessage(msg.chat.id,
-`🚀 ARES HOSTING SYSTEM V2
+`ARES HOSTING
 
-Status: Operacional
+Envie o arquivo ZIP do seu bot`
+)
 
-Envie o arquivo .zip do seu bot.
-O terminal será gerado individualmente para cada envio.`,
-{ parse_mode: "Markdown" });
+})
 
-});
+bot.on("document",async msg=>{
 
-bot.on("document", async (msg) => {
+if(!msg.document.file_name.toLowerCase().endsWith(".zip")){
+bot.sendMessage(msg.chat.id,"Envie apenas .zip")
+return
+}
 
-if (!msg.document.file_name.endsWith(".zip")) return;
+const botId = `bot_${Date.now()}`
+const instancePath = path.join(BASE_PATH,botId)
 
-const botId = (msg.caption || `bot_${Date.now()}`).replace(/[^a-z0-9]/gi,"_");
+fs.mkdirSync(instancePath,{recursive:true})
 
-const p = path.resolve(BASE_PATH,botId);
+bot.sendMessage(msg.chat.id,"Baixando arquivo")
 
-if (!fs.existsSync(p)) fs.mkdirSync(p,{ recursive:true });
+const file = await bot.getFile(msg.document.file_id)
 
-const file = await bot.getFile(msg.document.file_id);
+const url = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`
 
-const termLink = `${DOMAIN}/terminal/${botId}`;
+const zipPath = path.join(instancePath,"bot.zip")
 
-require("https").get(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, (res) => {
+const fileStream = fs.createWriteStream(zipPath)
 
-res.pipe(unzipper.Extract({ path:p })).on("close", () => {
+https.get(url,response=>{
 
-spawnBot(botId,p);
+response.pipe(fileStream)
 
-const menu = {
+fileStream.on("finish",()=>{
 
-parse_mode:"Markdown",
+fileStream.close()
 
+bot.sendMessage(msg.chat.id,"Extraindo bot")
+
+fs.createReadStream(zipPath)
+.pipe(unzipper.Extract({path:instancePath}))
+.on("close",()=>{
+
+bot.sendMessage(msg.chat.id,"Iniciando bot")
+
+spawnBot(botId,instancePath)
+
+const termLink = `${DOMAIN}/terminal/${botId}`
+
+bot.sendMessage(msg.chat.id,
+`Bot criado
+
+ID: ${botId}`,
+{
 reply_markup:{
 inline_keyboard:[
-[{ text:"🖥 Ver Terminal", url:termLink }],
+[{text:"Terminal",url:termLink}],
 [
-{ text:"🔄 Reiniciar", callback_data:`restart:${botId}:${p}` },
-{ text:"🛑 Parar", callback_data:`stop:${botId}` }
+{text:"Reiniciar",callback_data:`restart:${botId}:${instancePath}`},
+{text:"Parar",callback_data:`stop:${botId}`}
 ]
 ]
 }
+})
 
-};
+})
 
-bot.sendMessage(msg.chat.id,
-`✅ Bot: ${botId} criado!
-Acompanhe a instalação no terminal.`,
-menu);
+})
 
-});
+})
 
-});
+})
 
-});
+bot.on("callback_query",query=>{
 
-bot.on("callback_query",(query)=>{
+const [action,botId,instancePath] = query.data.split(":")
 
-const [action,botId,instancePath] = query.data.split(":");
+if(action === "stop" && activeBots[botId]){
 
-if (action === "stop" && activeBots[botId]) {
+activeBots[botId].process.kill("SIGKILL")
 
-activeBots[botId].process.kill("SIGKILL");
+delete activeBots[botId]
 
-delete activeBots[botId];
-
-bot.answerCallbackQuery(query.id,{ text:"Parado com sucesso!" });
+bot.answerCallbackQuery(query.id,{text:"Bot parado"})
 
 }
 
-else if (action === "restart") {
+else if(action === "restart"){
 
-if (activeBots[botId]) {
+if(activeBots[botId]){
 
-activeBots[botId].process.kill("SIGKILL");
+activeBots[botId].process.kill("SIGKILL")
 
-delete activeBots[botId];
+delete activeBots[botId]
 
 }
 
-bot.answerCallbackQuery(query.id,{ text:"Reiniciando instância..." });
+bot.answerCallbackQuery(query.id,{text:"Reiniciando..."})
 
 setTimeout(()=>{
-
-spawnBot(botId,instancePath);
-
-},3000);
+spawnBot(botId,instancePath)
+},3000)
 
 }
 
-else {
+else{
 
-bot.answerCallbackQuery(query.id);
+bot.answerCallbackQuery(query.id)
 
 }
 
-});
+})
 
-server.listen(PORT, () => aresBanner());
+server.listen(PORT,()=>aresBanner())
