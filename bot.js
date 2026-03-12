@@ -4,19 +4,24 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const express = require("express");
+const http = require("http");
+const socketIo = require("socket.io");
 
 const token = "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM";
 const bot = new TelegramBot(token, { polling: true });
-const activeBots = {}; 
 
-// Local de armazenamento: Na Railway, /tmp é melhor para permissões de escrita
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server);
+const activeBots = {}; 
+const PORT = process.env.PORT || 3000;
+
 const BASE_PATH = path.resolve(process.cwd(), 'instances');
 if (!fs.existsSync(BASE_PATH)) fs.mkdirSync(BASE_PATH, { recursive: true });
 
 const aresBanner = () => {
     console.clear();
-    const ramLivre = (os.freemem() / 1024 / 1024).toFixed(0);
-    const ramTotal = (os.totalmem() / 1024 / 1024).toFixed(0);
     console.log("\x1b[32m%s\x1b[0m", `
     █████╗ ██████╗ ███████╗███████╗
     ██╔══██╗██╔══██╗██╔════╝██╔════╝
@@ -24,21 +29,39 @@ const aresBanner = () => {
     ██╔══██║██╔══██╗██╔══╝  ╚════██║
     ██║  ██║██║  ██║███████╗███████║
     ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝
-    [ BOTS: ${Object.keys(activeBots).length} | RAM: ${ramTotal - ramLivre}/${ramTotal}MB ]
+    [ TERMINAL WEB ATIVO NA PORTA ${PORT} ]
     `);
 };
 
-// Menu Principal
-function mainMenu(chatId) {
-    bot.sendMessage(chatId, "🚀 **ARES NEXUS - GESTÃO DE BOTS**\nEnvie o .zip para hospedar.", {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: "📋 Listar Bots Ativos", callback_data: "list" }],
-                [{ text: "📊 Status do Sistema", callback_data: "status" }]
-            ]
-        }
-    });
-}
+// --- ROTA DO TERMINAL WEB ---
+app.get('/terminal/:id', (req, res) => {
+    const botId = req.params.id;
+    res.send(`
+        <html>
+        <head>
+            <title>Terminal: ${botId}</title>
+            <script src="/socket.io/socket.io.js"></script>
+            <style>
+                body { background: #000; color: #0f0; font-family: monospace; padding: 20px; }
+                #log { white-space: pre-wrap; height: 80vh; overflow-y: auto; border: 1px solid #333; padding: 10px; }
+                .status { color: #888; margin-bottom: 10px; }
+            </style>
+        </head>
+        <body>
+            <div class="status">Instância: <b>${botId}</b> | Status: Conectado</div>
+            <div id="log">Aguardando logs...</div>
+            <script>
+                const socket = io();
+                const logDiv = document.getElementById('log');
+                socket.on('log-${botId}', (data) => {
+                    logDiv.innerText += data;
+                    logDiv.scrollTop = logDiv.scrollHeight;
+                });
+            </script>
+        </body>
+        </html>
+    `);
+});
 
 async function startInstance(chatId, fileId, botId) {
     const instancePath = path.resolve(BASE_PATH, botId);
@@ -49,54 +72,38 @@ async function startInstance(chatId, fileId, botId) {
 
     require('https').get(fileUrl, (res) => {
         res.pipe(unzipper.Extract({ path: instancePath })).on('close', async () => {
-            
-            // Procura arquivo principal
             const files = fs.readdirSync(instancePath);
             const mainFile = files.find(f => ['index.js', 'main.js', 'bot.js'].includes(f));
+            if (!mainFile) return bot.sendMessage(chatId, `❌ Erro: index.js não achado.`);
 
-            if (!mainFile) return bot.sendMessage(chatId, `❌ Erro: index.js não achado em ${botId}`);
-
-            const fullMainPath = path.resolve(instancePath, mainFile);
-
-            // MODO ALTA DENSIDADE: Limite de 64MB por bot
-            const child = spawn('node', ['--max-old-space-size=64', fullMainPath], {
+            const child = spawn('node', ['--max-old-space-size=64', mainFile], {
                 cwd: instancePath,
                 stdio: 'pipe',
-                shell: true,
-                env: { ...process.env, __DIRNAME: instancePath }
+                shell: true
             });
 
             activeBots[botId] = { process: child };
 
+            // Envia logs para o Terminal Web via Socket.io
             child.stdout.on('data', (data) => {
-                const out = data.toString();
-                process.stdout.write(`\x1b[36m[${botId}]\x1b[0m ${out}`);
-                if (out.includes('QR')) bot.sendMessage(chatId, `⚠️ **QR CODE DISPONÍVEL** para ${botId}. Verifique o console.`);
+                io.emit(`log-${botId}`, data.toString());
             });
 
-            child.stderr.on('data', (data) => console.error(`\x1b[31m[${botId}-ERR]\x1b[0m ${data}`));
+            child.stderr.on('data', (data) => {
+                io.emit(`log-${botId}`, `\nERROR: ${data.toString()}`);
+            });
 
             child.on('exit', () => delete activeBots[botId]);
 
-            aresBanner();
-            bot.sendMessage(chatId, `✅ Bot **${botId}** iniciado com sucesso.`);
+            const url = `https://seudominio.railway.app/terminal/${botId}`; // Ajuste para sua URL da Railway
+            bot.sendMessage(chatId, `🚀 Bot **${botId}** ativo!\n\n💻 Terminal Web:\n${url}`);
         });
     });
 }
 
-// Eventos
-bot.onText(/\/start/, (msg) => { aresBanner(); mainMenu(msg.chat.id); });
-
-bot.on("callback_query", (query) => {
-    const chatId = query.message.chat.id;
-    if (query.data === "list") {
-        const list = Object.keys(activeBots).map(id => `🔹 ${id}`).join('\n');
-        bot.sendMessage(chatId, `🤖 **Bots Online:**\n${list || "Nenhum"}`);
-    }
-    if (query.data === "status") {
-        const ramUso = (os.totalmem() - os.freemem()) / 1024 / 1024;
-        bot.sendMessage(chatId, `📈 **SISTEMA:**\nRAM: ${ramUso.toFixed(0)}MB\nCPU: ${os.loadavg()[0].toFixed(2)}`);
-    }
+// Menu e Eventos
+bot.onText(/\/start/, (msg) => {
+    bot.sendMessage(msg.chat.id, "Mande o .zip com o nome do bot na legenda.");
 });
 
 bot.on("document", async (msg) => {
@@ -106,4 +113,4 @@ bot.on("document", async (msg) => {
     }
 });
 
-aresBanner();
+server.listen(PORT, () => aresBanner());
