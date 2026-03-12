@@ -9,7 +9,7 @@ const http = require("http")
 const socketIo = require("socket.io")
 const https = require("https")
 const { EventEmitter } = require("events")
-const busboy = require("busboy")
+const multer = require("multer")
 
 EventEmitter.defaultMaxListeners = 200
 
@@ -773,11 +773,29 @@ function doUpload(){
 </html>`)
 })
 
-app.post("/upload/:token", upload.single("file"), async (req, res) => {
+app.post("/upload/:token", (req, res, next) => {
   const token = req.params.token
   const info = uploadTokens[token]
-
   if (!info) return res.status(403).send("Token invalido ou expirado")
+  next()
+}, multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const tmpPath = path.join(BASE_PATH, "_uploads")
+      if (!fs.existsSync(tmpPath)) fs.mkdirSync(tmpPath, { recursive: true })
+      cb(null, tmpPath)
+    },
+    filename: (req, file, cb) => cb(null, `${Date.now()}_bot.zip`)
+  }),
+  limits: { fileSize: 512 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.originalname.toLowerCase().endsWith(".zip"))
+      return cb(new Error("Apenas .zip sao permitidos"))
+    cb(null, true)
+  }
+}).single("file"), async (req, res) => {
+  const token = req.params.token
+  const info = uploadTokens[token]
   if (!req.file) return res.status(400).send("Nenhum arquivo recebido")
 
   const chatId = info.chatId
@@ -785,23 +803,18 @@ app.post("/upload/:token", upload.single("file"), async (req, res) => {
   const botId = generateBotId()
   const instancePath = path.join(BASE_PATH, botId)
 
-  // Invalida o token imediatamente
   delete uploadTokens[token]
-
   fs.mkdirSync(instancePath, { recursive: true })
 
   const zipPath = path.join(instancePath, "bot.zip")
   fs.renameSync(req.file.path, zipPath)
 
   const loadingMsg = await bot.sendMessage(chatId,
-    `⏳ Criando bot *${name}*...
-
-Arquivo recebido via web, extraindo...`,
+    `⏳ Criando bot *${name}*...\n\nArquivo recebido via web, extraindo...`,
     { parse_mode: "Markdown" }
   )
 
   extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg)
-
   res.send("ok")
 })
 
