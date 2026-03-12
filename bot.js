@@ -44,10 +44,10 @@ function aresBanner() {
     const ram = ((os.totalmem() - os.freemem()) / 1024 / 1024).toFixed(0)
     console.log(`
     =========================================
-    🚀 ARES HOST - GERENCIADOR DE NOMES
+    🚀 ARES HOST - GESTÃO DE INSTÂNCIAS
     =========================================
-    📦 INSTÂNCIAS: ${fs.readdirSync(BASE_PATH).length}
-    🟢 ONLINE: ${Object.keys(activeBots).length}
+    📦 BOTS NO DISCO: ${fs.readdirSync(BASE_PATH).length}
+    🟢 BOTS EM EXECUÇÃO: ${Object.keys(activeBots).length}
     📟 RAM: ${ram} MB | UPTIME: ${up}s
     =========================================
     `)
@@ -61,21 +61,29 @@ function writeLog(botId, instancePath, data) {
 
 function spawnBot(botId, instancePath) {
     const botPort = getFreePort()
-    const env = { ...process.env, PORT: botPort.toString(), NODE_OPTIONS: "--max-old-space-size=400" }
+    const env = { 
+        ...process.env, 
+        PORT: botPort.toString(),
+        NODE_ENV: "production",
+        NODE_OPTIONS: "--max-old-space-size=450" 
+    }
     
     aresBanner()
 
     if (fs.existsSync(path.join(instancePath, "package.json"))) {
-        writeLog(botId, instancePath, `[INFO] Porta: ${botPort} | Instalando...\n`)
-        const install = spawn("npm", ["install", "--no-audit", "--no-fund"], { cwd: instancePath, shell: true, env })
+        writeLog(botId, instancePath, `[INFO] Iniciando setup na porta ${botPort}...\n`)
+        
+        const install = spawn("npm", ["install", "--production", "--no-audit", "--no-fund"], { cwd: instancePath, shell: true, env })
 
         install.stdout.on("data", d => writeLog(botId, instancePath, d.toString()))
+        install.stderr.on("data", d => writeLog(botId, instancePath, `[NPM LOG] ${d.toString()}`))
+
         install.on("close", (code) => {
             if (code === 0) {
-                writeLog(botId, instancePath, "[SUCESSO] Pronto para iniciar.\n")
+                writeLog(botId, instancePath, "[SUCESSO] Instalação concluída com êxito.\n")
                 runNode(botId, instancePath, botPort, env)
             } else {
-                writeLog(botId, instancePath, "[ERRO] Falha na instalação.\n")
+                writeLog(botId, instancePath, `[ERRO] npm install falhou com código ${code}. Verifique se o package.json está correto.\n`)
                 releasePort(botPort)
             }
         })
@@ -94,18 +102,24 @@ function runNode(botId, instancePath, botPort, env) {
         activeBots[botId] = { process: child, port: botPort, path: instancePath }
 
         child.stdout.on("data", d => writeLog(botId, instancePath, d.toString()))
-        child.stderr.on("data", d => writeLog(botId, instancePath, `[ERRO] ${d.toString()}`))
+        child.stderr.on("data", d => {
+            const err = d.toString()
+            if (!err.includes("EADDRINUSE")) writeLog(botId, instancePath, `[ERRO] ${err}`)
+        })
+
         child.on("exit", () => {
             releasePort(botPort)
             delete activeBots[botId]
             aresBanner()
         })
         aresBanner()
+    } else {
+        writeLog(botId, instancePath, "[ERRO] Arquivo principal não encontrado (index.js/main.js).\n")
     }
 }
 
 bot.onText(/\/start/, msg => {
-    bot.sendMessage(msg.chat.id, "🤖 *ARES HOST*\nEscolha uma opção:", {
+    bot.sendMessage(msg.chat.id, "🤖 *ARES HOST*\nO que deseja fazer?", {
         parse_mode: "Markdown",
         reply_markup: {
             inline_keyboard: [
@@ -117,9 +131,9 @@ bot.onText(/\/start/, msg => {
 })
 
 bot.on("document", async msg => {
-    if (!msg.document.file_name.toLowerCase().endsWith(".zip")) return
+    if (!msg.document.file_name.toLowerCase().endsWith(".zip")) return bot.sendMessage(msg.chat.id, "❌ Envie um arquivo .ZIP")
     userState[msg.chat.id] = { fileId: msg.document.file_id }
-    bot.sendMessage(msg.chat.id, "📝 Qual será o **nome** deste bot? (Sem espaços)")
+    bot.sendMessage(msg.chat.id, "📝 Escolha um **nome** exclusivo para o bot:")
 })
 
 bot.on("message", async msg => {
@@ -130,14 +144,11 @@ bot.on("message", async msg => {
         const name = msg.text.trim().replace(/\s+/g, "_").toLowerCase()
         const instancePath = path.join(BASE_PATH, name)
 
-        if (fs.existsSync(instancePath)) {
-            return bot.sendMessage(msg.chat.id, `❌ O nome **${name}** já existe. Escolha outro:`)
-        }
+        if (fs.existsSync(instancePath)) return bot.sendMessage(msg.chat.id, "❌ Esse nome já existe.")
 
         state.botName = name
         fs.mkdirSync(instancePath, { recursive: true })
-        bot.sendMessage(msg.chat.id, `⚙️ Criando **${name}**...`)
-
+        
         const file = await bot.getFile(state.fileId)
         const zipPath = path.join(instancePath, "bot.zip")
         const fileStream = fs.createWriteStream(zipPath)
@@ -149,7 +160,7 @@ bot.on("message", async msg => {
                 fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: instancePath })).on("close", () => {
                     spawnBot(name, instancePath)
                     delete userState[msg.chat.id]
-                    bot.sendMessage(msg.chat.id, `✅ **${name}** hospedado com sucesso!`, { parse_mode: "Markdown" })
+                    bot.sendMessage(msg.chat.id, `✅ **${name}** criado! Use o menu para gerenciar.`)
                 })
             })
         })
@@ -159,18 +170,17 @@ bot.on("message", async msg => {
 bot.on("callback_query", async query => {
     const data = query.data
     const chatId = query.message.chat.id
+    const [action, id] = data.split(":")
 
-    if (data === "menu_new") bot.sendMessage(chatId, "📤 Envie o arquivo `.ZIP` do bot.")
+    if (action === "menu_new") bot.sendMessage(chatId, "📤 Envie o ZIP.")
     
-    else if (data === "menu_list") {
+    else if (action === "menu_list") {
         const folders = fs.readdirSync(BASE_PATH)
-        if (folders.length === 0) return bot.sendMessage(chatId, "Vazio.")
         const buttons = folders.map(f => [{ text: `${activeBots[f] ? "🟢" : "🔴"} ${f}`, callback_data: `manage:${f}` }])
         bot.editMessageText("📂 *Seus Bots:*", { chat_id: chatId, message_id: query.message.message_id, parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } })
     }
 
-    else if (data.startsWith("manage:")) {
-        const id = data.split(":")[1]
+    else if (action === "manage") {
         const isRunning = activeBots[id]
         bot.editMessageText(`🛠️ **Bot:** \`${id}\``, {
             chat_id: chatId,
@@ -179,7 +189,8 @@ bot.on("callback_query", async query => {
             reply_markup: {
                 inline_keyboard: [
                     [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}` }],
-                    [{ text: isRunning ? "🛑 Parar" : "▶️ Iniciar", callback_data: `${isRunning ? "stop" : "restart"}:${id}:${path.join(BASE_PATH, id)}` }],
+                    [{ text: isRunning ? "🛑 Parar" : "▶️ Iniciar", callback_data: `${isRunning ? "stop" : "restart"}:${id}` }],
+                    [{ text: "🧹 Limpar Logs", callback_data: `clearlog:${id}` }],
                     [{ text: "🗑️ Deletar", callback_data: `delete:${id}` }],
                     [{ text: "⬅️ Voltar", callback_data: "menu_list" }]
                 ]
@@ -187,35 +198,40 @@ bot.on("callback_query", async query => {
         })
     }
 
-    else if (data.startsWith("stop:")) {
-        const id = data.split(":")[1]
+    else if (action === "clearlog") {
+        const logP = path.join(BASE_PATH, id, "terminal.log")
+        if (fs.existsSync(logP)) fs.writeFileSync(logP, `[INFO] Logs limpos em ${new Date().toLocaleString()}\n`)
+        bot.answerCallbackQuery(query.id, { text: "Logs limpos!" })
+    }
+
+    else if (action === "stop") {
         if (activeBots[id]) activeBots[id].process.kill("SIGKILL")
         bot.answerCallbackQuery(query.id, { text: "Parado" })
     }
 
-    else if (data.startsWith("restart:")) {
-        const [_, id, ipath] = data.split(":")
-        spawnBot(id, ipath)
-        bot.answerCallbackQuery(query.id, { text: "Iniciando" })
+    else if (action === "restart") {
+        spawnBot(id, path.join(BASE_PATH, id))
+        bot.answerCallbackQuery(query.id, { text: "Reiniciando" })
     }
 
-    else if (data.startsWith("delete:")) {
-        const id = data.split(":")[1]
+    else if (action === "delete") {
         if (activeBots[id]) activeBots[id].process.kill("SIGKILL")
         fs.rmSync(path.join(BASE_PATH, id), { recursive: true, force: true })
-        bot.sendMessage(chatId, `🗑️ **${id}** deletado.`)
+        bot.sendMessage(chatId, `🗑️ Bot **${id}** removido.`)
     }
 })
 
 app.get("/terminal/:botId", (req, res) => {
     res.send(`
-    <html><body style="background:#000;color:#0f0;font-family:monospace;padding:20px;">
-    <h3>Terminal: ${req.params.botId}</h3><div id="l"></div>
+    <html><body style="background:#000;color:#0f0;font-family:monospace;padding:20px;line-height:1.5;">
+    <div style="position:sticky;top:0;background:#111;padding:10px;border-bottom:1px solid #333;">Terminal: ${req.params.botId}</div>
+    <pre id="l"></pre>
     <script src="/socket.io/socket.io.js"></script>
     <script>
     const socket = io();
     const l = document.getElementById("l");
-    fetch('/logs/${req.params.botId}').then(r=>r.text()).then(t=>l.innerText=t);
+    function load(){ fetch('/logs/${req.params.botId}').then(r=>r.text()).then(t=>l.innerText=t); }
+    load();
     socket.on("log-${req.params.botId}", d=>{l.innerText+=d;window.scrollTo(0,document.body.scrollHeight);});
     </script></body></html>`)
 })
@@ -223,7 +239,7 @@ app.get("/terminal/:botId", (req, res) => {
 app.get("/logs/:botId", (req, res) => {
     const p = path.join(BASE_PATH, req.params.botId, "terminal.log")
     if (fs.existsSync(p)) res.sendFile(p)
-    else res.send("Sem logs.")
+    else res.send("Nenhum log disponível.")
 })
 
 process.on('uncaughtException', (err) => { if (err.code !== 'EADDRINUSE') console.error(err) })
