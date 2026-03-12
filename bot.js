@@ -1,6 +1,5 @@
 const TelegramBot = require("node-telegram-bot-api");
 const unzipper = require("unzipper");
-const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -9,6 +8,7 @@ const http = require("http");
 const socketIo = require("socket.io");
 const https = require("https");
 const { EventEmitter } = require("events");
+const pty = require("node-pty");
 
 EventEmitter.defaultMaxListeners = 200;
 
@@ -48,7 +48,17 @@ function releasePort(port) {
 
 function aresBanner() {
     process.stdout.write('\x1Bc');
-    console.log(`\x1b[1;36m🚀 ARES HOST ATIVO | PORTA: ${PORT}\x1b[0m`);
+    const up = process.uptime().toFixed(0);
+    const ram = (process.memoryUsage().rss / 1024 / 1024).toFixed(0);
+    console.log(`
+    \x1b[1;36m=========================================
+    🚀 ARES HOST - GESTÃO DE INSTÂNCIAS
+    =========================================
+    \x1b[1;33m📦 BOTS NO DISCO: ${fs.readdirSync(BASE_PATH).length}
+    🟢 BOTS EM EXECUÇÃO: ${Object.keys(activeBots).length}
+    📟 RAM: ${ram} MB | UPTIME: ${up}s
+    =========================================\x1b[0m
+    `);
 }
 
 function writeLog(botId, instancePath, data) {
@@ -59,7 +69,6 @@ function writeLog(botId, instancePath, data) {
 
 function spawnBot(botId, instancePath) {
     if (activeBots[botId]) activeBots[botId].process.kill("SIGKILL");
-
     const botPort = getFreePort();
     const env = { 
         ...process.env, 
@@ -68,15 +77,20 @@ function spawnBot(botId, instancePath) {
         FORCE_COLOR: "3",
         TERM: "xterm-256color"
     };
-    
+    aresBanner();
     if (fs.existsSync(path.join(instancePath, "package.json"))) {
-        writeLog(botId, instancePath, `\x1b[1;34m[SISTEMA] Verificando dependências...\x1b[0m\r\n`);
-        const install = spawn(os.platform() === 'win32' ? 'npm.cmd' : 'npm', ['install', '--production'], { cwd: instancePath, shell: true, env });
-        
+        writeLog(botId, instancePath, `\x1b[1;34m[SISTEMA] Preparando ambiente...\x1b[0m\r\n`);
+        const { spawn } = require("child_process");
+        const install = spawn(os.platform() === 'win32' ? 'npm.cmd' : 'npm', ['install', '--production'], { cwd: instancePath, shell: true, env, stdio: ['pipe', 'pipe', 'pipe'] });
         install.stdout.on("data", d => writeLog(botId, instancePath, d));
         install.stderr.on("data", d => writeLog(botId, instancePath, d));
-        
-        install.on("close", () => runInstance(botId, instancePath, botPort, env));
+        install.on("close", (code) => {
+            if (code === 0) runInstance(botId, instancePath, botPort, env);
+            else {
+                writeLog(botId, instancePath, `\x1b[1;31m[ERRO] Falha na instalação\x1b[0m\r\n`);
+                releasePort(botPort);
+            }
+        });
     } else {
         runInstance(botId, instancePath, botPort, env);
     }
@@ -84,50 +98,46 @@ function spawnBot(botId, instancePath) {
 
 function runInstance(botId, instancePath, botPort, env) {
     const files = fs.readdirSync(instancePath);
-    let shellScript = files.find(f => f.endsWith(".sh") || f.endsWith(".bat") || f.endsWith(".bah") || f === "start.sh");
     let nodeMain = files.find(f => ["index.js", "main.js", "bot.js", "start.js", "app.js"].includes(f));
     if (!nodeMain && fs.existsSync(path.join(instancePath, "src/index.js"))) nodeMain = "src/index.js";
-
-    let child;
-    // stdio: ['pipe', 'pipe', 'pipe'] é fundamental para o stdin funcionar
-    const opt = { cwd: instancePath, shell: true, env, stdio: ['pipe', 'pipe', 'pipe'] };
-
-    if (shellScript) {
-        if (os.platform() !== "win32") fs.chmodSync(path.join(instancePath, shellScript), "755");
-        // Forçamos o shell a ser interativo
-        child = spawn(os.platform() === 'win32' ? shellScript : 'bash', ['-i', shellScript], opt);
-    } else if (nodeMain) {
-        child = spawn("node", [nodeMain], opt);
-    }
-
-    if (child) {
-        activeBots[botId] = { process: child, port: botPort };
-        child.stdout.on("data", d => writeLog(botId, instancePath, d));
-        child.stderr.on("data", d => writeLog(botId, instancePath, d));
-        child.on("exit", () => {
-            releasePort(botPort);
-            delete activeBots[botId];
-        });
-    }
+    if (!nodeMain) return;
+    const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
+    const child = pty.spawn('node', [nodeMain], {
+        name: 'xterm-color',
+        cwd: instancePath,
+        env,
+        cols: 80,
+        rows: 30
+    });
+    activeBots[botId] = { process: child, port: botPort, path: instancePath };
+    child.onData(data => writeLog(botId, instancePath, data));
+    child.onExit(() => {
+        releasePort(botPort);
+        delete activeBots[botId];
+        aresBanner();
+    });
+    aresBanner();
 }
 
 io.on("connection", (socket) => {
     socket.on("input", ({ botId, data }) => {
         const target = activeBots[botId];
-        if (target && target.process.stdin.writable) {
-            // MUITO IMPORTANTE: O bot espera \n (Enter), mas o xterm envia \r
-            const formattedData = data.replace(/\r/g, "\n");
-            target.process.stdin.write(formattedData);
+        if (target && target.process) {
+            let cmd = data === "\r" ? "\n" : data;
+            target.process.write(cmd);
         }
     });
 });
 
-// ... (Resto do código do bot Telegram e Express igual ao anterior)
-
 bot.onText(/\/start/, msg => {
     bot.sendMessage(msg.chat.id, "🤖 *ARES HOST*", {
         parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: [[{ text: "🚀 Novo Bot", callback_data: "menu_new" }], [{ text: "📂 Meus Bots", callback_data: "menu_list" }]] }
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "🚀 Novo Bot", callback_data: "menu_new" }],
+                [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
+            ]
+        }
     });
 });
 
@@ -147,15 +157,16 @@ bot.on("message", async msg => {
         state.botName = name;
         fs.mkdirSync(instancePath, { recursive: true });
         const file = await bot.getFile(state.fileId);
+        const zipPath = path.join(instancePath, "bot.zip");
+        const fileStream = fs.createWriteStream(zipPath);
         https.get(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, res => {
-            const zipPath = path.join(instancePath, "bot.zip");
-            const fileStream = fs.createWriteStream(zipPath);
             res.pipe(fileStream);
             fileStream.on("finish", () => {
+                fileStream.close();
                 fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: instancePath })).on("close", () => {
                     spawnBot(name, instancePath);
                     delete userState[msg.chat.id];
-                    bot.sendMessage(msg.chat.id, `✅ **${name}** iniciado!`);
+                    bot.sendMessage(msg.chat.id, `✅ **${name}** criado!`);
                 });
             });
         });
@@ -168,8 +179,8 @@ bot.on("callback_query", async query => {
     else if (action === "menu_list") {
         const buttons = fs.readdirSync(BASE_PATH).map(f => [{ text: `${activeBots[f] ? "🟢" : "🔴"} ${f}`, callback_data: `manage:${f}` }]);
         bot.editMessageText("📂 *Seus Bots:*", { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } });
-    }
-    else if (action === "manage") {
+    } else if (action === "manage") {
+        const isRunning = activeBots[id];
         bot.editMessageText(`🛠️ **Bot:** \`${id}\``, {
             chat_id: query.message.chat.id,
             message_id: query.message.message_id,
@@ -177,13 +188,12 @@ bot.on("callback_query", async query => {
             reply_markup: {
                 inline_keyboard: [
                     [{ text: "📟 Terminal Interativo", url: `${DOMAIN}/terminal/${id}` }],
-                    [{ text: activeBots[id] ? "🛑 Parar" : "▶️ Iniciar", callback_data: `${activeBots[id] ? "stop" : "restart"}:${id}` }],
+                    [{ text: isRunning ? "🛑 Parar" : "▶️ Iniciar", callback_data: `${isRunning ? "stop" : "restart"}:${id}` }],
                     [{ text: "⬅️ Voltar", callback_data: "menu_list" }]
                 ]
             }
         });
-    }
-    else if (action === "stop" && activeBots[id]) activeBots[id].process.kill("SIGKILL");
+    } else if (action === "stop" && activeBots[id]) activeBots[id].process.kill();
     else if (action === "restart") spawnBot(id, path.join(BASE_PATH, id));
 });
 
@@ -200,37 +210,54 @@ app.get("/terminal/:botId", (req, res) => {
         <script src="/socket.io/socket.io.js"></script>
         <style>
             body { margin: 0; background: #000; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-            #header { background: #1a1a1a; color: #0f0; padding: 10px; font-family: monospace; font-size: 14px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
-            #terminal-container { flex: 1; width: 100%; background: #000; padding: 5px; }
+            #header { background: #1a1a1a; color: #0f0; padding: 10px; font-family: monospace; font-size: 14px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
+            #terminal-container { flex: 1; width: 100%; overflow: hidden; background: #000; }
+            .xterm-viewport { overflow-y: auto !important; }
         </style>
     </head>
     <body>
-        <div id="header"><span>🚀 ARES: ${req.params.botId}</span><span id="status">● CONECTADO</span></div>
+        <div id="header">
+            <span>🚀 ARES: ${req.params.botId}</span>
+            <div style="display: flex; gap: 10px;">
+                <button onclick="location.reload()" style="background: #333; color: #fff; border: 1px solid #555; padding: 2px 8px; cursor: pointer;">Recarregar</button>
+                <span id="status" style="color: #0f0;">● CONECTADO</span>
+            </div>
+        </div>
         <div id="terminal-container"></div>
         <script>
             const socket = io();
             const botId = "${req.params.botId}";
             const term = new Terminal({
-                theme: { background: '#000', foreground: '#0f0' },
+                theme: { background: '#000', foreground: '#0f0', cursor: '#0f0' },
                 cursorBlink: true,
                 convertEol: true,
-                fontFamily: 'monospace'
+                fontSize: 14,
+                fontFamily: 'monospace',
+                rows: 40
             });
             const fitAddon = new FitAddon.FitAddon();
             term.loadAddon(fitAddon);
             term.open(document.getElementById('terminal-container'));
-            fitAddon.fit();
-            term.focus();
-
-            socket.on("log-" + botId, data => term.write(data));
-            
-            // Captura o teclado e envia pro socket
+            setTimeout(() => {
+                fitAddon.fit();
+                term.focus();
+            }, 500);
+            socket.on("log-" + botId, data => {
+                term.write(data);
+            });
             term.onData(data => {
+                if (data === '\r') data = '\n';
                 socket.emit("input", { botId, data });
             });
-
             window.addEventListener('resize', () => fitAddon.fit());
-            fetch('/logs/' + botId).then(r => r.text()).then(t => term.write(t));
+            fetch('/logs/' + botId).then(r => r.text()).then(t => {
+                term.write(t);
+                term.scrollToBottom();
+            });
+            socket.on('disconnect', () => {
+                document.getElementById('status').innerText = '○ DESCONECTADO';
+                document.getElementById('status').style.color = '#f00';
+            });
         </script>
     </body>
     </html>`);
@@ -242,4 +269,5 @@ app.get("/logs/:botId", (req, res) => {
     else res.send("");
 });
 
+process.on('uncaughtException', (err) => { if (err.code !== 'EADDRINUSE') console.error(err) });
 server.listen(PORT, () => aresBanner());
