@@ -170,7 +170,66 @@ bot.onText(/\/start/, msg => {
   )
 })
 
-// ─── Receber ZIP ──────────────────────────────
+// ─── Helpers de download ─────────────────────
+
+function downloadFile(url, dest) {
+  return new Promise((resolve, reject) => {
+    const isHttps = url.startsWith("https")
+    const client = isHttps ? require("https") : require("http")
+    const file = fs.createWriteStream(dest)
+    client.get(url, res => {
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        file.close()
+        return downloadFile(res.headers.location, dest).then(resolve).catch(reject)
+      }
+      if (res.statusCode !== 200) {
+        file.close()
+        return reject(new Error("HTTP " + res.statusCode))
+      }
+      res.pipe(file)
+      file.on("finish", () => { file.close(); resolve() })
+      file.on("error", reject)
+    }).on("error", reject)
+  })
+}
+
+function extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg) {
+  fs.createReadStream(zipPath)
+    .pipe(unzipper.Extract({ path: instancePath }))
+    .on("close", () => {
+      // Remove node_modules se vier no ZIP
+      const nm = path.join(instancePath, "node_modules")
+      if (fs.existsSync(nm)) fs.rmSync(nm, { recursive: true, force: true })
+
+      spawnBot(botId, instancePath)
+
+      bot.editMessageText(
+        `✅ *Bot criado com sucesso!*\n\n` +
+        `📦 Nome: *${name}*\n` +
+        `🆔 ID: \`${botId}\`\n` +
+        `🟢 Status: *Iniciando...*`,
+        {
+          chat_id: loadingMsg.chat.id,
+          message_id: loadingMsg.message_id,
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "📟 Abrir Terminal", url: `${DOMAIN}/terminal/${botId}` }],
+              [{ text: "📂 Meus Bots",      callback_data: "menu_list" }]
+            ]
+          }
+        }
+      )
+    })
+    .on("error", err => {
+      bot.editMessageText(
+        `❌ Erro ao extrair: ${err.message}`,
+        { chat_id: loadingMsg.chat.id, message_id: loadingMsg.message_id }
+      )
+    })
+}
+
+// ─── Receber ZIP (upload direto) ──────────────
 
 bot.on("document", async msg => {
   if (!msg.document.file_name.toLowerCase().endsWith(".zip")) {
@@ -180,21 +239,51 @@ bot.on("document", async msg => {
     )
   }
 
-  userState[msg.chat.id] = { fileId: msg.document.file_id }
+  // Avisa se arquivo for grande demais pro Telegram (limite 20MB)
+  const fileSizeMB = (msg.document.file_size / 1024 / 1024).toFixed(1)
+  if (msg.document.file_size > 20 * 1024 * 1024) {
+    return bot.sendMessage(msg.chat.id,
+      `❌ *Arquivo muito grande (${fileSizeMB}MB)*\n\n` +
+      "O Telegram tem limite de 20MB para upload.\n\n" +
+      "Envie um *link direto* para o ZIP:\n" +
+      "• Google Drive (link publico)\n" +
+      "• GitHub Release\n" +
+      "• Qualquer URL direta para .zip",
+      { parse_mode: "Markdown" }
+    )
+  }
 
+  userState[msg.chat.id] = { fileId: msg.document.file_id }
   bot.sendMessage(msg.chat.id,
-    "✅ *ZIP recebido!*\n\nAgora envie um *nome* para o bot:\n(ex: meubot, vendas, suporte)",
+    `✅ *ZIP recebido* (${fileSizeMB}MB)\n\nAgora envie um *nome* para o bot:\n(ex: meubot, vendas, suporte)`,
     { parse_mode: "Markdown" }
   )
 })
 
-// ─── Receber nome do bot ──────────────────────
+// ─── Receber nome ou link ──────────────────────
 
 bot.on("message", async msg => {
   if (msg.document || msg.text?.startsWith("/")) return
 
-  const state = userState[msg.chat.id]
-  if (!state || !state.fileId || state.botName) return
+  const chatId = msg.chat.id
+  const state = userState[chatId]
+
+  // Sem estado ativo: verificar se é um link de ZIP
+  if (!state || (!state.fileId && !state.linkUrl)) {
+    const text = msg.text?.trim() || ""
+    const isLink = /^https?:\/\/.+\.zip(\?.*)?$/i.test(text) || /^https?:\/\//i.test(text)
+    if (isLink) {
+      userState[chatId] = { linkUrl: text }
+      return bot.sendMessage(chatId,
+        "🔗 *Link recebido!*\n\nAgora envie um *nome* para o bot:\n(ex: meubot, vendas, suporte)",
+        { parse_mode: "Markdown" }
+      )
+    }
+    return
+  }
+
+  // Já tem estado mas ainda sem nome
+  if (state.botName) return
 
   const name = msg.text.trim().replace(/\s+/g, "_").toLowerCase()
   const botId = generateBotId()
@@ -204,66 +293,33 @@ bot.on("message", async msg => {
   state.botId = botId
 
   if (fs.existsSync(instancePath)) return
-
   fs.mkdirSync(instancePath, { recursive: true })
 
-  const loadingMsg = await bot.sendMessage(msg.chat.id,
+  const loadingMsg = await bot.sendMessage(chatId,
     `⏳ Criando bot *${name}*...\n\nBaixando e extraindo arquivos...`,
     { parse_mode: "Markdown" }
   )
 
+  const zipPath = path.join(instancePath, "bot.zip")
+
   try {
+    // Download via link direto
+    if (state.linkUrl) {
+      delete userState[chatId]
+      await downloadFile(state.linkUrl, zipPath)
+      extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg)
+      return
+    }
+
+    // Download via Telegram
+    delete userState[chatId]
     const file = await bot.getFile(state.fileId)
-    const zipPath = path.join(instancePath, "bot.zip")
-    const fileStream = fs.createWriteStream(zipPath)
+    await downloadFile(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, zipPath)
+    extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg)
 
-    https.get(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, res => {
-      res.pipe(fileStream)
-
-      fileStream.on("finish", () => {
-        fileStream.close()
-
-        fs.createReadStream(zipPath)
-          .pipe(unzipper.Extract({ path: instancePath }))
-          .on("close", () => {
-            // Remove node_modules se vier no ZIP (economiza espaco e evita conflitos)
-            const nm = path.join(instancePath, "node_modules")
-            if (fs.existsSync(nm)) {
-              fs.rmSync(nm, { recursive: true, force: true })
-            }
-
-            spawnBot(botId, instancePath)
-            delete userState[msg.chat.id]
-
-            bot.editMessageText(
-              `✅ *Bot criado com sucesso!*\n\n` +
-              `📦 Nome: *${name}*\n` +
-              `🆔 ID: \`${botId}\`\n` +
-              `🟢 Status: *Iniciando...*`,
-              {
-                chat_id: loadingMsg.chat.id,
-                message_id: loadingMsg.message_id,
-                parse_mode: "Markdown",
-                reply_markup: {
-                  inline_keyboard: [
-                    [{ text: "📟 Abrir Terminal", url: `${DOMAIN}/terminal/${botId}` }],
-                    [{ text: "📂 Meus Bots",      callback_data: "menu_list" }]
-                  ]
-                }
-              }
-            )
-          })
-          .on("error", err => {
-            bot.editMessageText(
-              `❌ Erro ao extrair: ${err.message}`,
-              { chat_id: loadingMsg.chat.id, message_id: loadingMsg.message_id }
-            )
-          })
-      })
-    })
   } catch (err) {
     bot.editMessageText(
-      `❌ Erro: ${err.message}`,
+      `❌ Erro ao baixar: ${err.message}`,
       { chat_id: loadingMsg.chat.id, message_id: loadingMsg.message_id }
     )
   }
