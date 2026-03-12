@@ -9,7 +9,7 @@ const http = require("http")
 const socketIo = require("socket.io")
 const https = require("https")
 
-const TOKEN = process.env.BOT_TOKEN || "COLOQUE_SEU_TOKEN"
+const TOKEN = process.env.BOT_TOKEN || "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM"
 const PORT = process.env.PORT || 3000
 const DOMAIN = process.env.RAILWAY_STATIC_URL ? `https://${process.env.RAILWAY_STATIC_URL}` : `http://localhost:${PORT}`
 
@@ -294,3 +294,4 @@ bot.answerCallbackQuery(query.id)
 })
 
 server.listen(PORT,()=>aresBanner())
+
