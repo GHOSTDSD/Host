@@ -29,7 +29,7 @@ const userState = {};
 
 function aresBanner() {
     process.stdout.write('\x1Bc');
-    console.log(`\x1b[1;36m🚀 ARES HOST - SISTEMA LIMPO\x1b[0m`);
+    console.log(`\x1b[1;36m🚀 ARES HOST - FIX ARGUMENTS\x1b[0m`);
 }
 
 function writeLog(botId, instancePath, data) {
@@ -63,7 +63,7 @@ function spawnBot(botId, instancePath) {
     }
 
     if (runCmd) {
-        child = spawn("script", ["-q", "-c", runCmd, "/dev/null"], opt);
+        child = spawn("script", ["-qec", runCmd, "/dev/null"], opt);
     }
 
     if (child) {
