@@ -29,9 +29,7 @@ const userState = {};
 
 function aresBanner() {
     process.stdout.write('\x1Bc');
-    console.log(`\x1b[1;36m=========================================
-🚀 ARES HOST - MODO INTERATIVO ATIVADO
-=========================================\x1b[0m`);
+    console.log(`\x1b[1;36m🚀 ARES HOST - BOTAO NOVO REATIVADO\x1b[0m`);
 }
 
 function writeLog(botId, instancePath, data) {
@@ -46,8 +44,7 @@ function spawnBot(botId, instancePath) {
     const env = { 
         ...process.env, 
         FORCE_COLOR: "3",
-        TERM: "xterm-256color",
-        NODE_ENV: "production"
+        TERM: "xterm-256color"
     };
 
     const files = fs.readdirSync(instancePath);
@@ -55,13 +52,14 @@ function spawnBot(botId, instancePath) {
     let nodeMain = files.find(f => ["index.js", "main.js", "bot.js"].includes(f));
 
     let child;
-    // O TRUQUE: Usamos 'script' para fingir um terminal real (TTY) no Linux
-    // Isso permite que o input funcione mesmo sem node-pty
+    const opt = { cwd: instancePath, env, shell: true, stdio: ['pipe', 'pipe', 'pipe'] };
+
+    // Uso do comando 'script' para forçar modo interativo e permitir digitação
     if (shellScript) {
         if (os.platform() !== "win32") fs.chmodSync(path.join(instancePath, shellScript), "755");
-        child = spawn("script", ["-q", "-e", "-c", `bash ./${shellScript}`, "/dev/null"], { cwd: instancePath, env, shell: true });
+        child = spawn("script", ["-q", "-e", "-c", `bash ./${shellScript}`, "/dev/null"], opt);
     } else if (nodeMain) {
-        child = spawn("script", ["-q", "-e", "-c", `node ${nodeMain}`, "/dev/null"], { cwd: instancePath, env, shell: true });
+        child = spawn("script", ["-q", "-e", "-c", `node ${nodeMain}`, "/dev/null"], opt);
     }
 
     if (child) {
@@ -76,12 +74,87 @@ io.on("connection", (socket) => {
     socket.on("input", ({ botId, data }) => {
         const target = activeBots[botId];
         if (target && target.process.stdin.writable) {
-            // Envia o dado exatamente como o terminal espera
             target.process.stdin.write(data);
         }
     });
 });
 
+// --- TELEGRAM LOGIC ---
+bot.onText(/\/start/, msg => {
+    bot.sendMessage(msg.chat.id, "🤖 *ARES HOST*", {
+        parse_mode: "Markdown",
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "🚀 Novo Bot", callback_data: "menu_new" }],
+                [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
+            ]
+        }
+    });
+});
+
+bot.on("document", async msg => {
+    if (!msg.document.file_name.toLowerCase().endsWith(".zip")) return;
+    userState[msg.chat.id] = { fileId: msg.document.file_id };
+    bot.sendMessage(msg.chat.id, "📝 Digite o nome para esse bot:");
+});
+
+bot.on("message", async msg => {
+    if (msg.document || msg.text?.startsWith("/")) return;
+    const state = userState[msg.chat.id];
+    if (state && state.fileId && !state.botName) {
+        const name = msg.text.trim().replace(/\s+/g, "_").toLowerCase();
+        const instancePath = path.join(BASE_PATH, name);
+        if (fs.existsSync(instancePath)) return bot.sendMessage(msg.chat.id, "❌ Esse nome já existe.");
+        
+        state.botName = name;
+        fs.mkdirSync(instancePath, { recursive: true });
+        
+        const file = await bot.getFile(state.fileId);
+        const zipPath = path.join(instancePath, "bot.zip");
+        const fileStream = fs.createWriteStream(zipPath);
+        
+        https.get(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, res => {
+            res.pipe(fileStream);
+            fileStream.on("finish", () => {
+                fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: instancePath })).on("close", () => {
+                    spawnBot(name, instancePath);
+                    delete userState[msg.chat.id];
+                    bot.sendMessage(msg.chat.id, `✅ Bot **${name}** criado e iniciado!`);
+                });
+            });
+        });
+    }
+});
+
+bot.on("callback_query", async query => {
+    const [action, id] = query.data.split(":");
+    if (action === "menu_new") {
+        bot.sendMessage(query.message.chat.id, "📤 Envie o arquivo .ZIP do bot.");
+    } else if (action === "menu_list") {
+        const files = fs.readdirSync(BASE_PATH);
+        const buttons = files.map(f => [{ text: (activeBots[f] ? "🟢 " : "🔴 ") + f, callback_data: `manage:${f}` }]);
+        bot.editMessageText("📂 *Seus Bots:*", { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } });
+    } else if (action === "manage") {
+        bot.editMessageText(`🛠️ **Bot:** \`${id}\``, {
+            chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "Markdown",
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}` }],
+                    [{ text: activeBots[id] ? "🛑 Parar" : "▶️ Iniciar", callback_data: `${activeBots[id] ? "stop" : "restart"}:${id}` }],
+                    [{ text: "⬅️ Voltar", callback_data: "menu_list" }]
+                ]
+            }
+        });
+    } else if (action === "stop") {
+        if (activeBots[id]) activeBots[id].process.kill("SIGKILL");
+        bot.answerCallbackQuery(query.id, { text: "Bot parado." });
+    } else if (action === "restart") {
+        spawnBot(id, path.join(BASE_PATH, id));
+        bot.answerCallbackQuery(query.id, { text: "Reiniciando..." });
+    }
+});
+
+// --- EXPRESS / TERMINAL ---
 app.get("/terminal/:botId", (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -93,50 +166,28 @@ app.get("/terminal/:botId", (req, res) => {
         <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.7.0/lib/xterm-addon-fit.js"></script>
         <script src="/socket.io/socket.io.js"></script>
         <style>
-            body { margin: 0; background: #000; height: 100vh; display: flex; flex-direction: column; }
-            #header { background: #222; color: #0f0; padding: 12px; font-family: monospace; display: flex; justify-content: space-between; border-bottom: 2px solid #0f0; }
-            #terminal { flex: 1; width: 100%; padding: 5px; }
-            #mobile-input { position: fixed; bottom: -100px; }
+            body { margin: 0; background: #000; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+            #header { background: #1a1a1a; color: #0f0; padding: 12px; font-family: monospace; border-bottom: 2px solid #333; display: flex; justify-content: space-between; }
+            #terminal { flex: 1; width: 100%; }
         </style>
     </head>
     <body>
-        <div id="header">
-            <span>📟 ARES: ${req.params.botId}</span>
-            <span id="status">🟢 CONECTADO</span>
-        </div>
+        <div id="header"><span>📟 ARES: ${req.params.botId}</span><span id="status">● CONECTADO</span></div>
         <div id="terminal"></div>
-        <input type="text" id="mobile-input">
-
         <script>
             const socket = io();
-            const term = new Terminal({
-                theme: { background: '#000', foreground: '#0f0', cursor: '#0f0' },
-                cursorBlink: true,
-                convertEol: true,
-                fontSize: 14,
-                fontFamily: 'monospace'
-            });
+            const term = new Terminal({ theme: { background: '#000' }, cursorBlink: true, convertEol: true });
             const fitAddon = new FitAddon.FitAddon();
             term.loadAddon(fitAddon);
             term.open(document.getElementById('terminal'));
             fitAddon.fit();
             term.focus();
 
-            // Ao clicar no terminal, garante o foco
-            document.addEventListener('click', () => term.focus());
-
             socket.on("log-${req.params.botId}", d => term.write(d));
+            term.onData(data => socket.emit("input", { botId: "${req.params.botId}", data }));
             
-            // Evento de digitação
-            term.onData(data => {
-                socket.emit("input", { botId: "${req.params.botId}", data });
-            });
-
             window.addEventListener('resize', () => fitAddon.fit());
-            fetch('/logs/${req.params.botId}').then(r => r.text()).then(t => {
-                term.write(t);
-                term.scrollToBottom();
-            });
+            fetch('/logs/${req.params.botId}').then(r => r.text()).then(t => term.write(t));
         </script>
     </body>
     </html>`);
@@ -145,33 +196,6 @@ app.get("/terminal/:botId", (req, res) => {
 app.get("/logs/:botId", (req, res) => {
     const p = path.join(BASE_PATH, req.params.botId, "terminal.log");
     if (fs.existsSync(p)) res.sendFile(p); else res.send("");
-});
-
-bot.onText(/\/start/, msg => {
-    bot.sendMessage(msg.chat.id, "🤖 *ARES HOST*", {
-        parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: [[{ text: "📂 Meus Bots", callback_data: "menu_list" }]] }
-    });
-});
-
-bot.on("callback_query", async query => {
-    const [action, id] = query.data.split(":");
-    if (action === "menu_list") {
-        const files = fs.readdirSync(BASE_PATH);
-        const buttons = files.map(f => [{ text: (activeBots[f] ? "🟢 " : "🔴 ") + f, callback_data: `manage:${f}` }]);
-        bot.editMessageText("📂 *Seus Bots:*", { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } });
-    } else if (action === "manage") {
-        bot.editMessageText(`🛠️ **Bot:** \`${id}\``, {
-            chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: [[{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}` }], [{ text: activeBots[id] ? "🛑 Parar" : "▶️ Iniciar", callback_data: `${activeBots[id] ? "stop" : "restart"}:${id}` }], [{ text: "⬅️ Voltar", callback_data: "menu_list" }]] }
-        });
-    } else if (action === "stop") {
-        if (activeBots[id]) activeBots[id].process.kill("SIGKILL");
-        bot.answerCallbackQuery(query.id, { text: "Bot parado!" });
-    } else if (action === "restart") {
-        spawnBot(id, path.join(BASE_PATH, id));
-        bot.answerCallbackQuery(query.id, { text: "Iniciando..." });
-    }
 });
 
 server.listen(PORT, () => aresBanner());
