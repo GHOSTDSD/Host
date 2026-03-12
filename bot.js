@@ -1,6 +1,6 @@
 const TelegramBot = require("node-telegram-bot-api");
 const unzipper = require("unzipper");
-const { spawn } = require("child_process");
+const pty = require("node-pty");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -21,15 +21,44 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
+io.sockets.setMaxListeners(200);
+app.use(express.json());
+
 const BASE_PATH = path.resolve(process.cwd(), "instances");
 if (!fs.existsSync(BASE_PATH)) fs.mkdirSync(BASE_PATH, { recursive: true });
 
 const activeBots = {};
 const userState = {};
+const usedPorts = new Set();
+let PORT_START = 4000;
+
+function getFreePort() {
+    for (let p = PORT_START; p < 8000; p++) {
+        if (!usedPorts.has(p)) {
+            usedPorts.add(p);
+            return p;
+        }
+    }
+    return Math.floor(Math.random() * 1000) + 9000;
+}
+
+function releasePort(port) {
+    usedPorts.delete(port);
+}
 
 function aresBanner() {
     process.stdout.write('\x1Bc');
-    console.log(`\x1b[1;36m🚀 ARES HOST - FIX ARGUMENTS\x1b[0m`);
+    const up = process.uptime().toFixed(0);
+    const ram = (process.memoryUsage().rss / 1024 / 1024).toFixed(0);
+    console.log(`
+    \x1b[1;36m=========================================
+    🚀 ARES HOST - GESTÃO DE INSTÂNCIAS
+    =========================================
+    \x1b[1;33m📦 BOTS NO DISCO: ${fs.readdirSync(BASE_PATH).length}
+    🟢 BOTS EM EXECUÇÃO: ${Object.keys(activeBots).length}
+    📟 RAM: ${ram} MB | UPTIME: ${up}s
+    =========================================\x1b[0m
+    `);
 }
 
 function writeLog(botId, instancePath, data) {
@@ -39,47 +68,64 @@ function writeLog(botId, instancePath, data) {
 }
 
 function spawnBot(botId, instancePath) {
-    if (activeBots[botId]) activeBots[botId].process.kill("SIGKILL");
-
+    if (activeBots[botId]) activeBots[botId].process.kill();
+    const botPort = getFreePort();
     const env = { 
         ...process.env, 
+        PORT: botPort.toString(),
+        NODE_ENV: "production",
         FORCE_COLOR: "3",
         TERM: "xterm-256color"
     };
+    aresBanner();
+    if (fs.existsSync(path.join(instancePath, "package.json"))) {
+        writeLog(botId, instancePath, `\x1b[1;34m[SISTEMA] Preparando ambiente...\x1b[0m\r\n`);
+        const install = pty.spawn(os.platform() === 'win32' ? 'npm.cmd' : 'npm', ['install', '--production'], {
+            name: 'xterm-color',
+            cols: 80,
+            rows: 40,
+            cwd: instancePath,
+            env: env
+        });
+        install.onData(d => writeLog(botId, instancePath, d));
+        install.onExit(({ exitCode }) => {
+            if (exitCode === 0) runInstance(botId, instancePath, botPort, env);
+            else {
+                writeLog(botId, instancePath, `\x1b[1;31m[ERRO] Falha na instalação\x1b[0m\r\n`);
+                releasePort(botPort);
+            }
+        });
+    } else {
+        runInstance(botId, instancePath, botPort, env);
+    }
+}
 
+function runInstance(botId, instancePath, botPort, env) {
     const files = fs.readdirSync(instancePath);
-    let shellScript = files.find(f => f.endsWith(".sh") || f === "start.sh");
-    let nodeMain = files.find(f => ["index.js", "main.js", "bot.js"].includes(f));
-
-    let child;
-    const opt = { cwd: instancePath, env, shell: true, stdio: ['pipe', 'pipe', 'pipe'] };
-
-    let runCmd = "";
-    if (shellScript) {
-        if (os.platform() !== "win32") fs.chmodSync(path.join(instancePath, shellScript), "755");
-        runCmd = `bash ./${shellScript}`;
-    } else if (nodeMain) {
-        runCmd = `node ${nodeMain}`;
-    }
-
-    if (runCmd) {
-        child = spawn("script", ["-qec", runCmd, "/dev/null"], opt);
-    }
-
-    if (child) {
-        activeBots[botId] = { process: child };
-        child.stdout.on("data", d => writeLog(botId, instancePath, d));
-        child.stderr.on("data", d => writeLog(botId, instancePath, d));
-        child.on("exit", () => delete activeBots[botId]);
-    }
+    let nodeMain = files.find(f => ["index.js", "main.js", "bot.js", "start.js", "app.js"].includes(f));
+    if (!nodeMain && fs.existsSync(path.join(instancePath, "src/index.js"))) nodeMain = "src/index.js";
+    if (!nodeMain) return;
+    const child = pty.spawn("node", [nodeMain], {
+        name: 'xterm-color',
+        cols: 80,
+        rows: 40,
+        cwd: instancePath,
+        env: env
+    });
+    activeBots[botId] = { process: child, port: botPort, path: instancePath };
+    child.onData(d => writeLog(botId, instancePath, d));
+    child.onExit(() => {
+        releasePort(botPort);
+        delete activeBots[botId];
+        aresBanner();
+    });
+    aresBanner();
 }
 
 io.on("connection", (socket) => {
     socket.on("input", ({ botId, data }) => {
         const target = activeBots[botId];
-        if (target && target.process.stdin.writable) {
-            target.process.stdin.write(data);
-        }
+        if (target) target.process.write(data);
     });
 });
 
@@ -95,34 +141,6 @@ bot.onText(/\/start/, msg => {
     });
 });
 
-bot.on("callback_query", async query => {
-    const [action, id] = query.data.split(":");
-    if (action === "menu_new") {
-        bot.sendMessage(query.message.chat.id, "📤 Envie o arquivo .ZIP do bot.");
-    } else if (action === "menu_list") {
-        const files = fs.readdirSync(BASE_PATH);
-        const buttons = files.map(f => [{ text: (activeBots[f] ? "🟢 " : "🔴 ") + f, callback_data: `manage:${f}` }]);
-        bot.editMessageText("📂 *Seus Bots:*", { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } });
-    } else if (action === "manage") {
-        bot.editMessageText(`🛠️ **Bot:** \`${id}\``, {
-            chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "Markdown",
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}` }],
-                    [{ text: activeBots[id] ? "🛑 Parar" : "▶️ Iniciar", callback_data: `${activeBots[id] ? "stop" : "restart"}:${id}` }],
-                    [{ text: "⬅️ Voltar", callback_data: "menu_list" }]
-                ]
-            }
-        });
-    } else if (action === "stop") {
-        if (activeBots[id]) activeBots[id].process.kill("SIGKILL");
-        bot.answerCallbackQuery(query.id, { text: "Parado!" });
-    } else if (action === "restart") {
-        spawnBot(id, path.join(BASE_PATH, id));
-        bot.answerCallbackQuery(query.id, { text: "Iniciando..." });
-    }
-});
-
 bot.on("document", async msg => {
     if (!msg.document.file_name.toLowerCase().endsWith(".zip")) return;
     userState[msg.chat.id] = { fileId: msg.document.file_id };
@@ -135,22 +153,48 @@ bot.on("message", async msg => {
     if (state && state.fileId && !state.botName) {
         const name = msg.text.trim().replace(/\s+/g, "_").toLowerCase();
         const instancePath = path.join(BASE_PATH, name);
+        if (fs.existsSync(instancePath)) return;
         state.botName = name;
         fs.mkdirSync(instancePath, { recursive: true });
         const file = await bot.getFile(state.fileId);
+        const zipPath = path.join(instancePath, "bot.zip");
+        const fileStream = fs.createWriteStream(zipPath);
         https.get(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, res => {
-            const zipPath = path.join(instancePath, "bot.zip");
-            const fileStream = fs.createWriteStream(zipPath);
             res.pipe(fileStream);
             fileStream.on("finish", () => {
+                fileStream.close();
                 fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: instancePath })).on("close", () => {
                     spawnBot(name, instancePath);
                     delete userState[msg.chat.id];
-                    bot.sendMessage(msg.chat.id, `✅ Criado: ${name}`);
+                    bot.sendMessage(msg.chat.id, `✅ **${name}** criado!`);
                 });
             });
         });
     }
+});
+
+bot.on("callback_query", async query => {
+    const [action, id] = query.data.split(":");
+    if (action === "menu_new") bot.sendMessage(query.message.chat.id, "📤 Envie o ZIP.");
+    else if (action === "menu_list") {
+        const buttons = fs.readdirSync(BASE_PATH).map(f => [{ text: `${activeBots[f] ? "🟢" : "🔴"} ${f}`, callback_data: `manage:${f}` }]);
+        bot.editMessageText("📂 *Seus Bots:*", { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } });
+    } else if (action === "manage") {
+        const isRunning = activeBots[id];
+        bot.editMessageText(`🛠️ **Bot:** \`${id}\``, {
+            chat_id: query.message.chat.id,
+            message_id: query.message.message_id,
+            parse_mode: "Markdown",
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "📟 Terminal Interativo", url: `${DOMAIN}/terminal/${id}` }],
+                    [{ text: isRunning ? "🛑 Parar" : "▶️ Iniciar", callback_data: `${isRunning ? "stop" : "restart"}:${id}` }],
+                    [{ text: "⬅️ Voltar", callback_data: "menu_list" }]
+                ]
+            }
+        });
+    } else if (action === "stop" && activeBots[id]) activeBots[id].process.kill();
+    else if (action === "restart") spawnBot(id, path.join(BASE_PATH, id));
 });
 
 app.get("/terminal/:botId", (req, res) => {
@@ -165,26 +209,34 @@ app.get("/terminal/:botId", (req, res) => {
         <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.7.0/lib/xterm-addon-fit.js"></script>
         <script src="/socket.io/socket.io.js"></script>
         <style>
-            body { margin: 0; background: #000; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-            #header { background: #1a1a1a; color: #0f0; padding: 12px; font-family: monospace; border-bottom: 2px solid #333; }
-            #terminal { flex: 1; width: 100%; }
+            body { margin: 0; background: #000; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+            #header { background: #1a1a1a; color: #0f0; padding: 10px; font-family: monospace; font-size: 14px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
+            #terminal-container { flex: 1; width: 100%; overflow: hidden; background: #000; }
+            .xterm-viewport { overflow-y: auto !important; }
         </style>
     </head>
     <body>
-        <div id="header">📟 ARES: ${req.params.botId}</div>
-        <div id="terminal"></div>
+        <div id="header">
+            <span>🚀 ARES: ${req.params.botId}</span>
+            <div style="display: flex; gap: 10px;">
+                <button onclick="location.reload()" style="background: #333; color: #fff; border: 1px solid #555; padding: 2px 8px; cursor: pointer;">Recarregar</button>
+                <span id="status" style="color: #0f0;">● CONECTADO</span>
+            </div>
+        </div>
+        <div id="terminal-container"></div>
         <script>
             const socket = io();
-            const term = new Terminal({ theme: { background: '#000' }, cursorBlink: true, convertEol: true });
+            const botId = "${req.params.botId}";
+            const term = new Terminal({ theme: { background: '#000', foreground: '#0f0', cursor: '#0f0' }, cursorBlink: true, convertEol: true, fontSize: 14, fontFamily: 'monospace', rows: 40 });
             const fitAddon = new FitAddon.FitAddon();
             term.loadAddon(fitAddon);
-            term.open(document.getElementById('terminal'));
-            fitAddon.fit();
-            term.focus();
-            socket.on("log-${req.params.botId}", d => term.write(d));
-            term.onData(data => socket.emit("input", { botId: "${req.params.botId}", data }));
+            term.open(document.getElementById('terminal-container'));
+            setTimeout(() => { fitAddon.fit(); term.focus(); }, 500);
+            socket.on("log-" + botId, data => { term.write(data); });
+            term.onData(data => { socket.emit("input", { botId, data }); });
             window.addEventListener('resize', () => fitAddon.fit());
-            fetch('/logs/${req.params.botId}').then(r => r.text()).then(t => term.write(t));
+            fetch('/logs/' + botId).then(r => r.text()).then(t => { term.write(t); term.scrollToBottom(); });
+            socket.on('disconnect', () => { document.getElementById('status').innerText = '○ DESCONECTADO'; document.getElementById('status').style.color = '#f00'; });
         </script>
     </body>
     </html>`);
@@ -192,7 +244,9 @@ app.get("/terminal/:botId", (req, res) => {
 
 app.get("/logs/:botId", (req, res) => {
     const p = path.join(BASE_PATH, req.params.botId, "terminal.log");
-    if (fs.existsSync(p)) res.sendFile(p); else res.send("");
+    if (fs.existsSync(p)) res.sendFile(p);
+    else res.send("");
 });
 
+process.on('uncaughtException', (err) => { if (err.code !== 'EADDRINUSE') console.error(err) });
 server.listen(PORT, () => aresBanner());
