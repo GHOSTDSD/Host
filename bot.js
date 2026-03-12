@@ -28,51 +28,48 @@ const aresBanner = () => {
   console.clear();
   const up = process.uptime().toFixed(0);
   const ram = ((os.totalmem() - os.freemem()) / 1024 / 1024).toFixed(0);
-  console.log("\x1b[32m%s\x1b[0m", `
-  ╔═══════════════════════════════════════════╗
-  ║   █████╗ ██████╗ ███████╗███████╗        ║
-  ║  ██╔══██╗██╔══██╗██╔════╝██╔════╝        ║
-  ║  ███████║██████╔╝█████╗  ███████╗        ║
-  ║  ██╔══██║██╔══██╗██╔══╝  ╚════██║        ║
-  ║  ██║  ██║██║  ██║███████╗███████║        ║
-  ║  ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝  v2.0 ║
-  ╠═══════════════════════════════════════════╣
-  ║  🤖 BOTS  : ${String(Object.keys(activeBots).length).padEnd(4)}                           ║
-  ║  🖥  RAM   : ${ram} MB                           ║
-  ║  ⏱  UPTIME: ${String(up).padEnd(6)}s                         ║
-  ║  🌐 PAINEL : ${DOMAIN.slice(0,30).padEnd(30)} ║
-  ╚═══════════════════════════════════════════╝`);
+  console.log("\x1b[31m%s\x1b[0m", `
+  ┌───────────────────────────────────────────┐
+  │   █████╗ ██████╗ ███████╗███████╗        │
+  │  ██╔══██╗██╔══██╗██╔════╝██╔════╝        │
+  │  ███████║██████╔╝█████╗  ███████╗        │
+  │  ██╔══██║██╔══██╗██╔══╝  ╚════██║        │
+  │  ██║  ██║██║  ██║███████╗███████║        │
+  │  ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝  v2.0 │
+  ├───────────────────────────────────────────┤
+  │  🤖 BOTS  : ${String(Object.keys(activeBots).length).padEnd(4)}                           │
+  │  🖥  RAM   : ${ram} MB                           │
+  │  ⏱  UPTIME: ${String(up).padEnd(6)}s                         │
+  └───────────────────────────────────────────┘`);
 };
 
 const TERMINAL_HTML = `<!DOCTYPE html>
-<html lang="pt-BR">
+<html>
 <head>
-<meta charset="UTF-8"/>
-<title>ARES TERMINAL</title>
+<title>ARES | TERMINAL</title>
 <script src="/socket.io/socket.io.js"></script>
 <style>
-body{background:#020602;color:#00ff88;font-family:monospace;margin:0;overflow:hidden;display:flex;flex-direction:column;height:100vh}
-header{padding:15px;border-bottom:1px solid #142014;display:flex;justify-content:space-between;background:#030803;font-weight:bold}
-#log{flex:1;overflow-y:auto;padding:20px;white-space:pre-wrap;font-size:13px;color:rgba(0,255,136,0.9);line-height:1.5}
-::-webkit-scrollbar{width:6px}
-::-webkit-scrollbar-thumb{background:#142014}
+  body{background:#000;color:#0f0;font-family:'Courier New',monospace;margin:0;display:flex;flex-direction:column;height:100vh}
+  header{background:#0a0a0a;padding:15px;border-bottom:2px solid #111;display:flex;justify-content:space-between;font-size:12px;letter-spacing:1px}
+  #log{flex:1;overflow-y:auto;padding:20px;white-space:pre-wrap;line-height:1.4;font-size:13px;text-shadow:0 0 5px #0f0}
+  .cmd{color:#fff;font-weight:bold}
 </style>
 </head>
 <body>
-<header><div>ARES HOST - LIVE TERMINAL</div><div id="stats">CARREGANDO...</div></header>
+<header><div>● ARES_SYSTEM_CONNECTED</div><div id="stats">RAM: -- | BOTS: --</div></header>
 <div id="log"></div>
 <script>
-const socket = io();
-const log = document.getElementById('log');
-socket.on('global-log', d => { 
-  log.innerText += d; 
-  log.scrollTop = log.scrollHeight; 
-});
-setInterval(async () => {
-  const r = await fetch('/api/stats');
-  const d = await r.json();
-  document.getElementById('stats').innerText = 'BOTS: '+d.bots+' | RAM: '+d.ramUsed+'MB';
-}, 2000);
+  const socket = io();
+  const log = document.getElementById('log');
+  socket.on('global-log', d => { 
+    log.innerHTML += d.replace(/\\n/g, '<br>'); 
+    log.scrollTop = log.scrollHeight; 
+  });
+  setInterval(async () => {
+    const r = await fetch('/api/stats');
+    const d = await r.json();
+    document.getElementById('stats').innerText = 'RAM: '+d.ramUsed+'MB | BOTS: '+d.bots;
+  }, 2000);
 </script>
 </body></html>`;
 
@@ -83,55 +80,51 @@ app.get("/api/stats", (req, res) => res.json({
 }));
 
 function setupChild(child, botId) {
-  activeBots[botId] = { process: child, startedAt: Date.now() };
-  
-  child.stdout.on("data", d => {
-    const t = `[${botId}] ${d}`;
-    process.stdout.write(t);
-    io.emit("global-log", t);
-  });
-
-  child.stderr.on("data", d => {
-    const t = `[${botId}-ERRO] ${d}`;
-    io.emit("global-log", t);
-  });
-
+  activeBots[botId] = { process: child };
+  child.stdout.on("data", d => io.emit("global-log", \`[${botId}] \${d}\`));
+  child.stderr.on("data", d => io.emit("global-log", \`<span style="color:red">[${botId}-ERR] \${d}</span>\`));
   child.on("exit", () => {
     delete activeBots[botId];
     aresBanner();
   });
-
   aresBanner();
 }
 
 function spawnBot(botId, instancePath) {
   const files = fs.readdirSync(instancePath);
-  const main = files.find(f => ["index.js","main.js","bot.js","start.js"].includes(f));
-  const hasPkg = fs.existsSync(path.join(instancePath, "package.json"));
-
+  const main = files.find(f => ["index.js","main.js","bot.js"].includes(f));
+  
   if (main) {
-    const child = spawn("node", ["--max-old-space-size=128", main], { cwd: instancePath, shell: true });
-    setupChild(child, botId);
-  } else if (hasPkg) {
-    io.emit("global-log", `\n[${botId}] Iniciando instalação de dependências...\n`);
-    const inst = spawn("npm", ["install", "--omit=dev"], { cwd: instancePath, shell: true });
-    
-    inst.stdout.on("data", d => io.emit("global-log", `[${botId}-INSTALL] ${d}`));
-    
-    inst.on("exit", (code) => {
-      if(code === 0) {
-        io.emit("global-log", `\n[${botId}] Instalação concluída. Rodando npm start...\n`);
-        const startChild = spawn("npm", ["start"], { cwd: instancePath, shell: true });
-        setupChild(startChild, botId);
-      } else {
-        io.emit("global-log", `\n[${botId}] Falha no npm install.\n`);
-      }
+    io.emit("global-log", \`[SYSTEM] Iniciando \${main}...\\n\`);
+    setupChild(spawn("node", [main], { cwd: instancePath, shell: true }), botId);
+  } else if (fs.existsSync(path.join(instancePath, "package.json"))) {
+    io.emit("global-log", \`[SYSTEM] Rodando npm install...\\n\`);
+    const inst = spawn("npm", ["install"], { cwd: instancePath, shell: true });
+    inst.stdout.on("data", d => io.emit("global-log", \`[INSTALL] \${d}\`));
+    inst.on("exit", () => {
+      io.emit("global-log", \`[SYSTEM] npm start disparado!\\n\`);
+      setupChild(spawn("npm", ["start"], { cwd: instancePath, shell: true }), botId);
     });
   }
 }
 
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, "✨ *ARES HOST ATIVO*\n\nEnvie o arquivo `.zip` para hospedar.", { parse_mode: "Markdown" });
+  const welcome = `
+  🔴 *ARES HOSTING SYSTEM* 🔴
+  ---------------------------
+  Status: *Online*
+  Painel: [Acessar Terminal](\${DOMAIN})
+  
+  *Como usar:*
+  1. Envie seu bot em arquivo \`.zip\`
+  2. Use a legenda para dar nome ao bot.
+  `;
+  bot.sendMessage(msg.chat.id, welcome, { 
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: [[{ text: "🌐 Abrir Terminal Web", url: DOMAIN }]]
+    }
+  });
 });
 
 bot.on("document", async (msg) => {
@@ -141,23 +134,22 @@ bot.on("document", async (msg) => {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
   
   const file = await bot.getFile(msg.document.file_id);
-  const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
+  io.emit("global-log", \`[SYSTEM] Recebendo arquivo para: \${botId}...\\n\`);
 
-  io.emit("global-log", `\n[SISTEMA] Extraindo novo bot: ${botId}...\n`);
-
-  require("https").get(fileUrl, (res) => {
+  require("https").get(\`https://api.telegram.org/file/bot\${TOKEN}/\${file.file_path}\`, (res) => {
     res.pipe(unzipper.Extract({ path: p })).on("close", () => {
       spawnBot(botId, p);
-      const opts = {
+      const menu = {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🔄 Reiniciar", callback_data: `restart:${botId}` }, { text: "🛑 Parar", callback_data: `stop:${botId}` }],
-            [{ text: "📊 Status", callback_data: `status:${botId}` }, { text: "🗑 Deletar", callback_data: `delete:${botId}` }]
+            [{ text: "🖥 Ver no Terminal", url: DOMAIN }],
+            [{ text: "🗑 Deletar Instância", callback_data: `delete:${botId}` }]
           ]
         }
       };
-      bot.sendMessage(msg.chat.id, `✅ *Bot:* \`${botId}\` processando... acompanhe o terminal!`, opts);
+      bot.sendMessage(msg.chat.id, `🚀 *Bot \${botId} ONLINE!*`, menu);
     });
   });
 });
@@ -166,22 +158,17 @@ bot.on("callback_query", (query) => {
   const [action, botId] = query.data.split(":");
   const p = path.resolve(BASE_PATH, botId);
 
-  if (action === "stop") {
-    if (activeBots[botId]) {
-      activeBots[botId].process.kill();
-      bot.answerCallbackQuery(query.id, { text: "Bot encerrado." });
-    }
+  if (action === "stop" && activeBots[botId]) {
+    activeBots[botId].process.kill();
+    bot.answerCallbackQuery(query.id, { text: "Processo encerrado." });
   } else if (action === "restart") {
     if (activeBots[botId]) activeBots[botId].process.kill();
     setTimeout(() => spawnBot(botId, p), 1000);
     bot.answerCallbackQuery(query.id, { text: "Reiniciando..." });
-  } else if (action === "status") {
-    const isOnline = activeBots[botId] ? "Ativo" : "Offline";
-    bot.answerCallbackQuery(query.id, { text: `Bot: ${botId}\nStatus: ${isOnline}`, show_alert: true });
   } else if (action === "delete") {
     if (activeBots[botId]) activeBots[botId].process.kill();
     fs.rmSync(p, { recursive: true, force: true });
-    bot.answerCallbackQuery(query.id, { text: "Arquivos deletados." });
+    bot.answerCallbackQuery(query.id, { text: "Pasta apagada." });
   }
 });
 
