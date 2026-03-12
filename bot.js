@@ -3,7 +3,6 @@ const unzipper = require("unzipper")
 const { spawn } = require("child_process")
 const fs = require("fs")
 const path = require("path")
-const os = require("os")
 const express = require("express")
 const http = require("http")
 const socketIo = require("socket.io")
@@ -11,235 +10,193 @@ const https = require("https")
 
 const TOKEN = "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM"
 const PORT = process.env.PORT || 3000
-const DOMAIN = process.env.RAILWAY_STATIC_URL ? `https://${process.env.RAILWAY_STATIC_URL}` : `http://localhost:${PORT}`
 
-const bot = new TelegramBot(TOKEN,{ polling:true })
+const bot = new TelegramBot(TOKEN,{polling:true})
 
 const app = express()
 const server = http.createServer(app)
 const io = socketIo(server)
 
-app.use(express.json())
+const BASE = path.resolve("instances")
 
-const BASE_PATH = path.resolve(process.cwd(),"instances")
-if(!fs.existsSync(BASE_PATH)) fs.mkdirSync(BASE_PATH,{recursive:true})
+if(!fs.existsSync(BASE)) fs.mkdirSync(BASE)
 
-const activeBots = {}
+const runningBots = {}
 
-let PORT_START = 4000
-const usedPorts = new Set()
+let PORT_BASE = 4000
+const ports = new Set()
 
-function getFreePort(){
-while(usedPorts.has(PORT_START)){
-PORT_START++
+function getPort(){
+while(ports.has(PORT_BASE)){
+PORT_BASE++
 }
-usedPorts.add(PORT_START)
-return PORT_START
-}
-
-function releasePort(port){
-usedPorts.delete(port)
+ports.add(PORT_BASE)
+return PORT_BASE
 }
 
-function aresBanner(){
-
-console.clear()
-
-const up = process.uptime().toFixed(0)
-const ram = ((os.totalmem()-os.freemem())/1024/1024).toFixed(0)
-
-console.log(`
-ARES HOST
-
-BOTS: ${Object.keys(activeBots).length}
-RAM: ${ram} MB
-UPTIME: ${up}s
-`)
-
+function freePort(p){
+ports.delete(p)
 }
 
-function getTerminalHTML(botId){
-
+function terminalHTML(id){
 return `
-<!DOCTYPE html>
 <html>
 <head>
-<title>Terminal ${botId}</title>
 <script src="/socket.io/socket.io.js"></script>
 <style>
-body{background:#000;color:#0f0;font-family:monospace;margin:0}
-#log{height:100vh;overflow:auto;padding:20px;white-space:pre-wrap}
+body{background:#000;color:#0f0;font-family:monospace}
+#log{white-space:pre-wrap}
 </style>
 </head>
 <body>
 <div id="log"></div>
 <script>
-const socket = io()
-const log = document.getElementById("log")
-socket.on("log-${botId}",d=>{
-log.innerText += d
-log.scrollTop = log.scrollHeight
+const socket=io()
+const log=document.getElementById("log")
+socket.on("log-${id}",d=>{
+log.innerText+=d
+window.scrollTo(0,document.body.scrollHeight)
 })
 </script>
 </body>
 </html>
 `
-
 }
 
-app.get("/terminal/:botId",(req,res)=>{
-res.send(getTerminalHTML(req.params.botId))
+app.get("/terminal/:id",(req,res)=>{
+res.send(terminalHTML(req.params.id))
 })
 
-function spawnBot(botId,instancePath){
+function installModule(module,dir,id){
 
-const files = fs.readdirSync(instancePath)
+return new Promise(resolve=>{
 
-let main = files.find(f=>["index.js","main.js","bot.js","start.js"].includes(f))
+const p=spawn("npm",["install",module],{
+cwd:dir,
+shell:true
+})
 
-if(!main && fs.existsSync(path.join(instancePath,"src/index.js"))){
-main = "src/index.js"
+p.stdout.on("data",d=>{
+io.emit(`log-${id}`,d.toString())
+})
+
+p.on("exit",()=>resolve())
+
+})
+
 }
 
-const botPort = getFreePort()
+function startBot(id,dir){
 
-const env = {
+const port=getPort()
+
+const env={
 ...process.env,
-PORT: botPort,
-PORT0: botPort,
-PORT1: botPort
+PORT:port
 }
 
-const logFile = path.join(instancePath,"terminal.log")
+function run(){
 
-function startProcess(cmd,args){
+const files=fs.readdirSync(dir)
 
-const child = spawn(cmd,args,{
-cwd:instancePath,
+let main=files.find(f=>["index.js","bot.js","main.js","start.js"].includes(f))
+
+if(!main && fs.existsSync(path.join(dir,"src/index.js"))){
+main="src/index.js"
+}
+
+const proc=spawn("node",[main],{
+cwd:dir,
 shell:true,
 env
 })
 
-activeBots[botId] = {
-process:child,
-port:botPort
-}
+runningBots[id]={proc,port}
 
-child.stdout.on("data",d=>{
-fs.appendFileSync(logFile,d.toString())
-io.emit(`log-${botId}`,d.toString())
+proc.stdout.on("data",d=>{
+io.emit(`log-${id}`,d.toString())
 })
 
-child.stderr.on("data",d=>{
-fs.appendFileSync(logFile,d.toString())
-io.emit(`log-${botId}`,d.toString())
-})
+proc.stderr.on("data",async d=>{
 
-child.on("exit",()=>{
-releasePort(botPort)
-delete activeBots[botId]
-aresBanner()
-})
+const text=d.toString()
 
-}
+io.emit(`log-${id}`,text)
 
-io.emit(`log-${botId}`,`[ARES] Porta ${botPort}\n`)
+if(text.includes("Cannot find module")){
 
-if(main){
+const module=text.split("Cannot find module '")[1].split("'")[0]
 
-startProcess("node",[main])
+io.emit(`log-${id}`,`Instalando módulo ${module}\n`)
+
+await installModule(module,dir,id)
+
+run()
 
 }
 
-else if(fs.existsSync(path.join(instancePath,"package.json"))){
-
-io.emit(`log-${botId}`,"Instalando dependências\n")
-
-const inst = spawn("npm",["install"],{
-cwd:instancePath,
-shell:true,
-env
 })
 
-inst.stdout.on("data",d=>{
-io.emit(`log-${botId}`,d.toString())
-})
+proc.on("exit",()=>{
 
-inst.on("exit",()=>{
-startProcess("npm",["start"])
+freePort(port)
+
+setTimeout(()=>{
+run()
+},5000)
+
 })
 
 }
+
+run()
 
 }
 
 bot.onText(/\/start/,msg=>{
-
-bot.sendMessage(msg.chat.id,
-`ARES BOT HOST
-
-Envie o arquivo ZIP do seu bot`
-)
-
+bot.sendMessage(msg.chat.id,"Envie o ZIP do bot")
 })
 
 bot.on("document",async msg=>{
 
-if(!msg.document.file_name.toLowerCase().endsWith(".zip")){
-bot.sendMessage(msg.chat.id,"Envie apenas .zip")
+if(!msg.document.file_name.endsWith(".zip")){
+bot.sendMessage(msg.chat.id,"Envie um .zip")
 return
 }
 
-const botId = `bot_${Date.now()}`
-const instancePath = path.join(BASE_PATH,botId)
+const id="bot_"+Date.now()
 
-fs.mkdirSync(instancePath,{recursive:true})
+const dir=path.join(BASE,id)
 
-bot.sendMessage(msg.chat.id,"Baixando arquivo")
+fs.mkdirSync(dir)
 
-const file = await bot.getFile(msg.document.file_id)
+const file=await bot.getFile(msg.document.file_id)
 
-const url = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`
+const url=`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`
 
-const zipPath = path.join(instancePath,"bot.zip")
+const zip=path.join(dir,"bot.zip")
 
-const fileStream = fs.createWriteStream(zipPath)
+const stream=fs.createWriteStream(zip)
 
-https.get(url,response=>{
+https.get(url,res=>{
 
-response.pipe(fileStream)
+res.pipe(stream)
 
-fileStream.on("finish",()=>{
+stream.on("finish",()=>{
 
-fileStream.close()
+stream.close()
 
-bot.sendMessage(msg.chat.id,"Extraindo bot")
-
-fs.createReadStream(zipPath)
-.pipe(unzipper.Extract({path:instancePath}))
+fs.createReadStream(zip)
+.pipe(unzipper.Extract({path:dir}))
 .on("close",()=>{
 
-bot.sendMessage(msg.chat.id,"Iniciando bot")
-
-spawnBot(botId,instancePath)
-
-const termLink = `${DOMAIN}/terminal/${botId}`
+startBot(id,dir)
 
 bot.sendMessage(msg.chat.id,
-`Bot criado
+`Bot iniciado
 
-ID: ${botId}`,
-{
-reply_markup:{
-inline_keyboard:[
-[{text:"Terminal",url:termLink}],
-[
-{text:"Reiniciar",callback_data:`restart:${botId}:${instancePath}`},
-{text:"Parar",callback_data:`stop:${botId}`}
-]
-]
-}
-})
+ID: ${id}
+Terminal: http://localhost:${PORT}/terminal/${id}`)
 
 })
 
@@ -249,48 +206,4 @@ inline_keyboard:[
 
 })
 
-bot.on("callback_query",query=>{
-
-const [action,botId,instancePath] = query.data.split(":")
-
-if(action === "stop" && activeBots[botId]){
-
-releasePort(activeBots[botId].port)
-
-activeBots[botId].process.kill("SIGKILL")
-
-delete activeBots[botId]
-
-bot.answerCallbackQuery(query.id,{text:"Bot parado"})
-
-}
-
-else if(action === "restart"){
-
-if(activeBots[botId]){
-
-releasePort(activeBots[botId].port)
-
-activeBots[botId].process.kill("SIGKILL")
-
-delete activeBots[botId]
-
-}
-
-bot.answerCallbackQuery(query.id,{text:"Reiniciando..."})
-
-setTimeout(()=>{
-spawnBot(botId,instancePath)
-},2000)
-
-}
-
-else{
-
-bot.answerCallbackQuery(query.id)
-
-}
-
-})
-
-server.listen(PORT,()=>aresBanner())
+server.listen(PORT)
