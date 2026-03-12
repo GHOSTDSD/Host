@@ -1,6 +1,6 @@
 const TelegramBot = require("node-telegram-bot-api");
 const unzipper = require("unzipper");
-const pty = require("node-pty");
+const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -64,18 +64,19 @@ function aresBanner() {
 function writeLog(botId, instancePath, data) {
     const logPath = path.join(instancePath, "terminal.log");
     fs.appendFileSync(logPath, data);
-    io.emit(`log-${botId}`, data);
+    io.emit(`log-${botId}`, data.toString());
 }
 
 function spawnBot(botId, instancePath) {
-    if (activeBots[botId]) activeBots[botId].process.kill();
+    if (activeBots[botId]) activeBots[botId].process.kill("SIGKILL");
 
     const botPort = getFreePort();
     const env = { 
         ...process.env, 
         PORT: botPort.toString(),
         NODE_ENV: "production",
-        COLORTERM: "truecolor",
+        FORCE_COLOR: "3",
+        DEBUG_COLORS: "true",
         TERM: "xterm-256color"
     };
     
@@ -83,20 +84,15 @@ function spawnBot(botId, instancePath) {
 
     if (fs.existsSync(path.join(instancePath, "package.json"))) {
         writeLog(botId, instancePath, `\x1b[1;34m[SISTEMA] Instalando dependências...\x1b[0m\r\n`);
+        const install = spawn(os.platform() === 'win32' ? 'npm.cmd' : 'npm', ['install', '--production'], { cwd: instancePath, shell: true, env });
         
-        const install = pty.spawn(os.platform() === 'win32' ? 'npm.cmd' : 'npm', ['install', '--production'], {
-            name: 'xterm-color',
-            cols: 80,
-            rows: 30,
-            cwd: instancePath,
-            env: env
-        });
-
-        install.onData(data => writeLog(botId, instancePath, data));
-        install.onExit(({ exitCode }) => {
-            if (exitCode === 0) runInstance(botId, instancePath, botPort, env);
+        install.stdout.on("data", d => writeLog(botId, instancePath, d));
+        install.stderr.on("data", d => writeLog(botId, instancePath, d));
+        
+        install.on("close", (code) => {
+            if (code === 0) runInstance(botId, instancePath, botPort, env);
             else {
-                writeLog(botId, instancePath, `\x1b[1;31m[ERRO] NPM falhou com código ${exitCode}\x1b[0m\r\n`);
+                writeLog(botId, instancePath, `\x1b[1;31m[ERRO] NPM falhou: ${code}\x1b[0m\r\n`);
                 releasePort(botPort);
             }
         });
@@ -111,29 +107,21 @@ function runInstance(botId, instancePath, botPort, env) {
     let nodeMain = files.find(f => ["index.js", "main.js", "bot.js", "start.js", "app.js"].includes(f));
     if (!nodeMain && fs.existsSync(path.join(instancePath, "src/index.js"))) nodeMain = "src/index.js";
 
-    let shell = os.platform() === 'win32' ? 'cmd.exe' : 'bash';
-    let args = [];
-
+    let child;
     if (shellScript) {
         if (os.platform() !== "win32") fs.chmodSync(path.join(instancePath, shellScript), "755");
-        args = [os.platform() === 'win32' ? '/c' : '-c', os.platform() === 'win32' ? shellScript : `./${shellScript}`];
+        child = spawn(os.platform() === 'win32' ? shellScript : `./${shellScript}`, [], { cwd: instancePath, shell: true, env, stdio: ['pipe', 'pipe', 'pipe'] });
     } else if (nodeMain) {
-        args = [os.platform() === 'win32' ? '/c' : '-c', `node ${nodeMain}`];
+        child = spawn("node", [nodeMain], { cwd: instancePath, shell: true, env, stdio: ['pipe', 'pipe', 'pipe'] });
     }
 
-    if (args.length > 0) {
-        const child = pty.spawn(shell, args, {
-            name: 'xterm-color',
-            cols: 80,
-            rows: 30,
-            cwd: instancePath,
-            env: env
-        });
-
+    if (child) {
         activeBots[botId] = { process: child, port: botPort, path: instancePath };
 
-        child.onData(data => writeLog(botId, instancePath, data));
-        child.onExit(() => {
+        child.stdout.on("data", d => writeLog(botId, instancePath, d));
+        child.stderr.on("data", d => writeLog(botId, instancePath, d));
+
+        child.on("exit", () => {
             releasePort(botPort);
             delete activeBots[botId];
             aresBanner();
@@ -147,7 +135,9 @@ function runInstance(botId, instancePath, botPort, env) {
 
 io.on("connection", (socket) => {
     socket.on("input", ({ botId, data }) => {
-        if (activeBots[botId]) activeBots[botId].process.write(data);
+        if (activeBots[botId] && activeBots[botId].process.stdin.writable) {
+            activeBots[botId].process.stdin.write(data);
+        }
     });
 });
 
@@ -217,7 +207,7 @@ bot.on("callback_query", async query => {
             }
         });
     }
-    else if (action === "stop" && activeBots[id]) activeBots[id].process.kill();
+    else if (action === "stop" && activeBots[id]) activeBots[id].process.kill("SIGKILL");
     else if (action === "restart") spawnBot(id, path.join(BASE_PATH, id));
 });
 
@@ -232,7 +222,7 @@ app.get("/terminal/:botId", (req, res) => {
     <body style="background:#000;margin:0;overflow:hidden;">
         <div id="terminal" style="height:100vh;"></div>
         <script>
-            const term = new Terminal({ theme: { background: '#000' }, cursorBlink: true, convertEol: true });
+            const term = new Terminal({ theme: { background: '#000' }, cursorBlink: true, convertEol: true, fontFamily: 'monospace' });
             const socket = io();
             const botId = "${req.params.botId}";
             term.open(document.getElementById('terminal'));
@@ -250,4 +240,5 @@ app.get("/logs/:botId", (req, res) => {
     else res.send("Nenhum log disponível.");
 });
 
+process.on('uncaughtException', (err) => { if (err.code !== 'EADDRINUSE') console.error(err) });
 server.listen(PORT, () => aresBanner());
