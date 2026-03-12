@@ -226,6 +226,12 @@ bot.on("message", async msg => {
         fs.createReadStream(zipPath)
           .pipe(unzipper.Extract({ path: instancePath }))
           .on("close", () => {
+            // Remove node_modules se vier no ZIP (economiza espaco e evita conflitos)
+            const nm = path.join(instancePath, "node_modules")
+            if (fs.existsSync(nm)) {
+              fs.rmSync(nm, { recursive: true, force: true })
+            }
+
             spawnBot(botId, instancePath)
             delete userState[msg.chat.id]
 
