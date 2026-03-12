@@ -9,11 +9,12 @@ const http = require("http")
 const socketIo = require("socket.io")
 const https = require("https")
 
-const TOKEN = process.env.BOT_TOKEN || "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM"
+const TOKEN = "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM"
 const PORT = process.env.PORT || 3000
 const DOMAIN = process.env.RAILWAY_STATIC_URL ? `https://${process.env.RAILWAY_STATIC_URL}` : `http://localhost:${PORT}`
 
 const bot = new TelegramBot(TOKEN,{ polling:true })
+
 const app = express()
 const server = http.createServer(app)
 const io = socketIo(server)
@@ -48,7 +49,7 @@ const up = process.uptime().toFixed(0)
 const ram = ((os.totalmem()-os.freemem())/1024/1024).toFixed(0)
 
 console.log(`
-ARES HOSTING SYSTEM
+ARES HOST
 
 BOTS: ${Object.keys(activeBots).length}
 RAM: ${ram} MB
@@ -93,23 +94,36 @@ res.send(getTerminalHTML(req.params.botId))
 function spawnBot(botId,instancePath){
 
 const files = fs.readdirSync(instancePath)
-const main = files.find(f=>["index.js","main.js","bot.js","start.js"].includes(f))
+
+let main = files.find(f=>["index.js","main.js","bot.js","start.js"].includes(f))
+
+if(!main && fs.existsSync(path.join(instancePath,"src/index.js"))){
+main = "src/index.js"
+}
 
 const botPort = getFreePort()
 
 const env = {
 ...process.env,
-PORT: botPort
+PORT: botPort,
+PORT0: botPort,
+PORT1: botPort
 }
 
-const handleProcess = (child)=>{
+const logFile = path.join(instancePath,"terminal.log")
+
+function startProcess(cmd,args){
+
+const child = spawn(cmd,args,{
+cwd:instancePath,
+shell:true,
+env
+})
 
 activeBots[botId] = {
 process:child,
 port:botPort
 }
-
-const logFile = path.join(instancePath,"terminal.log")
 
 child.stdout.on("data",d=>{
 fs.appendFileSync(logFile,d.toString())
@@ -122,13 +136,9 @@ io.emit(`log-${botId}`,d.toString())
 })
 
 child.on("exit",()=>{
-
 releasePort(botPort)
-
 delete activeBots[botId]
-
 aresBanner()
-
 })
 
 }
@@ -137,19 +147,13 @@ io.emit(`log-${botId}`,`[ARES] Porta ${botPort}\n`)
 
 if(main){
 
-handleProcess(
-spawn("node",[main],{
-cwd:instancePath,
-shell:true,
-env
-})
-)
+startProcess("node",[main])
 
 }
 
 else if(fs.existsSync(path.join(instancePath,"package.json"))){
 
-io.emit(`log-${botId}`,"[ARES] Instalando dependências\n")
+io.emit(`log-${botId}`,"Instalando dependências\n")
 
 const inst = spawn("npm",["install"],{
 cwd:instancePath,
@@ -162,15 +166,7 @@ io.emit(`log-${botId}`,d.toString())
 })
 
 inst.on("exit",()=>{
-
-handleProcess(
-spawn("npm",["start"],{
-cwd:instancePath,
-shell:true,
-env
-})
-)
-
+startProcess("npm",["start"])
 })
 
 }
@@ -179,7 +175,11 @@ env
 
 bot.onText(/\/start/,msg=>{
 
-bot.sendMessage(msg.chat.id,"ARES HOST\nEnvie o ZIP do seu bot")
+bot.sendMessage(msg.chat.id,
+`ARES BOT HOST
+
+Envie o arquivo ZIP do seu bot`
+)
 
 })
 
@@ -253,7 +253,7 @@ bot.on("callback_query",query=>{
 
 const [action,botId,instancePath] = query.data.split(":")
 
-if(action==="stop" && activeBots[botId]){
+if(action === "stop" && activeBots[botId]){
 
 releasePort(activeBots[botId].port)
 
@@ -265,7 +265,7 @@ bot.answerCallbackQuery(query.id,{text:"Bot parado"})
 
 }
 
-else if(action==="restart"){
+else if(action === "restart"){
 
 if(activeBots[botId]){
 
@@ -294,4 +294,3 @@ bot.answerCallbackQuery(query.id)
 })
 
 server.listen(PORT,()=>aresBanner())
-
