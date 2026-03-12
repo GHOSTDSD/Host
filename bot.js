@@ -76,14 +76,13 @@ function spawnBot(botId, instancePath) {
         PORT: botPort.toString(),
         NODE_ENV: "production",
         FORCE_COLOR: "3",
-        DEBUG_COLORS: "true",
         TERM: "xterm-256color"
     };
     
     aresBanner();
 
     if (fs.existsSync(path.join(instancePath, "package.json"))) {
-        writeLog(botId, instancePath, `\x1b[1;34m[SISTEMA] Instalando dependências...\x1b[0m\r\n`);
+        writeLog(botId, instancePath, `\x1b[1;34m[SISTEMA] Preparando ambiente...\x1b[0m\r\n`);
         const install = spawn(os.platform() === 'win32' ? 'npm.cmd' : 'npm', ['install', '--production'], { cwd: instancePath, shell: true, env });
         
         install.stdout.on("data", d => writeLog(botId, instancePath, d));
@@ -92,7 +91,7 @@ function spawnBot(botId, instancePath) {
         install.on("close", (code) => {
             if (code === 0) runInstance(botId, instancePath, botPort, env);
             else {
-                writeLog(botId, instancePath, `\x1b[1;31m[ERRO] NPM falhou: ${code}\x1b[0m\r\n`);
+                writeLog(botId, instancePath, `\x1b[1;31m[ERRO] Falha na instalação\x1b[0m\r\n`);
                 releasePort(botPort);
             }
         });
@@ -110,43 +109,39 @@ function runInstance(botId, instancePath, botPort, env) {
     let child;
     if (shellScript) {
         if (os.platform() !== "win32") fs.chmodSync(path.join(instancePath, shellScript), "755");
-        child = spawn(os.platform() === 'win32' ? shellScript : `./${shellScript}`, [], { cwd: instancePath, shell: true, env, stdio: ['pipe', 'pipe', 'pipe'] });
+        child = spawn(os.platform() === 'win32' ? shellScript : `./${shellScript}`, [], { cwd: instancePath, shell: true, env });
     } else if (nodeMain) {
-        child = spawn("node", [nodeMain], { cwd: instancePath, shell: true, env, stdio: ['pipe', 'pipe', 'pipe'] });
+        child = spawn("node", [nodeMain], { cwd: instancePath, shell: true, env });
     }
 
     if (child) {
         activeBots[botId] = { process: child, port: botPort, path: instancePath };
-
         child.stdout.on("data", d => writeLog(botId, instancePath, d));
         child.stderr.on("data", d => writeLog(botId, instancePath, d));
-
         child.on("exit", () => {
             releasePort(botPort);
             delete activeBots[botId];
             aresBanner();
         });
         aresBanner();
-    } else {
-        writeLog(botId, instancePath, "\x1b[1;31m[ERRO] Script não encontrado.\x1b[0m\r\n");
-        releasePort(botPort);
     }
 }
 
 io.on("connection", (socket) => {
     socket.on("input", ({ botId, data }) => {
-        if (activeBots[botId] && activeBots[botId].process.stdin.writable) {
-            activeBots[botId].process.stdin.write(data);
+        const target = activeBots[botId];
+        if (target && target.process.stdin.writable) {
+            target.process.stdin.write(data);
         }
     });
 });
 
 bot.onText(/\/start/, msg => {
-    bot.sendMessage(msg.chat.id, "🤖 *ARES HOST*\nO que deseja fazer?", {
+    bot.sendMessage(msg.chat.id, "🤖 *ARES HOST*", {
         parse_mode: "Markdown",
         reply_markup: {
             inline_keyboard: [
-                [{ text: "🚀 Hospedar Novo Bot", callback_data: "menu_new" }],
+                [{ text: "🚀 Novo Bot", callback_data: "menu_new" }],
                 [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
             ]
         }
@@ -154,9 +149,9 @@ bot.onText(/\/start/, msg => {
 });
 
 bot.on("document", async msg => {
-    if (!msg.document.file_name.toLowerCase().endsWith(".zip")) return bot.sendMessage(msg.chat.id, "❌ Envie um arquivo .ZIP");
+    if (!msg.document.file_name.toLowerCase().endsWith(".zip")) return;
     userState[msg.chat.id] = { fileId: msg.document.file_id };
-    bot.sendMessage(msg.chat.id, "📝 Escolha um nome exclusivo para o bot:");
+    bot.sendMessage(msg.chat.id, "📝 Nome do bot:");
 });
 
 bot.on("message", async msg => {
@@ -165,7 +160,7 @@ bot.on("message", async msg => {
     if (state && state.fileId && !state.botName) {
         const name = msg.text.trim().replace(/\s+/g, "_").toLowerCase();
         const instancePath = path.join(BASE_PATH, name);
-        if (fs.existsSync(instancePath)) return bot.sendMessage(msg.chat.id, "❌ Esse nome já existe.");
+        if (fs.existsSync(instancePath)) return;
         state.botName = name;
         fs.mkdirSync(instancePath, { recursive: true });
         const file = await bot.getFile(state.fileId);
@@ -213,22 +208,56 @@ bot.on("callback_query", async query => {
 
 app.get("/terminal/:botId", (req, res) => {
     res.send(`
+    <!DOCTYPE html>
     <html>
     <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.1.0/css/xterm.css" />
         <script src="https://cdn.jsdelivr.net/npm/xterm@5.1.0/lib/xterm.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.7.0/lib/xterm-addon-fit.js"></script>
         <script src="/socket.io/socket.io.js"></script>
+        <style>
+            body { margin: 0; background: #000; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+            #header { background: #1a1a1a; color: #0f0; padding: 10px; font-family: monospace; font-size: 14px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
+            #terminal-container { flex: 1; width: 100%; position: relative; }
+            .xterm-viewport { overflow-y: auto !important; }
+        </style>
     </head>
-    <body style="background:#000;margin:0;overflow:hidden;">
-        <div id="terminal" style="height:100vh;"></div>
+    <body>
+        <div id="header">
+            <span>BOT: ${req.params.botId}</span>
+            <span id="status">CONECTADO</span>
+        </div>
+        <div id="terminal-container"></div>
         <script>
-            const term = new Terminal({ theme: { background: '#000' }, cursorBlink: true, convertEol: true, fontFamily: 'monospace' });
             const socket = io();
             const botId = "${req.params.botId}";
-            term.open(document.getElementById('terminal'));
+            const term = new Terminal({
+                theme: { background: '#000', foreground: '#0f0' },
+                cursorBlink: true,
+                convertEol: true,
+                fontSize: 14,
+                fontFamily: 'monospace'
+            });
+            const fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.open(document.getElementById('terminal-container'));
+            fitAddon.fit();
+
             socket.on("log-" + botId, data => term.write(data));
-            term.onData(data => socket.emit("input", { botId, data }));
-            fetch('/logs/' + botId).then(r => r.text()).then(t => term.write(t));
+            
+            term.onData(data => {
+                socket.emit("input", { botId, data });
+            });
+
+            window.addEventListener('resize', () => fitAddon.fit());
+            
+            fetch('/logs/' + botId).then(r => r.text()).then(t => {
+                term.write(t);
+                term.scrollToBottom();
+            });
+
+            socket.on('disconnect', () => document.getElementById('status').innerText = 'DESCONECTADO');
         </script>
     </body>
     </html>`);
@@ -237,7 +266,7 @@ app.get("/terminal/:botId", (req, res) => {
 app.get("/logs/:botId", (req, res) => {
     const p = path.join(BASE_PATH, req.params.botId, "terminal.log");
     if (fs.existsSync(p)) res.sendFile(p);
-    else res.send("Nenhum log disponível.");
+    else res.send("");
 });
 
 process.on('uncaughtException', (err) => { if (err.code !== 'EADDRINUSE') console.error(err) });
