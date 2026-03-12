@@ -19,29 +19,32 @@ const io = socketIo(server)
 
 const BASE = path.resolve("instances")
 
-if(!fs.existsSync(BASE)) fs.mkdirSync(BASE)
+if(!fs.existsSync(BASE)){
+fs.mkdirSync(BASE)
+}
 
-const runningBots = {}
+const bots = {}
 
-let PORT_BASE = 4000
-const ports = new Set()
+let portBase = 4000
+const usedPorts = new Set()
 
 function getPort(){
-while(ports.has(PORT_BASE)){
-PORT_BASE++
+while(usedPorts.has(portBase)){
+portBase++
 }
-ports.add(PORT_BASE)
-return PORT_BASE
+usedPorts.add(portBase)
+return portBase
 }
 
 function freePort(p){
-ports.delete(p)
+usedPorts.delete(p)
 }
 
 function terminalHTML(id){
 return `
 <html>
 <head>
+<title>Terminal ${id}</title>
 <script src="/socket.io/socket.io.js"></script>
 <style>
 body{background:#000;color:#0f0;font-family:monospace}
@@ -67,74 +70,66 @@ app.get("/terminal/:id",(req,res)=>{
 res.send(terminalHTML(req.params.id))
 })
 
-function installModule(module,dir,id){
-
-return new Promise(resolve=>{
-
-const p=spawn("npm",["install",module],{
-cwd:dir,
-shell:true
-})
-
-p.stdout.on("data",d=>{
-io.emit(`log-${id}`,d.toString())
-})
-
-p.on("exit",()=>resolve())
-
-})
-
-}
-
 function startBot(id,dir){
 
-const port=getPort()
+const files = fs.readdirSync(dir)
 
-const env={
-...process.env,
-PORT:port
-}
-
-function run(){
-
-const files=fs.readdirSync(dir)
-
-let main=files.find(f=>["index.js","bot.js","main.js","start.js"].includes(f))
+let main = files.find(f=>["index.js","main.js","bot.js","start.js"].includes(f))
 
 if(!main && fs.existsSync(path.join(dir,"src/index.js"))){
 main="src/index.js"
 }
 
-const proc=spawn("node",[main],{
+if(!main){
+io.emit(`log-${id}`,"Arquivo principal não encontrado\n")
+return
+}
+
+const port = getPort()
+
+const env = {
+...process.env,
+PORT:port
+}
+
+const logFile = path.join(dir,"terminal.log")
+
+function run(){
+
+const install = spawn("npm",["install"],{
 cwd:dir,
 shell:true,
 env
 })
 
-runningBots[id]={proc,port}
-
-proc.stdout.on("data",d=>{
+install.stdout.on("data",d=>{
+fs.appendFileSync(logFile,d.toString())
 io.emit(`log-${id}`,d.toString())
 })
 
-proc.stderr.on("data",async d=>{
+install.stderr.on("data",d=>{
+fs.appendFileSync(logFile,d.toString())
+io.emit(`log-${id}`,d.toString())
+})
 
-const text=d.toString()
+install.on("exit",()=>{
 
-io.emit(`log-${id}`,text)
+const proc = spawn("node",[main],{
+cwd:dir,
+shell:true,
+env
+})
 
-if(text.includes("Cannot find module")){
+bots[id]={proc,port}
 
-const module=text.split("Cannot find module '")[1].split("'")[0]
+proc.stdout.on("data",d=>{
+fs.appendFileSync(logFile,d.toString())
+io.emit(`log-${id}`,d.toString())
+})
 
-io.emit(`log-${id}`,`Instalando módulo ${module}\n`)
-
-await installModule(module,dir,id)
-
-run()
-
-}
-
+proc.stderr.on("data",d=>{
+fs.appendFileSync(logFile,d.toString())
+io.emit(`log-${id}`,d.toString())
 })
 
 proc.on("exit",()=>{
@@ -147,6 +142,8 @@ run()
 
 })
 
+})
+
 }
 
 run()
@@ -154,13 +151,19 @@ run()
 }
 
 bot.onText(/\/start/,msg=>{
-bot.sendMessage(msg.chat.id,"Envie o ZIP do bot")
+
+bot.sendMessage(msg.chat.id,
+`ARES BOT HOST
+
+Envie o ZIP do bot`
+)
+
 })
 
 bot.on("document",async msg=>{
 
 if(!msg.document.file_name.endsWith(".zip")){
-bot.sendMessage(msg.chat.id,"Envie um .zip")
+bot.sendMessage(msg.chat.id,"Envie um arquivo .zip")
 return
 }
 
@@ -196,7 +199,10 @@ bot.sendMessage(msg.chat.id,
 `Bot iniciado
 
 ID: ${id}
-Terminal: http://localhost:${PORT}/terminal/${id}`)
+
+Terminal:
+http://localhost:${PORT}/terminal/${id}`
+)
 
 })
 
@@ -206,4 +212,6 @@ Terminal: http://localhost:${PORT}/terminal/${id}`)
 
 })
 
-server.listen(PORT)
+server.listen(PORT,()=>{
+console.log("ARES HOST ONLINE")
+})
