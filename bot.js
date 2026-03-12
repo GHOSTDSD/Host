@@ -9,7 +9,7 @@ const http = require("http")
 const socketIo = require("socket.io")
 const https = require("https")
 const { EventEmitter } = require("events")
-const multer = require("multer")
+const busboy = require("busboy")
 
 EventEmitter.defaultMaxListeners = 200
 
@@ -605,27 +605,6 @@ term.onData(data=>socket.emit("input",{botId,data}))
 
 // ─── Upload via Web ──────────────────────────
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const token = req.params.token
-    const info = uploadTokens[token]
-    if (!info) return cb(new Error("Token invalido ou expirado"))
-    const tmpPath = path.join(BASE_PATH, "_uploads")
-    if (!fs.existsSync(tmpPath)) fs.mkdirSync(tmpPath, { recursive: true })
-    cb(null, tmpPath)
-  },
-  filename: (req, file, cb) => cb(null, `${Date.now()}_bot.zip`)
-})
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 512 * 1024 * 1024 }, // 512MB
-  fileFilter: (req, file, cb) => {
-    if (!file.originalname.toLowerCase().endsWith(".zip"))
-      return cb(new Error("Apenas arquivos .zip sao permitidos"))
-    cb(null, true)
-  }
-})
 
 app.get("/upload/:token", (req, res) => {
   const info = uploadTokens[req.params.token]
