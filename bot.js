@@ -1,161 +1,101 @@
-const TelegramBot  = require("node-telegram-bot-api");
-const unzipper     = require("unzipper");
-const { spawn }    = require("child_process");
-const fs           = require("fs");
-const path         = require("path");
-const os           = require("os");
-const express      = require("express");
-const http         = require("http");
-const socketIo     = require("socket.io");
+const TelegramBot = require("node-telegram-bot-api");
+const unzipper = require("unzipper");
+const { spawn, exec } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+const express = require("express");
+const http = require("http");
+const socketIo = require("socket.io");
 
-const TOKEN   = process.env.BOT_TOKEN || "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM";
-const PORT    = process.env.PORT || 3000;
-const DOMAIN  = process.env.RAILWAY_STATIC_URL ? `https://${process.env.RAILWAY_STATIC_URL}` : `http://localhost:${PORT}`;
+const token = "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM";
+const bot = new TelegramBot(token, { polling: true });
 
-const bot    = new TelegramBot(TOKEN, { polling: true });
-const app    = express();
+const app = express();
 const server = http.createServer(app);
-const io     = socketIo(server);
+const io = socketIo(server);
+const activeBots = {}; 
+const PORT = process.env.PORT || 3000;
+const DOMAIN = process.env.RAILWAY_STATIC_URL ? `https://${process.env.RAILWAY_STATIC_URL}` : `http://localhost:${PORT}`;
 
-app.use(express.json());
-
-const BASE_PATH = path.resolve(process.cwd(), "instances");
+const BASE_PATH = path.resolve(process.cwd(), 'instances');
 if (!fs.existsSync(BASE_PATH)) fs.mkdirSync(BASE_PATH, { recursive: true });
 
-const activeBots = {};
+process.on('uncaughtException', (err) => {
+    if (err.message.includes('file is too big')) return;
+    console.error('ERRO:', err.message);
+});
 
 const aresBanner = () => {
-  console.clear();
-  const up = process.uptime().toFixed(0);
-  const ram = ((os.totalmem() - os.freemem()) / 1024 / 1024).toFixed(0);
-  console.log("\x1b[32m%s\x1b[0m", `
-  ╔═══════════════════════════════════════════╗
-  ║   █████╗ ██████╗ ███████╗███████╗        ║
-  ║  ██╔══██╗██╔══██╗██╔════╝██╔════╝        ║
-  ║  ███████║██████╔╝█████╗  ███████╗        ║
-  ║  ██╔══██║██╔══██╗██╔══╝  ╚════██║        ║
-  ║  ██║  ██║██║  ██║███████╗███████║        ║
-  ║  ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝  v2.0 ║
-  ╠═══════════════════════════════════════════╣
-  ║  🤖 BOTS  : ${String(Object.keys(activeBots).length).padEnd(4)}                           ║
-  ║  🖥  RAM   : ${ram} MB                           ║
-  ║  ⏱  UPTIME: ${String(up).padEnd(6)}s                         ║
-  ║  🌐 PAINEL : ${DOMAIN.slice(0,30).padEnd(30)} ║
-  ╚═══════════════════════════════════════════╝`);
+    console.clear();
+    const ramUso = ((os.totalmem() - os.freemem()) / 1024 / 1024).toFixed(0);
+    console.log("\x1b[32m%s\x1b[0m", `
+    █████╗ ██████╗ ███████╗███████╗
+    ██╔══██╗██╔══██╗██╔════╝██╔════╝
+    ███████║██████╔╝█████╗  ███████╗
+    ██╔══██║██╔══██╗██╔══╝  ╚════██║
+    ██║  ██║██║  ██║███████╗███████║
+    ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝
+    [ AUTO-NPM ATIVO | RAM: ${ramUso}MB ]
+    `);
 };
 
-const TERMINAL_HTML = `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8"/>
-<title>ARES TERMINAL</title>
-<script src="/socket.io/socket.io.js"></script>
-<style>
-body{background:#020602;color:#00ff88;font-family:monospace;margin:0;overflow:hidden;display:flex;flex-direction:column;height:100vh}
-header{padding:15px;border-bottom:1px solid #142014;display:flex;justify-content:space-between;background:#030803;font-weight:bold}
-#log{flex:1;overflow-y:auto;padding:20px;white-space:pre-wrap;font-size:13px;color:rgba(0,255,136,0.9);line-height:1.5}
-::-webkit-scrollbar{width:6px}
-::-webkit-scrollbar-thumb{background:#142014}
-</style>
-</head>
-<body>
-<header><div>ARES HOST - LIVE TERMINAL</div><div id="stats">CARREGANDO...</div></header>
-<div id="log"></div>
-<script>
-const socket = io();
-const log = document.getElementById('log');
-socket.on('global-log', d => { log.innerText += d; log.scrollTop = log.scrollHeight; });
-setInterval(async () => {
-  const r = await fetch('/api/stats');
-  const d = await r.json();
-  document.getElementById('stats').innerText = 'BOTS: '+d.bots+' | RAM: '+d.ramUsed+'MB';
-}, 2000);
-</script>
-</body></html>`;
-
-app.get("/", (req, res) => res.send(TERMINAL_HTML));
-app.get("/api/stats", (req, res) => res.json({
-  bots: Object.keys(activeBots).length,
-  ramUsed: ((os.totalmem() - os.freemem()) / 1024 / 1024).toFixed(0)
-}));
-
-function setupChild(child, botId) {
-  activeBots[botId] = { process: child, startedAt: Date.now() };
-  child.stdout.on("data", d => {
-    const t = `[${botId}] ${d}`;
-    process.stdout.write(t);
-    io.emit("global-log", t);
-  });
-  child.stderr.on("data", d => io.emit("global-log", `[${botId}-ERRO] ${d}`));
-  child.on("exit", () => {
-    delete activeBots[botId];
-    aresBanner();
-  });
-  aresBanner();
-}
-
-function spawnBot(botId, instancePath) {
-  const files = fs.readdirSync(instancePath);
-  const main = files.find(f => ["index.js","main.js","bot.js","start.js"].includes(f));
-  
-  if (main) {
-    setupChild(spawn("node", ["--max-old-space-size=128", main], { cwd: instancePath, shell: true }), botId);
-  } else if (fs.existsSync(path.join(instancePath, "package.json"))) {
-    io.emit("global-log", `[${botId}] JS não encontrado, tentando npm start...\\n`);
-    const inst = spawn("npm", ["install", "--omit=dev"], { cwd: instancePath, shell: true });
-    inst.on("exit", () => setupChild(spawn("npm", ["start"], { cwd: instancePath, shell: true }), botId));
-  }
-}
-
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, "✨ *ARES HOST ATIVO*\n\nEnvie o arquivo `.zip` do seu bot para hospedar.", { parse_mode: "Markdown" });
+app.get('/terminal/:id', (req, res) => {
+    const botId = req.params.id;
+    res.send(`<html><head><title>${botId}</title><script src="/socket.io/socket.io.js"></script><style>body{background:#000;color:#0f0;font-family:monospace;padding:20px;}#log{white-space:pre-wrap;height:85vh;overflow-y:auto;border:1px solid #333;padding:10px;font-size:12px;}</style></head><body><div>BOT: <b>${botId}</b></div><div id="log">Iniciando instalação/execução...</div><script>const socket=io();const logDiv=document.getElementById('log');socket.on('log-${botId}',(data)=>{logDiv.innerText+=data;logDiv.scrollTop=logDiv.scrollHeight;});</script></body></html>`);
 });
+
+async function startInstance(chatId, fileId, botId) {
+    const instancePath = path.resolve(BASE_PATH, botId);
+    if (!fs.existsSync(instancePath)) fs.mkdirSync(instancePath, { recursive: true });
+
+    try {
+        const fileInfo = await bot.getFile(fileId);
+        const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
+
+        require('https').get(fileUrl, (res) => {
+            res.pipe(unzipper.Extract({ path: instancePath })).on('close', async () => {
+                
+                io.emit(`log-${botId}`, "📦 Instalando dependências (npm install)...\n");
+                
+                // Roda o NPM Install primeiro
+                exec('npm install --omit=dev', { cwd: instancePath }, (error, stdout, stderr) => {
+                    if (error) io.emit(`log-${botId}`, `⚠️ Erro no npm install: ${error.message}\n`);
+                    
+                    io.emit(`log-${botId}`, "🚀 Iniciando via npm start...\n");
+
+                    // Inicia via npm start
+                    const child = spawn('npm', ['start'], {
+                        cwd: instancePath,
+                        stdio: 'pipe',
+                        shell: true,
+                        env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=64' }
+                    });
+
+                    activeBots[botId] = { process: child };
+
+                    child.stdout.on('data', (data) => io.emit(`log-${botId}`, data.toString()));
+                    child.stderr.on('data', (data) => io.emit(`log-${botId}`, `\n[ERRO]: ${data.toString()}`));
+                    child.on('exit', () => { delete activeBots[botId]; aresBanner(); });
+
+                    bot.sendMessage(chatId, `✅ **${botId}** em processo de inicialização!\n🔗 [Terminal](${DOMAIN}/terminal/${botId})`, { parse_mode: 'Markdown' });
+                });
+            });
+        });
+    } catch (e) {
+        bot.sendMessage(chatId, "❌ Falha: " + e.message);
+    }
+}
 
 bot.on("document", async (msg) => {
-  if (!msg.document.file_name.endsWith(".zip")) return;
-  const botId = (msg.caption || `bot_${Date.now()}`).replace(/[^a-z0-9]/gi, "_");
-  const p = path.resolve(BASE_PATH, botId);
-  if (!fs.existsSync(p)) fs.mkdirSync(p);
-  
-  const file = await bot.getFile(msg.document.file_id);
-  require("https").get(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, (res) => {
-    res.pipe(unzipper.Extract({ path: p })).on("close", () => {
-      spawnBot(botId, p);
-      const opts = {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🔄 Reiniciar", callback_data: `restart:${botId}` }, { text: "🛑 Parar", callback_data: `stop:${botId}` }],
-            [{ text: "📊 Status", callback_data: `status:${botId}` }, { text: "🗑 Deletar", callback_data: `delete:${botId}` }]
-          ]
-        }
-      };
-      bot.sendMessage(msg.chat.id, `✅ *Bot:* \`${botId}\` iniciado com sucesso!`, opts);
-    });
-  });
+    if (!msg.document.file_name.endsWith(".zip")) return;
+    const name = msg.caption || `bot_${Date.now()}`;
+    await startInstance(msg.chat.id, msg.document.file_id, name);
 });
 
-bot.on("callback_query", (query) => {
-  const [action, botId] = query.data.split(":");
-  const p = path.resolve(BASE_PATH, botId);
-
-  if (action === "stop") {
-    if (activeBots[botId]) {
-      activeBots[botId].process.kill();
-      bot.answerCallbackQuery(query.id, { text: "Bot parado!" });
-    }
-  } else if (action === "restart") {
-    if (activeBots[botId]) activeBots[botId].process.kill();
-    setTimeout(() => spawnBot(botId, p), 1000);
-    bot.answerCallbackQuery(query.id, { text: "Reiniciando..." });
-  } else if (action === "status") {
-    const isOnline = activeBots[botId] ? "ON" : "OFF";
-    bot.answerCallbackQuery(query.id, { text: `Bot: ${botId} | Status: ${isOnline}`, show_alert: true });
-  } else if (action === "delete") {
-    if (activeBots[botId]) activeBots[botId].process.kill();
-    fs.rmSync(p, { recursive: true, force: true });
-    bot.answerCallbackQuery(query.id, { text: "Instância deletada!" });
-  }
+bot.onText(/\/start/, (msg) => {
+    bot.sendMessage(msg.chat.id, "Ares Nexus Online. Envie o ZIP.");
+    aresBanner();
 });
 
-server.listen(PORT, () => aresBanner());
+server.listen(PORT, '0.0.0.0', () => aresBanner());
