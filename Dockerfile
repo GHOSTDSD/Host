@@ -17,4 +17,4 @@ COPY . .
 EXPOSE 3000
 
 # Comando para iniciar o Ares
-CMD ["node", "index.js"]
+CMD ["node", "bot.js"]
