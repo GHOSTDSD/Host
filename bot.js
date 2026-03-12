@@ -83,7 +83,7 @@ function spawnBot(botId, instancePath) {
 
     if (fs.existsSync(path.join(instancePath, "package.json"))) {
         writeLog(botId, instancePath, `\x1b[1;34m[SISTEMA] Preparando ambiente...\x1b[0m\r\n`);
-        const install = spawn(os.platform() === 'win32' ? 'npm.cmd' : 'npm', ['install', '--production'], { cwd: instancePath, shell: true, env });
+        const install = spawn(os.platform() === 'win32' ? 'npm.cmd' : 'npm', ['install', '--production'], { cwd: instancePath, shell: true, env, stdio: ['pipe', 'pipe', 'pipe'] });
         
         install.stdout.on("data", d => writeLog(botId, instancePath, d));
         install.stderr.on("data", d => writeLog(botId, instancePath, d));
@@ -107,11 +107,13 @@ function runInstance(botId, instancePath, botPort, env) {
     if (!nodeMain && fs.existsSync(path.join(instancePath, "src/index.js"))) nodeMain = "src/index.js";
 
     let child;
+    const spawnOptions = { cwd: instancePath, shell: true, env, stdio: ['pipe', 'pipe', 'pipe'] };
+
     if (shellScript) {
         if (os.platform() !== "win32") fs.chmodSync(path.join(instancePath, shellScript), "755");
-        child = spawn(os.platform() === 'win32' ? shellScript : `./${shellScript}`, [], { cwd: instancePath, shell: true, env });
+        child = spawn(os.platform() === 'win32' ? shellScript : `./${shellScript}`, [], spawnOptions);
     } else if (nodeMain) {
-        child = spawn("node", [nodeMain], { cwd: instancePath, shell: true, env });
+        child = spawn("node", [nodeMain], spawnOptions);
     }
 
     if (child) {
@@ -120,7 +122,7 @@ function runInstance(botId, instancePath, botPort, env) {
         child.stderr.on("data", d => writeLog(botId, instancePath, d));
         child.on("exit", () => {
             releasePort(botPort);
-            delete activeBots[botId];
+            delete activeBots[id];
             aresBanner();
         });
         aresBanner();
@@ -131,7 +133,9 @@ io.on("connection", (socket) => {
     socket.on("input", ({ botId, data }) => {
         const target = activeBots[botId];
         if (target && target.process.stdin.writable) {
-            target.process.stdin.write(data);
+            // Converte Carriage Return (\r) em Newline (\n) para que o bot entenda o Enter
+            const cmd = data === "\r" ? "\n" : data;
+            target.process.stdin.write(cmd);
         }
     });
 });
@@ -211,6 +215,7 @@ app.get("/terminal/:botId", (req, res) => {
     <!DOCTYPE html>
     <html>
     <head>
+        <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.1.0/css/xterm.css" />
         <script src="https://cdn.jsdelivr.net/npm/xterm@5.1.0/lib/xterm.js"></script>
@@ -218,34 +223,46 @@ app.get("/terminal/:botId", (req, res) => {
         <script src="/socket.io/socket.io.js"></script>
         <style>
             body { margin: 0; background: #000; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-            #header { background: #1a1a1a; color: #0f0; padding: 10px; font-family: monospace; font-size: 14px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
-            #terminal-container { flex: 1; width: 100%; position: relative; }
+            #header { background: #1a1a1a; color: #0f0; padding: 10px; font-family: monospace; font-size: 14px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
+            #terminal-container { flex: 1; width: 100%; overflow: hidden; background: #000; }
             .xterm-viewport { overflow-y: auto !important; }
         </style>
     </head>
     <body>
         <div id="header">
-            <span>BOT: ${req.params.botId}</span>
-            <span id="status">CONECTADO</span>
+            <span>🚀 ARES: ${req.params.botId}</span>
+            <div style="display: flex; gap: 10px;">
+                <button onclick="location.reload()" style="background: #333; color: #fff; border: 1px solid #555; padding: 2px 8px; cursor: pointer;">Recarregar</button>
+                <span id="status" style="color: #0f0;">● CONECTADO</span>
+            </div>
         </div>
         <div id="terminal-container"></div>
         <script>
             const socket = io();
             const botId = "${req.params.botId}";
             const term = new Terminal({
-                theme: { background: '#000', foreground: '#0f0' },
+                theme: { background: '#000', foreground: '#0f0', cursor: '#0f0' },
                 cursorBlink: true,
                 convertEol: true,
                 fontSize: 14,
-                fontFamily: 'monospace'
+                fontFamily: 'monospace',
+                rows: 40
             });
             const fitAddon = new FitAddon.FitAddon();
             term.loadAddon(fitAddon);
             term.open(document.getElementById('terminal-container'));
-            fitAddon.fit();
-
-            socket.on("log-" + botId, data => term.write(data));
             
+            // Pequeno delay para garantir que o container existe
+            setTimeout(() => {
+                fitAddon.fit();
+                term.focus();
+            }, 500);
+
+            socket.on("log-" + botId, data => {
+                term.write(data);
+            });
+            
+            // Envia cada tecla ou dado colado
             term.onData(data => {
                 socket.emit("input", { botId, data });
             });
@@ -257,7 +274,10 @@ app.get("/terminal/:botId", (req, res) => {
                 term.scrollToBottom();
             });
 
-            socket.on('disconnect', () => document.getElementById('status').innerText = 'DESCONECTADO');
+            socket.on('disconnect', () => {
+                document.getElementById('status').innerText = '○ DESCONECTADO';
+                document.getElementById('status').style.color = '#f00';
+            });
         </script>
     </body>
     </html>`);
