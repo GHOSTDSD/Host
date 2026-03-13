@@ -480,6 +480,7 @@ bot.on("callback_query", async query => {
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}` }],
+            [{ text: "📁 Arquivos / Editor", url: `${DOMAIN}/files/${id}` }],
             [
               { text: isRunning ? "🛑 Parar" : "▶️ Iniciar", callback_data: `${isRunning ? "stop" : "start"}:${id}` },
               { text: "🔄 Reiniciar", callback_data: `restart:${id}` }
