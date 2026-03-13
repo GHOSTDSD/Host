@@ -16,6 +16,8 @@ EventEmitter.defaultMaxListeners = 200
 
 const TOKEN = "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM"
 const ADMIN_ID = process.env.ADMIN_ID || ""
+// Dono do sistema — pode usar /updateWarn
+const OWNER_ID = process.env.OWNER_ID || "5581991648280"
 const PORT = process.env.PORT || 3000
 const DOMAIN = process.env.RAILWAY_STATIC_URL
   ? `https://${process.env.RAILWAY_STATIC_URL}`
@@ -226,6 +228,19 @@ io.on("connection", socket => {
 
 // ─── /start ───────────────────────────────────
 
+bot.onText(/^\/meuid$/, msg => {
+  bot.sendMessage(msg.chat.id,
+    `🪪 *Seu Telegram ID:*
+
+` +
+    `\`${msg.chat.id}\`
+
+` +
+    `_Use este ID para configurar o OWNER\_ID no Railway._`,
+    { parse_mode: "Markdown" }
+  )
+})
+
 bot.onText(/\/start/, msg => {
   const s = getStats(msg.chat.id)
   bot.sendMessage(msg.chat.id,
@@ -427,6 +442,92 @@ function isAdmin(chatId) {
   return !ADMIN_ID || String(chatId) === String(ADMIN_ID)
 }
 
+
+// ─── Helpers de usuários ──────────────────────
+
+function getAllUsers() {
+  if (!fs.existsSync(BASE_PATH)) return []
+  const ids = new Set()
+  fs.readdirSync(BASE_PATH).forEach(f => {
+    const meta = getMeta(f)
+    if (meta && meta.owner) ids.add(meta.owner)
+  })
+  return [...ids]
+}
+
+function isOwner(chatId) {
+  return String(chatId) === String(OWNER_ID)
+}
+
+// ─── /updateWarn ─────────────────────────────
+// Uso: /updateWarn Texto do aviso aqui
+
+bot.onText(/^\/updateWarn (.+)/s, async msg => {
+  const chatId = msg.chat.id
+
+  if (!isOwner(chatId)) {
+    return bot.sendMessage(chatId,
+      `❌ *Sem permissão.*\n\nEste comando é exclusivo do dono do sistema.`,
+      { parse_mode: "Markdown" }
+    )
+  }
+
+  const texto = msg.text.replace(/^\/updateWarn\s+/i, "").trim()
+  if (!texto) {
+    return bot.sendMessage(chatId,
+      `⚠️ *Uso correto:*\n\n/updateWarn Seu texto aqui`,
+      { parse_mode: "Markdown" }
+    )
+  }
+
+  const users = getAllUsers()
+  if (!users.length) {
+    return bot.sendMessage(chatId, "📭 Nenhum usuário cadastrado ainda.")
+  }
+
+  const statusMsg = await bot.sendMessage(chatId,
+    `📢 *Enviando aviso para ${users.length} usuário(s)...*`,
+    { parse_mode: "Markdown" }
+  )
+
+  let enviados = 0
+  let falhas = 0
+
+  for (const uid of users) {
+    try {
+      await bot.sendMessage(uid,
+        `📢 *Aviso do Sistema ARES HOST*\n\n${texto}`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "✅ Aceito", callback_data: `warn_aceito:${Date.now()}` }
+            ]]
+          }
+        }
+      )
+      enviados++
+      // Pequeno delay pra não tomar flood do Telegram
+      await new Promise(r => setTimeout(r, 100))
+    } catch {
+      falhas++
+    }
+  }
+
+  bot.editMessageText(
+    `✅ *Aviso enviado!*\n\n` +
+    `👥 Usuários: *${users.length}*\n` +
+    `📨 Enviados: *${enviados}*\n` +
+    `❌ Falhas: *${falhas}*\n\n` +
+    `📝 *Mensagem:*\n${texto}`,
+    {
+      chat_id: chatId,
+      message_id: statusMsg.message_id,
+      parse_mode: "Markdown"
+    }
+  )
+})
+
 bot.onText(/^\/limpeza$/, async msg => {
   const chatId = msg.chat.id
   if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ Sem permissão.")
@@ -621,6 +722,22 @@ bot.on("callback_query", async query => {
   const id     = colonIdx === -1 ? null  : data.slice(colonIdx + 1)
 
   bot.answerCallbackQuery(query.id)
+
+  // ── Aceite de aviso
+  if (action === "warn_aceito") {
+    const linhas = query.message.text.split("\n")
+    // Remove cabecalho "📢 Aviso do Sistema ARES HOST" e linha em branco
+    const corpo = linhas.slice(2).join("\n")
+    return bot.editMessageText(
+      `📢 *Aviso do Sistema ARES HOST*\n\n${corpo}\n\n✅ *Você aceitou este aviso.*`,
+      {
+        chat_id: chatId,
+        message_id: msgId,
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: [] }
+      }
+    ).catch(() => {})
+  }
 
   // ── Home
   if (action === "menu_home") {
