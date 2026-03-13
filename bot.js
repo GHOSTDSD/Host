@@ -735,10 +735,7 @@ bot.on("callback_query", async query => {
       { inline_keyboard: [] },
       { chat_id: chatId, message_id: msgId }
     ).catch(() => {})
-    return bot.sendMessage(chatId,
-      "✅ *Aviso aceito!*\n\n_Obrigado por confirmar a leitura._",
-      { parse_mode: "Markdown" }
-    )
+    return bot.deleteMessage(chatId, msgId).catch(() => {})
   }
 
   // ── Home
