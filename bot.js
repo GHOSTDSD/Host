@@ -33,8 +33,52 @@ if (!fs.existsSync(BASE_PATH)) fs.mkdirSync(BASE_PATH, { recursive: true })
 const activeBots = {}
 const userState = {}
 const usedPorts = new Set()
-const uploadTokens = {} // token -> chatId
+const uploadTokens = {} // token -> { chatId }
+const webSessions = {} // sessionToken -> chatId (24h)
 const PORT_START = 4000
+
+// ── Owner helpers
+function saveMeta(botId, chatId, name) {
+  const mp = path.join(BASE_PATH, botId, "meta.json")
+  fs.writeFileSync(mp, JSON.stringify({ owner: String(chatId), name, createdAt: Date.now() }))
+}
+function getMeta(botId) {
+  try { return JSON.parse(fs.readFileSync(path.join(BASE_PATH, botId, "meta.json"), "utf8")) } catch { return null }
+}
+function getOwner(botId) {
+  const m = getMeta(botId); return m ? m.owner : null
+}
+function getUserBots(chatId) {
+  if (!fs.existsSync(BASE_PATH)) return []
+  return fs.readdirSync(BASE_PATH).filter(f => {
+    if (f === "_uploads") return false
+    return getOwner(f) === String(chatId)
+  })
+}
+function genWebSession(chatId) {
+  const tok = require("crypto").randomBytes(24).toString("hex")
+  webSessions[tok] = { chatId: String(chatId), at: Date.now() }
+  setTimeout(() => delete webSessions[tok], 24 * 60 * 60 * 1000)
+  return tok
+}
+function checkSession(req) {
+  const tok = req.query.s
+  if (!tok) return null
+  const s = webSessions[tok]
+  return s ? s.chatId : null
+}
+function authBot(req, res, next) {
+  const rawUrl = req.originalUrl.split("?")[0]
+  const m = rawUrl.match(/\/([^\/]+)\/?(?:\?|$)/)
+  const botId = m ? m[1] : null
+  const chatId = checkSession(req)
+  if (!chatId) return res.status(401).send("Acesso negado. Abra o link pelo Telegram.")
+  const owner = botId ? getOwner(botId) : null
+  if (owner && owner !== chatId) return res.status(403).send("Este bot pertence a outro usuário.")
+  req.chatId = chatId
+  req.botId  = botId
+  next()
+}
 
 // ─── Utilitarios ──────────────────────────────
 
@@ -51,9 +95,10 @@ function getFreePort() {
 
 function releasePort(port) { usedPorts.delete(port) }
 
-function getStats() {
-  const total = fs.readdirSync(BASE_PATH).length
-  const online = Object.keys(activeBots).length
+function getStats(chatId) {
+  const bots = chatId ? getUserBots(chatId) : (fs.existsSync(BASE_PATH) ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads") : [])
+  const total = bots.length
+  const online = bots.filter(f => !!activeBots[f]).length
   const ram = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
   const uptime = process.uptime()
   const h = Math.floor(uptime / 3600)
@@ -163,7 +208,7 @@ io.on("connection", socket => {
 // ─── /start ───────────────────────────────────
 
 bot.onText(/\/start/, msg => {
-  const s = getStats()
+  const s = getStats(msg.chat.id)
   bot.sendMessage(msg.chat.id,
     `🚀 *ARES HOST*\n\n` +
     `🤖 Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
@@ -245,7 +290,7 @@ function extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg) {
           parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
-              [{ text: "📟 Abrir Terminal", url: `${DOMAIN}/terminal/${botId}` }],
+              [{ text: "📟 Abrir Terminal", url: `${DOMAIN}/terminal/${botId}?s=${genWebSession(loadingMsg.chat.id)}` }],
               [{ text: "📂 Meus Bots",      callback_data: "menu_list" }]
             ]
           }
@@ -325,6 +370,7 @@ bot.on("message", async msg => {
 
   if (fs.existsSync(instancePath)) return
   fs.mkdirSync(instancePath, { recursive: true })
+  saveMeta(botId, chatId, name)
 
   const loadingMsg = await bot.sendMessage(chatId,
     `⏳ Criando bot *${name}*...\n\nBaixando e extraindo arquivos...`,
@@ -370,7 +416,7 @@ bot.on("callback_query", async query => {
 
   // ── Home
   if (action === "menu_home") {
-    const s = getStats()
+    const s = getStats(chatId)
     return bot.editMessageText(
       `🚀 *ARES HOST*\n\n` +
       `🤖 Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
@@ -412,8 +458,8 @@ bot.on("callback_query", async query => {
 
   // ── Lista de Bots
   if (action === "menu_list") {
-    const folders = fs.readdirSync(BASE_PATH)
-    const s = getStats()
+    const folders = getUserBots(chatId)
+    const s = getStats(chatId)
 
     if (folders.length === 0) {
       return bot.editMessageText(
@@ -449,7 +495,7 @@ bot.on("callback_query", async query => {
 
   // ── Estatisticas
   if (action === "menu_stats") {
-    const s = getStats()
+    const s = getStats(chatId)
     return bot.editMessageText(
       `📊 *Estatisticas*\n\n` +
       `🤖 Total: *${s.total}*\n` +
@@ -471,6 +517,12 @@ bot.on("callback_query", async query => {
   }
 
   // ── Gerenciar bot
+  if (["manage","stop","start","restart","delete_bot"].includes(action) && id) {
+    if (getOwner(id) && getOwner(id) !== String(chatId)) {
+      return bot.answerCallbackQuery(query.id, { text: "❌ Esse bot não é seu!", show_alert: true })
+    }
+  }
+
   if (action === "manage") {
     const isRunning = !!activeBots[id]
     const logPath = path.join(BASE_PATH, id, "terminal.log")
@@ -488,8 +540,8 @@ bot.on("callback_query", async query => {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}` }],
-            [{ text: "📁 Arquivos / Editor", url: `${DOMAIN}/files/${id}` }],
+            [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}?s=${genWebSession(chatId)}` }],
+            [{ text: "📁 Arquivos / Editor", url: `${DOMAIN}/files/${id}?s=${genWebSession(chatId)}` }],
             [
               { text: isRunning ? "🛑 Parar" : "▶️ Iniciar", callback_data: `${isRunning ? "stop" : "start"}:${id}` },
               { text: "🔄 Reiniciar", callback_data: `restart:${id}` }
@@ -537,7 +589,7 @@ bot.on("callback_query", async query => {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}` }],
+            [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}?s=${genWebSession(chatId)}` }],
             [
               { text: "▶️ Iniciar",   callback_data: `start:${id}` },
               { text: "🔄 Reiniciar", callback_data: `restart:${id}` }
@@ -559,7 +611,7 @@ bot.on("callback_query", async query => {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}` }],
+            [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}?s=${genWebSession(chatId)}` }],
             [
               { text: "🛑 Parar",     callback_data: `stop:${id}` },
               { text: "🔄 Reiniciar", callback_data: `restart:${id}` }
@@ -581,7 +633,7 @@ bot.on("callback_query", async query => {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}` }],
+            [{ text: "📟 Terminal", url: `${DOMAIN}/terminal/${id}?s=${genWebSession(chatId)}` }],
             [
               { text: "🛑 Parar",     callback_data: `stop:${id}` },
               { text: "🔄 Reiniciar", callback_data: `restart:${id}` }
@@ -596,7 +648,7 @@ bot.on("callback_query", async query => {
 
 // ─── Rotas web ────────────────────────────────
 
-app.get("/terminal/:botId", (req, res) => {
+app.get("/terminal/:botId", authBot, (req, res) => {
   res.send(`<!DOCTYPE html>
 <html>
 <head>
@@ -850,6 +902,7 @@ app.post("/upload/:token", (req, res, next) => {
 
   delete uploadTokens[token]
   fs.mkdirSync(instancePath, { recursive: true })
+  saveMeta(botId, chatId, name)
 
   const zipPath = path.join(instancePath, "bot.zip")
   fs.renameSync(req.file.path, zipPath)
@@ -863,7 +916,7 @@ app.post("/upload/:token", (req, res, next) => {
   res.send("ok")
 })
 
-app.get("/logs/:botId", (req, res) => {
+app.get("/logs/:botId", authBot, (req, res) => {
   const p = path.join(BASE_PATH, req.params.botId, "terminal.log")
   if (fs.existsSync(p)) res.sendFile(p)
   else res.send("")
@@ -893,7 +946,7 @@ function walkDir(dir, base) {
 }
 
 // Página do editor
-app.use("/files", (req, res, next) => {
+app.use("/files", authBot, (req, res, next) => {
   const rawUrl = req.originalUrl.split("?")[0]
   const m = rawUrl.match(/^\/files\/([^/]+)\/?$/)
   if (!m) return next()
@@ -1427,7 +1480,7 @@ function toast(msg, type) {
 })
 
 // ── API de Arquivos
-app.use("/files-api", (req, res, next) => {
+app.use("/files-api", authBot, (req, res, next) => {
   const rawUrl  = req.originalUrl.split("?")[0]
   const m = rawUrl.match(/^\/files-api\/([^/]+)(\/[^?/]*)/)
   if (!m) return next()
@@ -1486,4 +1539,24 @@ process.on("uncaughtException", err => {
   if (err.code !== "EADDRINUSE") console.error(err)
 })
 
-server.listen(PORT, () => aresBanner())
+server.listen(PORT, () => {
+  aresBanner()
+
+  // ── Auto-restart: relança todos os bots salvos no disco
+  if (fs.existsSync(BASE_PATH)) {
+    const bots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads")
+    if (bots.length > 0) {
+      console.log(`\n♻️  Restaurando ${bots.length} bot(s)...\n`)
+      bots.forEach((botId, i) => {
+        const instancePath = path.join(BASE_PATH, botId)
+        const meta = getMeta(botId)
+        const name = meta ? meta.name : botId
+        // Pequeno delay escalonado pra não sobrecarregar na subida
+        setTimeout(() => {
+          console.log(`  ▶ Iniciando: ${name} (${botId})`)
+          spawnBot(botId, instancePath)
+        }, i * 1500)
+      })
+    }
+  }
+})
