@@ -730,18 +730,15 @@ bot.on("callback_query", async query => {
 
   // ── Aceite de aviso
   if (action === "warn_aceito") {
-    const linhas = query.message.text.split("\n")
-    // Remove cabecalho "📢 Aviso do Sistema ARES HOST" e linha em branco
-    const corpo = linhas.slice(2).join("\n")
-    return bot.editMessageText(
-      `📢 *Aviso do Sistema ARES HOST*\n\n${corpo}\n\n✅ *Você aceitou este aviso.*`,
-      {
-        chat_id: chatId,
-        message_id: msgId,
-        parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: [] }
-      }
+    // Só remove o botão e manda mensagem separada de confirmação — não mexe no texto original
+    bot.editMessageReplyMarkup(
+      { inline_keyboard: [] },
+      { chat_id: chatId, message_id: msgId }
     ).catch(() => {})
+    return bot.sendMessage(chatId,
+      "✅ *Aviso aceito!*\n\n_Obrigado por confirmar a leitura._",
+      { parse_mode: "Markdown" }
+    )
   }
 
   // ── Home
