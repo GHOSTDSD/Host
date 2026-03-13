@@ -17,7 +17,8 @@ EventEmitter.defaultMaxListeners = 200
 const TOKEN = "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM"
 const ADMIN_ID = process.env.ADMIN_ID || ""
 // Dono do sistema — pode usar /updateWarn
-const OWNER_ID = process.env.OWNER_ID || "5581991648280"
+const OWNER_ID = process.env.OWNER_ID || ""  // defina OWNER_ID no Railway
+const OWNER_USERNAME = "Quemmemarcaegay"
 const PORT = process.env.PORT || 3000
 const DOMAIN = process.env.RAILWAY_STATIC_URL
   ? `https://${process.env.RAILWAY_STATIC_URL}`
@@ -455,8 +456,12 @@ function getAllUsers() {
   return [...ids]
 }
 
-function isOwner(chatId) {
-  return String(chatId) === String(OWNER_ID)
+function isOwner(msg) {
+  const chatId  = typeof msg === 'object' ? msg.chat.id : msg
+  const username = typeof msg === 'object' && msg.from ? msg.from.username : null
+  if (OWNER_ID && String(chatId) === String(OWNER_ID)) return true
+  if (username && username.toLowerCase() === OWNER_USERNAME.toLowerCase()) return true
+  return false
 }
 
 // ─── /updateWarn ─────────────────────────────
@@ -465,7 +470,7 @@ function isOwner(chatId) {
 bot.onText(/^\/updateWarn (.+)/s, async msg => {
   const chatId = msg.chat.id
 
-  if (!isOwner(chatId)) {
+  if (!isOwner(msg)) {
     return bot.sendMessage(chatId,
       `❌ *Sem permissão.*\n\nEste comando é exclusivo do dono do sistema.`,
       { parse_mode: "Markdown" }
