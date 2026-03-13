@@ -1015,11 +1015,10 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
   <div class="ctx-sep"></div>
   <div class="ctx-item danger" onclick="ctxDelete()">🗑️ Excluir</div>
 </div>
-<script>var require={paths:{vs:'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs'}}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/editor/editor.main.nls.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/editor/editor.main.js"></script>
 <script>
+require.config({paths:{vs:'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs'}})
+require(['vs/editor/editor.main'], function() {
 const BOT_ID="${botId}"
 const API="/files-api/"+BOT_ID
 let editor=null,currentFile=null,isDirty=false,modalAction=null,ctxTarget=null
@@ -1244,6 +1243,7 @@ document.getElementById("modal-overlay").addEventListener("click",e=>{if(e.targe
 function toast(msg,type){const t=document.getElementById("toast");t.textContent=msg;t.className="toast show "+(type||"");clearTimeout(t._t);t._t=setTimeout(()=>t.className="toast",2500)}
 
 loadTree()
+}) // fim require
 </script>
 </body>
 </html>`
