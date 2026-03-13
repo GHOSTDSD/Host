@@ -227,24 +227,86 @@ io.on("connection", socket => {
   })
 })
 
+
+// ─── Termos de uso ────────────────────────────
+
+const USERS_PATH = path.join(BASE_PATH, "_users")
+if (!fs.existsSync(USERS_PATH)) fs.mkdirSync(USERS_PATH, { recursive: true })
+
+function hasAccepted(chatId) {
+  try {
+    const f = path.join(USERS_PATH, `${chatId}.json`)
+    return fs.existsSync(f) && JSON.parse(fs.readFileSync(f, "utf8")).accepted === true
+  } catch { return false }
+}
+
+function saveAccepted(chatId) {
+  const f = path.join(USERS_PATH, `${chatId}.json`)
+  fs.writeFileSync(f, JSON.stringify({ accepted: true, at: Date.now() }))
+}
+
+const TERMOS_TEXTO =
+  `📋 *Termos de Uso — ARES HOST*\n\n` +
+  `Antes de continuar, leia e aceite os termos abaixo:\n\n` +
+  `*1. Uso permitido*\n` +
+  `Apenas bots legítimos de WhatsApp são permitidos. Bots de spam, golpes ou conteúdo ilegal serão removidos sem aviso.\n\n` +
+  `*2. Responsabilidade*\n` +
+  `Você é totalmente responsável pelo conteúdo e comportamento do seu bot. O ARES HOST não se responsabiliza por danos causados por bots hospedados.\n\n` +
+  `*3. Disponibilidade*\n` +
+  `O serviço pode passar por manutenções ou instabilidades. Não garantimos 100% de uptime.\n\n` +
+  `*4. Dados*\n` +
+  `Os arquivos do seu bot ficam armazenados em nossos servidores. Mantenha backup dos seus arquivos importantes.\n\n` +
+  `*5. Encerramento*\n` +
+  `Reservamos o direito de encerrar bots que violem estes termos a qualquer momento.\n\n` +
+  `──────────────────────`
+
+function sendTermos(chatId, checked) {
+  const icon = checked ? "✅" : "⬜"
+  return bot.sendMessage(chatId, TERMOS_TEXTO, {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: `${icon}  Li e aceito os termos de uso`, callback_data: `termo_check:${checked ? "0" : "1"}` }],
+        [{ text: "✔️ Confirmar e Continuar", callback_data: "termo_confirmar" }]
+      ]
+    }
+  })
+}
+
+function editTermos(chatId, msgId, checked) {
+  const icon = checked ? "✅" : "⬜"
+  return bot.editMessageReplyMarkup({
+    inline_keyboard: [
+      [{ text: `${icon}  Li e aceito os termos de uso`, callback_data: `termo_check:${checked ? "0" : "1"}` }],
+      [{ text: "✔️ Confirmar e Continuar", callback_data: "termo_confirmar" }]
+    ]
+  }, { chat_id: chatId, message_id: msgId }).catch(() => {})
+}
+
+// Estado do checkbox por usuário (em memória)
+const termoCheck = {}
+
 // ─── /start ───────────────────────────────────
 
 bot.onText(/^\/meuid$/, msg => {
   bot.sendMessage(msg.chat.id,
-    `🪪 *Seu Telegram ID:*
-
-` +
-    `\`${msg.chat.id}\`
-
-` +
-    `_Use este ID para configurar o OWNER\_ID no Railway._`,
+    `🪪 *Seu Telegram ID:*\n\n` +
+    `\`${msg.chat.id}\`\n\n` +
+    `_Use este ID para configurar o OWNER\\_ID no Railway._`,
     { parse_mode: "Markdown" }
   )
 })
 
-bot.onText(/\/start/, msg => {
-  const s = getStats(msg.chat.id)
-  bot.sendMessage(msg.chat.id,
+bot.onText(/\/start/, async msg => {
+  const chatId = msg.chat.id
+
+  if (!hasAccepted(chatId)) {
+    termoCheck[chatId] = false
+    return sendTermos(chatId, false)
+  }
+
+  const s = getStats(chatId)
+  bot.sendMessage(chatId,
     `🚀 *ARES HOST*\n\n` +
     `🤖 Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
     `💾 RAM: *${s.ram}MB*  |  ⏱ Uptime: *${s.uptime}*`,
@@ -377,6 +439,13 @@ bot.on("message", async msg => {
   if (msg.document || msg.text?.startsWith("/")) return
 
   const chatId = msg.chat.id
+
+  // Bloqueia usuário que não aceitou os termos ainda
+  if (!hasAccepted(chatId)) {
+    termoCheck[chatId] = false
+    return sendTermos(chatId, false)
+  }
+
   const state = userState[chatId]
 
   // Sem estado ativo: verificar se é um link de ZIP
@@ -736,6 +805,48 @@ bot.on("callback_query", async query => {
       { chat_id: chatId, message_id: msgId }
     ).catch(() => {})
     return bot.deleteMessage(chatId, msgId).catch(() => {})
+  }
+
+  // ── Termos: toggle checkbox
+  if (action === "termo_check") {
+    const nowChecked = id === "1"
+    termoCheck[chatId] = nowChecked
+    return editTermos(chatId, msgId, nowChecked)
+  }
+
+  // ── Termos: confirmar
+  if (action === "termo_confirmar") {
+    if (!termoCheck[chatId]) {
+      return bot.answerCallbackQuery(query.id, {
+        text: "⚠️ Marque a caixa de confirmação primeiro!",
+        show_alert: true
+      })
+    }
+    saveAccepted(chatId)
+    delete termoCheck[chatId]
+    bot.deleteMessage(chatId, msgId).catch(() => {})
+    const s = getStats(chatId)
+    return bot.sendMessage(chatId,
+      `✅ *Termos aceitos! Bem-vindo ao ARES HOST.*
+
+` +
+      `🚀 *ARES HOST*
+
+` +
+      `🤖 Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*
+` +
+      `💾 RAM: *${s.ram}MB*  |  ⏱ Uptime: *${s.uptime}*`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "➕ Novo Bot",     callback_data: "menu_new" }],
+            [{ text: "📂 Meus Bots",    callback_data: "menu_list" }],
+            [{ text: "📊 Estatisticas", callback_data: "menu_stats" }]
+          ]
+        }
+      }
+    )
   }
 
   // ── Home
