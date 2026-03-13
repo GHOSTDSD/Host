@@ -11,10 +11,8 @@ const { EventEmitter } = require("events")
 const multer = require("multer")
 const { execFile, execSync } = require("child_process")
 const crypto = require("crypto")
-
-// ─── S3 Client ──────────────────────────────
-const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3");
-const tar = require("tar");
+const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3")
+const tar = require("tar")
 
 EventEmitter.defaultMaxListeners = 200
 
@@ -36,7 +34,6 @@ io.sockets.setMaxListeners(200)
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
-// ─── Configuração do Storage Bucket ──────────────────────────────
 const BUCKET_CONFIG = {
   endpoint: process.env.BUCKET_ENDPOINT || "https://t3.storageapi.dev",
   region: process.env.BUCKET_REGION || "auto",
@@ -45,16 +42,16 @@ const BUCKET_CONFIG = {
     secretAccessKey: process.env.BUCKET_SECRET_ACCESS_KEY || "tsec_IjNC_oqgdq7-F9o067zq0C+h2INzkP8Ns-WbaU3vnu+gfUM49IbVMJHgaAeSG3GHNBml-L",
   },
   bucketName: process.env.BUCKET_NAME || "assembled-pannier-fd6o1qb"
-};
+}
 
-console.log("✅ Storage Bucket configurado:", BUCKET_CONFIG.bucketName);
+console.log("✅ Storage Bucket configurado:", BUCKET_CONFIG.bucketName)
 
 const s3Client = new S3Client({
   endpoint: BUCKET_CONFIG.endpoint,
   region: BUCKET_CONFIG.region,
   credentials: BUCKET_CONFIG.credentials,
   forcePathStyle: true
-});
+})
 
 const BASE_PATH = path.resolve(process.cwd(), "instances")
 if (!fs.existsSync(BASE_PATH)) fs.mkdirSync(BASE_PATH, { recursive: true })
@@ -67,13 +64,11 @@ const webSessions = {}
 const logBuffers = {}
 const PORT_START = 4000
 
-// Configurações otimizadas
 const LOG_CONFIG = {
   MAX_SIZE: 100 * 1024,
   BUFFER_TIME: 5000
 }
 
-// ─── Owner helpers
 function saveMeta(botId, chatId, name) {
   const mp = path.join(BASE_PATH, botId, "meta.json")
   fs.writeFileSync(mp, JSON.stringify({ 
@@ -108,7 +103,8 @@ function updateNodeModulesHash(botId, hash) {
 }
 
 function getOwner(botId) {
-  const m = getMeta(botId); return m ? m.owner : null
+  const m = getMeta(botId)
+  return m ? m.owner : null
 }
 
 function getUserBots(chatId) {
@@ -142,15 +138,11 @@ function authBot(req, res, next) {
   if (!chatId) return res.status(401).send("Acesso negado. Abra o link pelo Telegram.")
   const owner = botId ? getOwner(botId) : null
   if (owner && owner !== chatId) return res.status(403).send("Este bot pertence a outro usuário.")
-  
   if (botId) updateMetaAccess(botId)
-  
   req.chatId = chatId
   req.botId  = botId
   next()
 }
-
-// ─── Utilitarios ──────────────────────────────
 
 function generateBotId() {
   return "bot_" + Date.now() + "_" + Math.floor(Math.random() * 9999)
@@ -186,14 +178,12 @@ function getStats(chatId = null) {
 function aresBanner() {
   process.stdout.write("\x1Bc")
   const s = getStats()
-  
   let diskUsage = "N/A"
   try {
     const df = execSync('df -h / | tail -1').toString()
     const parts = df.split(/\s+/)
     diskUsage = `${parts[4]} (${parts[2]}/${parts[1]})`
   } catch {}
-  
   console.log(`\n🚀 ARES HOST (STORAGE BUCKET)
 📦 BOTS: ${s.total}
 🟢 ONLINE: ${s.online}
@@ -203,8 +193,6 @@ function aresBanner() {
 💿 DISCO: ${diskUsage}
 ☁️  BUCKET: ${BUCKET_CONFIG.bucketName}\n`)
 }
-
-// ─── Funções do Storage Bucket ─────────────────────────────────
 
 function getPackageHash(packagePath) {
   try {
@@ -220,26 +208,24 @@ async function checkNodeModulesInBucket(botId, packageHash) {
     const command = new HeadObjectCommand({
       Bucket: BUCKET_CONFIG.bucketName,
       Key: `${botId}_${packageHash}.tar.gz`
-    });
-    await s3Client.send(command);
-    return true;
+    })
+    await s3Client.send(command)
+    return true
   } catch (error) {
     if (error.name === 'NotFound') {
-      return false;
+      return false
     }
-    console.error("Erro ao verificar bucket:", error);
-    return false;
+    console.error("Erro ao verificar bucket:", error)
+    return false
   }
 }
 
 async function uploadNodeModulesToBucket(botId, nodeModulesPath, packageHash) {
-  const tarballPath = path.join(os.tmpdir(), `${botId}_${packageHash}.tar.gz`);
-  
+  const tarballPath = path.join(os.tmpdir(), `${botId}_${packageHash}.tar.gz`)
   try {
     if (activeBots[botId]) {
-      writeLog(botId, path.dirname(nodeModulesPath), "📦 Compactando node_modules...\r\n");
+      writeLog(botId, path.dirname(nodeModulesPath), "📦 Compactando node_modules...\r\n")
     }
-    
     await tar.c(
       {
         gzip: true,
@@ -247,88 +233,74 @@ async function uploadNodeModulesToBucket(botId, nodeModulesPath, packageHash) {
         cwd: path.dirname(nodeModulesPath),
       },
       [path.basename(nodeModulesPath)]
-    );
-    
-    const fileStream = fs.createReadStream(tarballPath);
+    )
+    const fileStream = fs.createReadStream(tarballPath)
     const uploadParams = {
       Bucket: BUCKET_CONFIG.bucketName,
       Key: `${botId}_${packageHash}.tar.gz`,
       Body: fileStream,
       ContentType: 'application/gzip',
-    };
-    
-    await s3Client.send(new PutObjectCommand(uploadParams));
-    
-    if (activeBots[botId]) {
-      writeLog(botId, path.dirname(nodeModulesPath), "✅ node_modules salvo no bucket\r\n");
     }
-    
-    updateNodeModulesHash(botId, packageHash);
-    return true;
+    await s3Client.send(new PutObjectCommand(uploadParams))
+    if (activeBots[botId]) {
+      writeLog(botId, path.dirname(nodeModulesPath), "✅ node_modules salvo no bucket\r\n")
+    }
+    updateNodeModulesHash(botId, packageHash)
+    return true
   } catch (error) {
     if (activeBots[botId]) {
-      writeLog(botId, path.dirname(nodeModulesPath), `❌ Erro ao enviar para bucket: ${error.message}\r\n`);
+      writeLog(botId, path.dirname(nodeModulesPath), `❌ Erro ao enviar para bucket: ${error.message}\r\n`)
     }
-    return false;
+    return false
   } finally {
-    try { fs.unlinkSync(tarballPath); } catch {}
+    try { fs.unlinkSync(tarballPath) } catch {}
   }
 }
 
 async function downloadNodeModulesFromBucket(botId, targetPath, packageHash) {
-  const tarballPath = path.join(os.tmpdir(), `${botId}_${packageHash}.tar.gz`);
-  
+  const tarballPath = path.join(os.tmpdir(), `${botId}_${packageHash}.tar.gz`)
   try {
     if (activeBots[botId]) {
-      writeLog(botId, targetPath, "📥 Baixando node_modules do bucket...\r\n");
+      writeLog(botId, targetPath, "📥 Baixando node_modules do bucket...\r\n")
     }
-    
     const getParams = {
       Bucket: BUCKET_CONFIG.bucketName,
       Key: `${botId}_${packageHash}.tar.gz`,
-    };
-    
-    const response = await s3Client.send(new GetObjectCommand(getParams));
-    
-    const writeStream = fs.createWriteStream(tarballPath);
+    }
+    const response = await s3Client.send(new GetObjectCommand(getParams))
+    const writeStream = fs.createWriteStream(tarballPath)
     await new Promise((resolve, reject) => {
       response.Body.pipe(writeStream)
         .on('finish', resolve)
-        .on('error', reject);
-    });
-    
+        .on('error', reject)
+    })
     await tar.x({
       file: tarballPath,
       cwd: targetPath,
       gzip: true,
-    });
-    
+    })
     if (activeBots[botId]) {
-      writeLog(botId, targetPath, "✅ node_modules restaurado do bucket\r\n");
+      writeLog(botId, targetPath, "✅ node_modules restaurado do bucket\r\n")
     }
-    return true;
+    return true
   } catch (error) {
     if (activeBots[botId]) {
-      writeLog(botId, targetPath, `❌ Erro ao baixar do bucket: ${error.message}\r\n`);
+      writeLog(botId, targetPath, `❌ Erro ao baixar do bucket: ${error.message}\r\n`)
     }
-    return false;
+    return false
   } finally {
-    try { fs.unlinkSync(tarballPath); } catch {}
+    try { fs.unlinkSync(tarballPath) } catch {}
   }
 }
-
-// ─── Logs otimizados ─────────────────────────
 
 function writeLog(botId, instancePath, data) {
   if (!logBuffers[botId]) {
     logBuffers[botId] = []
-    
     const interval = setInterval(() => {
       if (logBuffers[botId] && logBuffers[botId].length > 0) {
         const logPath = path.join(instancePath, "terminal.log")
         const content = logBuffers[botId].join('')
         logBuffers[botId] = []
-        
         try {
           fs.appendFileSync(logPath, content)
           if (fs.statSync(logPath).size > LOG_CONFIG.MAX_SIZE) {
@@ -339,14 +311,12 @@ function writeLog(botId, instancePath, data) {
         } catch {}
         io.emit("log-" + botId, content)
       }
-      
       if (!activeBots[botId] && (!logBuffers[botId] || logBuffers[botId].length === 0)) {
         clearInterval(interval)
         delete logBuffers[botId]
       }
     }, LOG_CONFIG.BUFFER_TIME)
   }
-  
   logBuffers[botId].push(data)
 }
 
@@ -374,7 +344,6 @@ function detectStart(instancePath) {
 
 function checkNativeModules(nodeModulesPath) {
   const nativeModules = ['sqlite3', 'bcrypt', 'sharp', 'canvas', 'grpc', 'better-sqlite3', 'utf-8-validate', 'bufferutil']
-  
   for (const mod of nativeModules) {
     const modPath = path.join(nodeModulesPath, mod)
     if (fs.existsSync(modPath)) {
@@ -432,7 +401,6 @@ async function spawnBot(botId, instancePath) {
     try { activeBots[botId].process.kill() } catch {}
     delete activeBots[botId]
   }
-
   const botPort = getFreePort()
   const env = {
     ...process.env,
@@ -441,83 +409,64 @@ async function spawnBot(botId, instancePath) {
     FORCE_COLOR: "3",
     TERM: "xterm-256color"
   }
-
   updateMetaAccess(botId)
-
   const start = detectStart(instancePath)
   if (!start) {
     writeLog(botId, instancePath, "❌ Nenhum start detectado\r\n")
     return
   }
-
   const nodeModulesPath = path.join(instancePath, 'node_modules')
-  
-  // Se já existe node_modules local, usa direto
   if (fs.existsSync(nodeModulesPath)) {
     writeLog(botId, instancePath, "✅ Usando node_modules existente\r\n")
     runInstance(botId, instancePath, botPort, env, start)
     return
   }
-
-  // Verifica se tem package.json
   if (fs.existsSync(path.join(instancePath, "package.json"))) {
-    const packagePath = path.join(instancePath, "package.json");
-    const packageHash = getPackageHash(packagePath);
-    
+    const packagePath = path.join(instancePath, "package.json")
+    const packageHash = getPackageHash(packagePath)
     if (packageHash) {
-      // Tenta baixar do bucket
-      const exists = await checkNodeModulesInBucket(botId, packageHash);
-      
+      const exists = await checkNodeModulesInBucket(botId, packageHash)
       if (exists) {
-        writeLog(botId, instancePath, "📥 Baixando node_modules do bucket...\r\n");
-        const downloaded = await downloadNodeModulesFromBucket(botId, instancePath, packageHash);
-        
+        writeLog(botId, instancePath, "📥 Baixando node_modules do bucket...\r\n")
+        const downloaded = await downloadNodeModulesFromBucket(botId, instancePath, packageHash)
         if (downloaded && fs.existsSync(nodeModulesPath)) {
-          const needsRebuild = checkNativeModules(nodeModulesPath);
+          const needsRebuild = checkNativeModules(nodeModulesPath)
           if (needsRebuild) {
-            writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n");
-            await rebuildNativeModules(instancePath);
+            writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n")
+            await rebuildNativeModules(instancePath)
           }
-          runInstance(botId, instancePath, botPort, env, start);
-          return;
+          runInstance(botId, instancePath, botPort, env, start)
+          return
         }
       }
     }
-    
-    // Se não existe no bucket, instala
-    writeLog(botId, instancePath, "📦 Instalando dependencias...\r\n");
-    
+    writeLog(botId, instancePath, "📦 Instalando dependencias...\r\n")
     if (fs.existsSync(nodeModulesPath)) {
-      fs.rmSync(nodeModulesPath, { recursive: true, force: true });
+      fs.rmSync(nodeModulesPath, { recursive: true, force: true })
     }
-    
     const install = pty.spawn(
       os.platform() === "win32" ? "npm.cmd" : "npm",
       ["install", "--production", "--no-audit", "--no-fund"],
       { name: "xterm-color", cols: 80, rows: 40, cwd: instancePath, env }
-    );
-    
-    install.onData(d => writeLog(botId, instancePath, d));
-    
+    )
+    install.onData(d => writeLog(botId, instancePath, d))
     install.onExit(async () => {
       if (fs.existsSync(nodeModulesPath)) {
-        const needsRebuild = checkNativeModules(nodeModulesPath);
+        const needsRebuild = checkNativeModules(nodeModulesPath)
         if (needsRebuild) {
-          writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n");
-          await rebuildNativeModules(instancePath);
+          writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n")
+          await rebuildNativeModules(instancePath)
         }
-        
-        const packageHash = getPackageHash(path.join(instancePath, "package.json"));
+        const packageHash = getPackageHash(path.join(instancePath, "package.json"))
         if (packageHash) {
-          writeLog(botId, instancePath, "📤 Salvando node_modules no bucket...\r\n");
-          await uploadNodeModulesToBucket(botId, nodeModulesPath, packageHash);
+          writeLog(botId, instancePath, "📤 Salvando node_modules no bucket...\r\n")
+          await uploadNodeModulesToBucket(botId, nodeModulesPath, packageHash)
         }
       }
-      
-      runInstance(botId, instancePath, botPort, env, start);
-    });
+      runInstance(botId, instancePath, botPort, env, start)
+    })
   } else {
-    runInstance(botId, instancePath, botPort, env, start);
+    runInstance(botId, instancePath, botPort, env, start)
   }
 }
 
@@ -529,13 +478,10 @@ io.on("connection", socket => {
       socket.emit("history-" + botId, content)
     }
   })
-
   socket.on("input", ({ botId, data }) => {
     if (activeBots[botId]) activeBots[botId].process.write(data)
   })
 })
-
-// ─── Termos de uso ────────────────────────────
 
 const USERS_PATH = path.join(BASE_PATH, "_users")
 if (!fs.existsSync(USERS_PATH)) fs.mkdirSync(USERS_PATH, { recursive: true })
@@ -598,8 +544,6 @@ function editTermos(chatId, msgId, checked) {
 
 const termoCheck = {}
 
-// ─── Comandos ─────────────────────────────────
-
 bot.onText(/^\/meuid$/, msg => {
   bot.sendMessage(msg.chat.id, `🪪 *Seu Telegram ID:*\n\n\`${msg.chat.id}\``, { parse_mode: "Markdown" })
 })
@@ -627,8 +571,6 @@ bot.onText(/\/start/, async msg => {
     }
   )
 })
-
-// ─── Download e Upload ────────────────────────
 
 function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
@@ -670,17 +612,12 @@ function extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg) {
     .pipe(unzipper.Extract({ path: instancePath }))
     .on("close", () => {
       flattenIfNeeded(instancePath)
-      
-      // Remove node_modules se vier no ZIP
       const nm = path.join(instancePath, "node_modules")
       if (fs.existsSync(nm)) fs.rmSync(nm, { recursive: true, force: true })
-
       spawnBot(botId, instancePath)
-
       const sessionToken = genWebSession(loadingMsg.chat.id)
       const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
       const filesUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
-
       bot.editMessageText(
         `✅ *Bot criado com sucesso!*\n\n` +
         `📦 Nome: *${name}*\n` +
@@ -708,21 +645,16 @@ function extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg) {
     })
 }
 
-// Handler para documentos (uploads)
 bot.on("document", async msg => {
   const chatId = msg.chat.id
-  
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
   }
-  
   if (!msg.document.file_name.toLowerCase().endsWith(".zip")) {
     return bot.sendMessage(chatId, "⚠️ *Arquivo invalido!*\n\nEnvie um arquivo .zip com o codigo do bot.", { parse_mode: "Markdown" })
   }
-
   const fileSizeMB = (msg.document.file_size / 1024 / 1024).toFixed(1)
-  
   userState[chatId] = { fileId: msg.document.file_id }
   bot.sendMessage(chatId,
     `✅ *ZIP recebido* (${fileSizeMB}MB)\n\nAgora envie um *nome* para o bot:\n(ex: meubot, vendas, suporte)`,
@@ -730,20 +662,14 @@ bot.on("document", async msg => {
   )
 })
 
-// Handler para mensagens de texto (nome ou link)
 bot.on("message", async msg => {
   if (msg.document || msg.text?.startsWith("/")) return
-
   const chatId = msg.chat.id
-
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
   }
-
   const state = userState[chatId]
-
-  // Sem estado ativo: verificar se é um link
   if (!state || (!state.fileId && !state.linkUrl)) {
     const text = msg.text?.trim() || ""
     if (/^https?:\/\//i.test(text)) {
@@ -755,43 +681,31 @@ bot.on("message", async msg => {
     }
     return
   }
-
-  // Já tem estado mas ainda sem nome
   if (state.botName) return
-
   const name = msg.text.trim().replace(/\s+/g, "_").toLowerCase()
   const botId = generateBotId()
   const instancePath = path.join(BASE_PATH, botId)
-
   state.botName = name
   state.botId = botId
-
   if (fs.existsSync(instancePath)) return
   fs.mkdirSync(instancePath, { recursive: true })
   saveMeta(botId, chatId, name)
-
   const loadingMsg = await bot.sendMessage(chatId,
     `⏳ Criando bot *${name}*...\n\nBaixando e extraindo arquivos...`,
     { parse_mode: "Markdown" }
   )
-
   const zipPath = path.join(instancePath, "bot.zip")
-
   try {
-    // Download via link direto
     if (state.linkUrl) {
       delete userState[chatId]
       await downloadFile(state.linkUrl, zipPath)
       extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg)
       return
     }
-
-    // Download via Telegram
     delete userState[chatId]
     const file = await bot.getFile(state.fileId)
     await downloadFile(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, zipPath)
     extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg)
-
   } catch (err) {
     bot.editMessageText(`❌ Erro ao baixar: ${err.message}`, { 
       chat_id: loadingMsg.chat.id, 
@@ -800,7 +714,6 @@ bot.on("message", async msg => {
   }
 })
 
-// Callback queries
 bot.on("callback_query", async query => {
   const chatId = query.message.chat.id
   const msgId = query.message.message_id
@@ -808,16 +721,12 @@ bot.on("callback_query", async query => {
   const colonIdx = data.indexOf(":")
   const action = colonIdx === -1 ? data : data.slice(0, colonIdx)
   const id = colonIdx === -1 ? null : data.slice(colonIdx + 1)
-  
   bot.answerCallbackQuery(query.id)
-
-  // Termos
   if (action === "termo_check") {
     const nowChecked = id === "1"
     termoCheck[chatId] = nowChecked
     return editTermos(chatId, msgId, nowChecked)
   }
-
   if (action === "termo_confirmar") {
     if (!termoCheck[chatId]) {
       return bot.answerCallbackQuery(query.id, { 
@@ -846,8 +755,6 @@ bot.on("callback_query", async query => {
       }
     )
   }
-
-  // Menu principal
   if (action === "menu_home") {
     const s = getStats(chatId)
     return bot.editMessageText(
@@ -866,31 +773,30 @@ bot.on("callback_query", async query => {
       }
     )
   }
-
   if (action === "menu_new") {
     return bot.editMessageText(
       "➕ *Novo Bot*\n\n" +
-      "Escolha como enviar o arquivo .zip:\n\n" +
-      "📎 Envie direto aqui (ate 20MB)\n" +
+      "Escolha como criar seu bot:\n\n" +
+      "📎 Envie um arquivo .zip (ate 20MB)\n" +
       "🔗 Envie um link publico do ZIP\n" +
-      "🌐 Use a pagina de upload (sem limite)",
+      "🌐 Use a pagina de upload (sem limite)\n" +
+      "🆕 Crie um bot do zero com editor",
       {
         chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "🌐 Gerar link de upload", callback_data: "gen_upload" }],
+            [{ text: "🌐 Upload via Web", callback_data: "gen_upload" }],
+            [{ text: "🆕 Criar do Zero", callback_data: "create_from_scratch" }],
             [{ text: "⬅️ Voltar", callback_data: "menu_home" }]
           ]
         }
       }
     )
   }
-
   if (action === "gen_upload") {
     const token = crypto.randomBytes(16).toString("hex")
     uploadTokens[token] = { chatId, createdAt: Date.now() }
     setTimeout(() => { delete uploadTokens[token] }, 15 * 60 * 1000)
-
     const uploadUrl = `${DOMAIN}/upload/${token}`
     return bot.editMessageText(
       `🌐 *Link de Upload Gerado*\n\n` +
@@ -907,11 +813,63 @@ bot.on("callback_query", async query => {
       }
     )
   }
+  if (action === "create_from_scratch") {
+    const botId = generateBotId()
+    const instancePath = path.join(BASE_PATH, botId)
+    fs.mkdirSync(instancePath, { recursive: true })
+    const packageJson = {
+      name: "meu-bot",
+      version: "1.0.0",
+      description: "Bot criado do zero",
+      main: "index.js",
+      scripts: { start: "node index.js" },
+      dependencies: {}
+    }
+    fs.writeFileSync(path.join(instancePath, "package.json"), JSON.stringify(packageJson, null, 2))
+    const indexJs = `// Seu bot aqui
+console.log("🤖 Bot iniciado com sucesso!");
 
+const http = require('http');
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot está rodando!');
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(\`🚀 Servidor rodando na porta \${PORT}\`);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Erro não tratado:', err);
+});`
+    fs.writeFileSync(path.join(instancePath, "index.js"), indexJs)
+    fs.writeFileSync(path.join(instancePath, "README.md"), "# Meu Bot\n\nBot criado do zero no ARES HOST.")
+    saveMeta(botId, chatId, "meu-bot")
+    const sessionToken = genWebSession(chatId)
+    const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
+    const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
+    return bot.editMessageText(
+      `✅ *Bot criado do zero!*\n\n` +
+      `🆔 ID: \`${botId}\`\n` +
+      `📁 Estrutura básica criada\n\n` +
+      `Agora edite os arquivos e depois inicie o bot.`,
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "📁 Abrir Editor", url: editorUrl }],
+            [{ text: "📟 Abrir Terminal", url: terminalUrl }],
+            [{ text: "▶️ Iniciar Bot", callback_data: `start:${botId}` }],
+            [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
+          ]
+        }
+      }
+    )
+  }
   if (action === "menu_list") {
     const folders = getUserBots(chatId)
     const s = getStats(chatId)
-
     if (folders.length === 0) {
       return bot.editMessageText(
         "📂 *Meus Bots*\n\nNenhum bot hospedado ainda.\nUse Novo Bot para fazer upload!",
@@ -926,13 +884,11 @@ bot.on("callback_query", async query => {
         }
       )
     }
-
     const buttons = folders.map(f => [{
       text: `${activeBots[f] ? "🟢" : "🔴"} ${f}`,
       callback_data: `manage:${f}`
     }])
     buttons.push([{ text: "⬅️ Voltar", callback_data: "menu_home" }])
-
     return bot.editMessageText(
       `📂 *Meus Bots*\n\n🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*  |  Total: *${s.total}*\n\nEscolha um bot:`,
       {
@@ -941,7 +897,6 @@ bot.on("callback_query", async query => {
       }
     )
   }
-
   if (action === "menu_stats") {
     const s = getStats(chatId)
     return bot.editMessageText(
@@ -962,24 +917,19 @@ bot.on("callback_query", async query => {
       }
     )
   }
-
-  // Verificação de propriedade para ações que envolvem botId
   if (["manage","stop","start","restart"].includes(action) && id) {
     if (getOwner(id) && getOwner(id) !== String(chatId)) {
       return bot.answerCallbackQuery(query.id, { text: "❌ Esse bot não é seu!", show_alert: true })
     }
   }
-
   if (action === "manage" && id) {
     updateMetaAccess(id)
     const isRunning = !!activeBots[id]
     const logPath = path.join(BASE_PATH, id, "terminal.log")
     const logSize = fs.existsSync(logPath) ? (fs.statSync(logPath).size / 1024).toFixed(1) + " KB" : "0 KB"
-    
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-
     return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\n` +
       `ID: \`${id}\`\n` +
@@ -1001,17 +951,14 @@ bot.on("callback_query", async query => {
       }
     )
   }
-
   if (action === "stop" && id) {
     if (activeBots[id]) {
       activeBots[id].process.kill()
       delete activeBots[id]
     }
-    
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-
     return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🔴 Offline`,
       {
@@ -1027,14 +974,11 @@ bot.on("callback_query", async query => {
       }
     )
   }
-
   if (action === "start" && id) {
     spawnBot(id, path.join(BASE_PATH, id))
-    
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-
     return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🟢 Iniciando...`,
       {
@@ -1050,14 +994,11 @@ bot.on("callback_query", async query => {
       }
     )
   }
-
   if (action === "restart" && id) {
     spawnBot(id, path.join(BASE_PATH, id))
-    
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-
     return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🟢 Reiniciando...`,
       {
@@ -1075,13 +1016,9 @@ bot.on("callback_query", async query => {
   }
 })
 
-// ─── Rotas Web ────────────────────────────────
-
-// Terminal web
 app.get("/terminal/:botId", authBot, (req, res) => {
   const botId = req.params.botId
   const sessionToken = req.query.s
-  
   res.send(`<!DOCTYPE html>
 <html>
 <head>
@@ -1108,29 +1045,22 @@ app.get("/terminal/:botId", authBot, (req, res) => {
       theme: { background: '#000', foreground: '#0f0' },
       scrollback: 10000
     });
-    
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
-    
     window.addEventListener('resize', () => fitAddon.fit());
-    
     const botId = '${botId}';
-    
     socket.on('connect', () => {
       term.clear();
       socket.emit('request-history', { botId });
     });
-    
     socket.on('history-' + botId, (data) => {
       term.write(data);
     });
-    
     socket.on('log-' + botId, (data) => {
       term.write(data);
     });
-    
     term.onData(data => {
       socket.emit('input', { botId, data });
     });
@@ -1139,7 +1069,6 @@ app.get("/terminal/:botId", authBot, (req, res) => {
 </html>`)
 })
 
-// Upload via web
 app.get("/upload/:token", (req, res) => {
   const info = uploadTokens[req.params.token]
   if (!info) {
@@ -1154,7 +1083,6 @@ app.get("/upload/:token", (req, res) => {
       </html>
     `)
   }
-
   res.send(`<!DOCTYPE html>
 <html>
 <head>
@@ -1196,46 +1124,37 @@ app.get("/upload/:token", (req, res) => {
   <div class="card">
     <div class="logo">🚀 ARES HOST</div>
     <div class="sub">Upload de Bot — cole ou arraste o .zip</div>
-
     <div class="drop" id="drop">
       <input type="file" id="fileInput" accept=".zip">
       <div class="drop-icon">📦</div>
       <div class="drop-text">Arraste o <span>.zip</span> aqui ou clique para selecionar</div>
     </div>
-
     <div class="file-info" id="fileInfo">
       <span>📄</span>
       <span class="file-name" id="fileName"></span>
       <span class="file-size" id="fileSize"></span>
     </div>
-
     <label>Nome do bot</label>
     <input type="text" id="botName" placeholder="ex: meubot, vendas, suporte" maxlength="40">
-
     <button class="btn" id="btn" disabled onclick="doUpload()">Enviar Bot</button>
-
     <div class="progress" id="progress">
       <div class="bar-bg"><div class="bar" id="bar"></div></div>
       <div class="status" id="status">Enviando...</div>
     </div>
   </div>
-
   <script>
     const token = "${req.params.token}"
     const fileInput = document.getElementById("fileInput")
     const drop = document.getElementById("drop")
     const btn = document.getElementById("btn")
     const botNameInput = document.getElementById("botName")
-
     function formatSize(b) {
       if (b > 1024*1024) return (b/1024/1024).toFixed(1) + " MB"
       return (b/1024).toFixed(0) + " KB"
     }
-
     function checkReady() {
       btn.disabled = !(fileInput.files[0] && botNameInput.value.trim().length > 0)
     }
-
     fileInput.addEventListener("change", () => {
       const f = fileInput.files[0]
       if (!f) return
@@ -1244,9 +1163,7 @@ app.get("/upload/:token", (req, res) => {
       document.getElementById("fileInfo").classList.add("show")
       checkReady()
     })
-
     botNameInput.addEventListener("input", checkReady)
-
     drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over") })
     drop.addEventListener("dragleave", () => drop.classList.remove("over"))
     drop.addEventListener("drop", e => {
@@ -1259,25 +1176,20 @@ app.get("/upload/:token", (req, res) => {
       fileInput.files = dt.files
       fileInput.dispatchEvent(new Event("change"))
     })
-
     function doUpload() {
       const f = fileInput.files[0]
       const name = botNameInput.value.trim().replace(/\\s+/g, "_").toLowerCase()
       if (!f || !name) return
-
       btn.disabled = true
       const prog = document.getElementById("progress")
       const bar = document.getElementById("bar")
       const status = document.getElementById("status")
       prog.classList.add("show")
-
       const fd = new FormData()
       fd.append("file", f)
       fd.append("name", name)
-
       const xhr = new XMLHttpRequest()
       xhr.open("POST", "/upload/" + token)
-
       xhr.upload.onprogress = e => {
         if (e.lengthComputable) {
           const pct = Math.round(e.loaded / e.total * 100)
@@ -1285,7 +1197,6 @@ app.get("/upload/:token", (req, res) => {
           status.textContent = "Enviando... " + pct + "%"
         }
       }
-
       xhr.onload = () => {
         if (xhr.status === 200) {
           bar.style.width = "100%"
@@ -1297,13 +1208,11 @@ app.get("/upload/:token", (req, res) => {
           btn.disabled = false
         }
       }
-
       xhr.onerror = () => {
         status.textContent = "❌ Erro de conexão."
         status.className = "status err"
         btn.disabled = false
       }
-
       xhr.send(fd)
     }
   </script>
@@ -1335,29 +1244,23 @@ app.post("/upload/:token", (req, res, next) => {
   const token = req.params.token
   const info = uploadTokens[token]
   if (!req.file) return res.status(400).send("Nenhum arquivo recebido")
-
   const chatId = info.chatId
   const name = (req.body.name || "bot").replace(/[^a-z0-9_]/gi, "_").toLowerCase().slice(0, 40)
   const botId = generateBotId()
   const instancePath = path.join(BASE_PATH, botId)
-
   delete uploadTokens[token]
   fs.mkdirSync(instancePath, { recursive: true })
   saveMeta(botId, chatId, name)
-
   const zipPath = path.join(instancePath, "bot.zip")
   fs.renameSync(req.file.path, zipPath)
-
   const loadingMsg = await bot.sendMessage(chatId,
     `⏳ Criando bot *${name}*...\n\nArquivo recebido via web, extraindo...`,
     { parse_mode: "Markdown" }
   )
-
   extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg)
   res.send("ok")
 })
 
-// Editor de arquivos
 function walkDir(dir, base) {
   const result = []
   try {
@@ -1382,11 +1285,9 @@ app.get("/files/:botId", authBot, (req, res) => {
   const botId = req.params.botId
   const sessionToken = req.query.s
   const botPath = path.join(BASE_PATH, botId)
-  
   if (!fs.existsSync(botPath)) {
     return res.status(404).send("Bot não encontrado")
   }
-
   res.send(`<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1517,15 +1418,12 @@ app.get("/files/:botId", authBot, (req, res) => {
   <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
   <script>
     require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } })
-    
     const BOT_ID = "${botId}"
     const TOKEN = "${sessionToken}"
     const API = "/files-api/" + BOT_ID
-    
     function apiUrl(action, extra) {
       return API + action + "?s=" + TOKEN + (extra ? "&" + extra : "")
     }
-    
     let ed = null
     let currentFile = null
     let isDirty = false
@@ -1534,26 +1432,21 @@ app.get("/files/:botId", authBot, (req, res) => {
     let tabs = []
     let models = {}
     let modalCb = null
-    
     function toggleSide() {
       document.getElementById("side").classList.toggle("open")
       document.getElementById("side-overlay").classList.toggle("on")
     }
-    
     function closeSide() {
       document.getElementById("side").classList.remove("open")
       document.getElementById("side-overlay").classList.remove("on")
     }
-    
     function ext(n) {
       return n.includes(".") ? n.split(".").pop().toLowerCase() : ""
     }
-    
     function langIcon(n) {
       const m = { js: "🟨", json: "🟧", py: "🐍", md: "📝", html: "🌐", css: "🎨", sh: "⚙️", env: "🔑", yml: "📋", txt: "📄" }
       return m[ext(n)] || "📄"
     }
-    
     function getLang(n) {
       const m = {
         js: "javascript", json: "json", py: "python", md: "markdown",
@@ -1561,11 +1454,9 @@ app.get("/files/:botId", authBot, (req, res) => {
       }
       return m[ext(n)] || "plaintext"
     }
-    
     function esc(s) {
       return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     }
-    
     function buildRows(items, depth) {
       let html = ""
       for (const item of items) {
@@ -1588,7 +1479,6 @@ app.get("/files/:botId", authBot, (req, res) => {
       }
       return html
     }
-    
     function renderTree() {
       const treeEl = document.getElementById("tree")
       if (treeData.length) {
@@ -1597,7 +1487,6 @@ app.get("/files/:botId", authBot, (req, res) => {
         treeEl.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--tx2)">Pasta vazia</div>'
       }
     }
-    
     function toggleDir(p) {
       if (openDirs.has(p)) {
         openDirs.delete(p)
@@ -1606,7 +1495,6 @@ app.get("/files/:botId", authBot, (req, res) => {
       }
       renderTree()
     }
-    
     async function loadTree() {
       try {
         const r = await fetch(apiUrl("/tree"))
@@ -1617,9 +1505,7 @@ app.get("/files/:botId", authBot, (req, res) => {
         document.getElementById("tree").innerHTML = \`<div style="padding:12px;font-size:12px;color:var(--red)">Erro: \${e.message}</div>\`
       }
     }
-    
     function refreshTree() { loadTree() }
-    
     function renderTabs() {
       const tabsEl = document.getElementById("tabs")
       tabsEl.innerHTML = tabs.map(t => {
@@ -1629,11 +1515,9 @@ app.get("/files/:botId", authBot, (req, res) => {
         return \`<div class="tab\${on}" onclick="switchTo('\${esc(t.path)}')" title="\${esc(t.path)}">\${langIcon(name)} \${esc(name)}\${ind}</div>\`
       }).join("")
     }
-    
     function switchTo(p) {
       if (p !== currentFile) openFile(p)
     }
-    
     function closeTab(e, p) {
       e.stopPropagation()
       const t = tabs.find(x => x.path === p)
@@ -1652,7 +1536,6 @@ app.get("/files/:botId", authBot, (req, res) => {
       }
       renderTabs()
     }
-    
     function clearEditor() {
       currentFile = null
       isDirty = false
@@ -1666,7 +1549,6 @@ app.get("/files/:botId", authBot, (req, res) => {
       })
       renderTree()
     }
-    
     require(["vs/editor/editor.main"], function() {
       monaco.editor.defineTheme("ares", {
         base: "vs-dark",
@@ -1684,7 +1566,6 @@ app.get("/files/:botId", authBot, (req, res) => {
           "editorLineNumber.activeForeground": "#e6edf3"
         }
       })
-      
       ed = monaco.editor.create(document.getElementById("editor"), {
         theme: "ares",
         fontSize: 14,
@@ -1694,7 +1575,6 @@ app.get("/files/:botId", authBot, (req, res) => {
         wordWrap: "on",
         padding: { top: 10 }
       })
-      
       ed.onDidChangeModelContent(() => {
         if (!isDirty) {
           isDirty = true
@@ -1704,16 +1584,12 @@ app.get("/files/:botId", authBot, (req, res) => {
           renderTabs()
         }
       })
-      
       ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, doSave)
-      
       document.getElementById("editor").style.display = "none"
       loadTree()
     })
-    
     async function openFile(p) {
       if (!ed) return
-      
       if (!models[p]) {
         const r = await fetch(apiUrl("/read", "path=" + encodeURIComponent(p)))
         if (!r.ok) {
@@ -1725,7 +1601,6 @@ app.get("/files/:botId", authBot, (req, res) => {
           tabs.push({ path: p, dirty: false })
         }
       }
-      
       currentFile = p
       isDirty = false
       ed.setModel(models[p])
@@ -1733,30 +1608,24 @@ app.get("/files/:botId", authBot, (req, res) => {
       document.getElementById("welcome").style.display = "none"
       document.getElementById("breadcrumb").textContent = p
       document.getElementById("unsaved").style.display = "none"
-      
       ;["btn-save", "btn-del", "btn-ren"].forEach(id => {
         document.getElementById(id).style.display = "inline-flex"
       })
-      
       const t = tabs.find(x => x.path === p)
       if (t) t.dirty = false
-      
       renderTree()
       renderTabs()
       closeSide()
       ed.focus()
     }
-    
     async function doSave() {
       if (!currentFile || !ed) return
-      
       try {
         const r = await fetch(apiUrl("/write"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: currentFile, content: ed.getValue() })
         })
-        
         if (r.ok) {
           isDirty = false
           document.getElementById("unsaved").style.display = "none"
@@ -1771,16 +1640,13 @@ app.get("/files/:botId", authBot, (req, res) => {
         toast("Erro: " + e.message, "err")
       }
     }
-    
     async function doDel() {
       if (!currentFile || !confirm('Excluir "' + currentFile + '"?')) return
-      
       const r = await fetch(apiUrl("/delete"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: currentFile })
       })
-      
       if (r.ok) {
         toast("🗑️ Excluído!", "ok")
         closeTab({ stopPropagation: () => {} }, currentFile)
@@ -1789,24 +1655,18 @@ app.get("/files/:botId", authBot, (req, res) => {
         toast("Erro " + r.status, "err")
       }
     }
-    
     async function doRename() {
       if (!currentFile) return
-      
       const parts = currentFile.split("/")
       const oldName = parts[parts.length - 1]
       const newName = prompt("Novo nome:", oldName)
-      
       if (!newName || newName === oldName) return
-      
       const newPath = [...parts.slice(0, -1), newName].join("/")
-      
       const r = await fetch(apiUrl("/rename"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ from: currentFile, to: newPath })
       })
-      
       if (r.ok) {
         const t = tabs.find(x => x.path === currentFile)
         if (t) t.path = newPath
@@ -1822,14 +1682,8 @@ app.get("/files/:botId", authBot, (req, res) => {
         toast("Erro ao renomear", "err")
       }
     }
-    
     function doNewFile() {
       const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : ""
-      const name = prompt("Nome do arquivo:", "novo.js")
-      if (!name) return
-      
-      const p = folder ? folder + "/" + name : name
-      
       openModal("Novo arquivo", "nome.js", async (newName) => {
         const path = folder ? folder + "/" + newName : newName
         const r = await fetch(apiUrl("/write"), {
@@ -1846,10 +1700,8 @@ app.get("/files/:botId", authBot, (req, res) => {
         }
       })
     }
-    
     function doNewFolder() {
       const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : ""
-      
       openModal("Nova pasta", "nome", async (name) => {
         const path = folder ? folder + "/" + name : name
         const r = await fetch(apiUrl("/mkdir"), {
@@ -1865,7 +1717,6 @@ app.get("/files/:botId", authBot, (req, res) => {
         }
       })
     }
-    
     function openModal(title, placeholder, cb) {
       modalCb = cb
       document.getElementById("modal-title").textContent = title
@@ -1874,28 +1725,23 @@ app.get("/files/:botId", authBot, (req, res) => {
       document.getElementById("modal").classList.add("on")
       setTimeout(() => document.getElementById("modal-in").focus(), 100)
     }
-    
     function closeModal() {
       document.getElementById("modal").classList.remove("on")
       modalCb = null
     }
-    
     function confirmModal() {
       const v = document.getElementById("modal-in").value.trim()
       if (!v) return
       closeModal()
       if (modalCb) modalCb(v)
     }
-    
     document.getElementById("modal-in").addEventListener("keydown", e => {
       if (e.key === "Enter") confirmModal()
       if (e.key === "Escape") closeModal()
     })
-    
     document.getElementById("modal").addEventListener("click", e => {
       if (e.target === document.getElementById("modal")) closeModal()
     })
-    
     function toast(msg, type) {
       const el = document.getElementById("toast")
       el.textContent = msg
@@ -1908,24 +1754,19 @@ app.get("/files/:botId", authBot, (req, res) => {
 </html>`)
 })
 
-// API de arquivos
 app.use("/files-api", authBot, (req, res, next) => {
   const rawUrl = req.originalUrl.split("?")[0]
   const m = rawUrl.match(/^\/files-api\/([^/]+)(\/[^?/]*)/)
   if (!m) return next()
-  
   const botId = m[1]
   const action = m[2]
   const botPath = path.join(BASE_PATH, botId)
-  
   if (!fs.existsSync(botPath)) {
     return res.status(404).send("Bot não encontrado")
   }
-  
   if (action === "/tree") {
     return res.json(walkDir(botPath, ""))
   }
-  
   if (action === "/read") {
     const fp = path.normalize(path.join(botPath, req.query.path || ""))
     if (!fp.startsWith(botPath)) return res.status(403).send("Proibido")
@@ -1935,7 +1776,6 @@ app.use("/files-api", authBot, (req, res, next) => {
     res.setHeader("Content-Type", "text/plain; charset=utf-8")
     return res.send(fs.readFileSync(fp, "utf8"))
   }
-  
   express.json()(req, res, () => {
     if (action === "/write") {
       const fp = path.normalize(path.join(botPath, req.body.path || ""))
@@ -1944,7 +1784,6 @@ app.use("/files-api", authBot, (req, res, next) => {
       fs.writeFileSync(fp, req.body.content || "")
       return res.send("ok")
     }
-    
     if (action === "/delete") {
       const fp = path.normalize(path.join(botPath, req.body.path || ""))
       if (!fp.startsWith(botPath)) return res.status(403).send("Proibido")
@@ -1956,14 +1795,12 @@ app.use("/files-api", authBot, (req, res, next) => {
       }
       return res.send("ok")
     }
-    
     if (action === "/mkdir") {
       const dp = path.normalize(path.join(botPath, req.body.path || ""))
       if (!dp.startsWith(botPath)) return res.status(403).send("Proibido")
       fs.mkdirSync(dp, { recursive: true })
       return res.send("ok")
     }
-    
     if (action === "/rename") {
       const from = path.normalize(path.join(botPath, req.body.from || ""))
       const to = path.normalize(path.join(botPath, req.body.to || ""))
@@ -1974,12 +1811,52 @@ app.use("/files-api", authBot, (req, res, next) => {
       fs.renameSync(from, to)
       return res.send("ok")
     }
-    
     next()
   })
 })
 
-// Limpeza de node_modules quando o bot para (já implementado no onExit)
+function cleanupOldLogs() {
+  console.log("🧹 Iniciando limpeza de logs antigos...")
+  if (!fs.existsSync(BASE_PATH)) return
+  const bots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads")
+  const now = Date.now()
+  const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000
+  let logsRemovidos = 0
+  let espacoLiberado = 0
+  for (const botId of bots) {
+    const logPath = path.join(BASE_PATH, botId, "terminal.log")
+    if (fs.existsSync(logPath)) {
+      try {
+        const stats = fs.statSync(logPath)
+        const idade = now - stats.mtimeMs
+        if (idade > TWENTY_FOUR_HOURS) {
+          const tamanho = stats.size / 1024
+          espacoLiberado += tamanho
+          if (activeBots[botId]) {
+            fs.writeFileSync(logPath, `--- Log limpo em ${new Date().toISOString()} ---\n`)
+          } else {
+            fs.unlinkSync(logPath)
+          }
+          logsRemovidos++
+        }
+      } catch (err) {
+        console.error(`Erro ao processar log de ${botId}:`, err.message)
+      }
+    }
+  }
+  console.log(`✅ Limpeza concluída: ${logsRemovidos} logs processados, ${espacoLiberado.toFixed(2)} KB liberados`)
+  if (ADMIN_ID && logsRemovidos > 0) {
+    bot.sendMessage(ADMIN_ID, 
+      `🧹 *Limpeza Automática de Logs*\n\n` +
+      `📊 Logs processados: *${logsRemovidos}*\n` +
+      `💾 Espaço liberado: *${espacoLiberado.toFixed(2)} KB*`,
+      { parse_mode: "Markdown" }
+    ).catch(() => {})
+  }
+}
+
+setInterval(cleanupOldLogs, 24 * 60 * 60 * 1000)
+setTimeout(cleanupOldLogs, 5 * 60 * 1000)
 
 process.on("uncaughtException", err => {
   if (err.code !== "EADDRINUSE") {
@@ -1989,8 +1866,6 @@ process.on("uncaughtException", err => {
 
 server.listen(PORT, () => {
   aresBanner()
-  
-  // Restaurar bots salvos
   if (fs.existsSync(BASE_PATH)) {
     const bots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads")
     if (bots.length > 0) {
