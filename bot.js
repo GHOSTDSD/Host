@@ -1086,7 +1086,17 @@ function buildTreeHTML(items,depth){
   return h
 }
 function toggleDir(p){openDirs.has(p)?openDirs.delete(p):openDirs.add(p);renderTree()}
-async function loadTree(){const r=await fetch(API+"/tree");treeData=await r.json();renderTree()}
+async function loadTree(){
+  try {
+    const r=await fetch(API+"/tree")
+    if(!r.ok){document.getElementById("tree").innerHTML='<div style="color:var(--red);padding:10px;font-size:12px">Erro '+r.status+': '+r.statusText+'</div>';return}
+    treeData=await r.json()
+    if(!treeData.length)document.getElementById("tree").innerHTML='<div style="color:var(--text2);padding:10px;font-size:12px">Pasta vazia</div>'
+    else renderTree()
+  } catch(e) {
+    document.getElementById("tree").innerHTML='<div style="color:var(--red);padding:10px;font-size:12px">Erro: '+e.message+'</div>'
+  }
+}
 function renderTree(){document.getElementById("tree").innerHTML=buildTreeHTML(treeData,0)}
 
 function renderTabs(){
@@ -1241,7 +1251,8 @@ loadTree()
 
 // Rota editor — sem wildcards, sem :param (contorna bug Express 5 + path-to-regexp)
 app.use("/files", (req, res, next) => {
-  const m = req.path.match(/^\/([^/]+)\/?$/)
+  const rawPath = req.originalUrl.split("?")[0].replace(/^\/files/, "")
+  const m = rawPath.match(/^\/([^/]+)\/?$/)
   if (!m) return next()
   const botId = m[1]
   const botPath = path.join(BASE_PATH, botId)
@@ -1251,7 +1262,8 @@ app.use("/files", (req, res, next) => {
 
 // API de arquivos — também sem :param
 app.use("/files-api", (req, res, next) => {
-  const m = req.path.match(/^\/([^/]+)(\/[^?]*)/)
+  const rawPath = req.originalUrl.split("?")[0].replace(/^\/files-api/, "")
+  const m = rawPath.match(/^\/([^/]+)(\/[^?/]*)/)
   if (!m) return next()
   const botId = m[1]
   const action = m[2]
