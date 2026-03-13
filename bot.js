@@ -114,8 +114,16 @@ function aresBanner() {
   console.log(`\n🚀 ARES HOST\n📦 BOTS DISCO: ${s.total}\n🟢 BOTS ONLINE: ${s.online}\n💾 RAM: ${s.ram}MB\n⏱ UPTIME: ${s.uptime}\n`)
 }
 
+const MAX_LOG_BYTES = 500 * 1024 // 500KB por bot
 function writeLog(botId, instancePath, data) {
   const logPath = path.join(instancePath, "terminal.log")
+  // Trunca log se passar de 500KB — evita acumulo no volume
+  try {
+    if (fs.existsSync(logPath) && fs.statSync(logPath).size > MAX_LOG_BYTES) {
+      const content = fs.readFileSync(logPath, "utf8")
+      fs.writeFileSync(logPath, content.slice(-MAX_LOG_BYTES / 2))
+    }
+  } catch {}
   fs.appendFileSync(logPath, data)
   io.emit("log-" + botId, data.toString())
 }
@@ -165,10 +173,16 @@ function spawnBot(botId, instancePath) {
   }
 
   if (fs.existsSync(path.join(instancePath, "package.json"))) {
+    // Apaga node_modules antes — economiza espaco no volume
+    const nm = path.join(instancePath, "node_modules")
+    if (fs.existsSync(nm)) {
+      writeLog(botId, instancePath, "🧹 Limpando node_modules...\r\n")
+      fs.rmSync(nm, { recursive: true, force: true })
+    }
     writeLog(botId, instancePath, "📦 Instalando dependencias...\r\n")
     const install = pty.spawn(
       os.platform() === "win32" ? "npm.cmd" : "npm",
-      ["install", "--production"],
+      ["install", "--production", "--prefer-offline"],
       { name: "xterm-color", cols: 80, rows: 40, cwd: instancePath, env }
     )
     install.onData(d => writeLog(botId, instancePath, d))
@@ -187,6 +201,9 @@ function runInstance(botId, instancePath, botPort, env, start) {
   child.onExit(() => {
     releasePort(botPort)
     delete activeBots[botId]
+    // Apaga node_modules ao parar — libera espaco no volume
+    const nm = path.join(instancePath, "node_modules")
+    if (fs.existsSync(nm)) fs.rmSync(nm, { recursive: true, force: true })
     aresBanner()
   })
   aresBanner()
@@ -409,6 +426,48 @@ bot.on("message", async msg => {
 function isAdmin(chatId) {
   return !ADMIN_ID || String(chatId) === String(ADMIN_ID)
 }
+
+bot.onText(/^\/limpeza$/, async msg => {
+  const chatId = msg.chat.id
+  if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ Sem permissão.")
+
+  const bots = fs.existsSync(BASE_PATH)
+    ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads")
+    : []
+
+  let freed = 0
+  let totalMB = 0
+
+  for (const botId of bots) {
+    if (activeBots[botId]) continue // pula bots rodando
+    const nm = path.join(BASE_PATH, botId, "node_modules")
+    if (fs.existsSync(nm)) {
+      try {
+        // Calcula tamanho antes de apagar
+        const { execSync } = require("child_process")
+        try {
+          const du = execSync(`du -sm ${nm}`).toString()
+          totalMB += parseFloat(du.split("	")[0]) || 0
+        } catch {}
+        fs.rmSync(nm, { recursive: true, force: true })
+        freed++
+      } catch {}
+    }
+  }
+
+  bot.sendMessage(chatId,
+    `🧹 *Limpeza concluída!*
+
+` +
+    `🗑️ node_modules removidos: *${freed}* bot(s)
+` +
+    `💾 Espaço liberado: ~*${totalMB.toFixed(0)} MB*
+
+` +
+    `_Bots em execução não foram afetados._`,
+    { parse_mode: "Markdown" }
+  )
+})
 
 bot.onText(/^\/exportar$/, async msg => {
   const chatId = msg.chat.id
