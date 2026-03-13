@@ -146,6 +146,15 @@ function runInstance(botId, instancePath, botPort, env, start) {
 }
 
 io.on("connection", socket => {
+  // Quando cliente pede histórico do terminal
+  socket.on("request-history", ({ botId }) => {
+    const logPath = path.join(BASE_PATH, botId, "terminal.log")
+    if (fs.existsSync(logPath)) {
+      const content = fs.readFileSync(logPath)
+      socket.emit("history-" + botId, content.toString())
+    }
+  })
+
   socket.on("input", ({ botId, data }) => {
     if (activeBots[botId]) activeBots[botId].process.write(data)
   })
@@ -610,14 +619,29 @@ button{background:#222;color:#fff;border:none;padding:5px 10px;cursor:pointer}
 <div id="terminal"></div>
 <script>
 const socket = io()
-const term = new Terminal({cursorBlink:true,fontSize:14,theme:{background:"#000",foreground:"#0f0"}})
+const term = new Terminal({cursorBlink:true,fontSize:14,theme:{background:"#000",foreground:"#0f0"},scrollback:10000})
 const fitAddon = new FitAddon.FitAddon()
 term.loadAddon(fitAddon)
 term.open(document.getElementById("terminal"))
 fitAddon.fit()
 window.addEventListener("resize",()=>fitAddon.fit())
 const botId="${req.params.botId}"
+
+// Ao conectar (ou reconectar), pede o histórico completo
+socket.on("connect",()=>{
+  term.clear()
+  socket.emit("request-history",{botId})
+})
+
+// Recebe histórico completo (replay do log)
+socket.on("history-"+botId,data=>{
+  term.write(data)
+})
+
+// Recebe logs novos em tempo real
 socket.on("log-"+botId,data=>term.write(data))
+
+// Envia input do teclado pro processo
 term.onData(data=>socket.emit("input",{botId,data}))
 </script>
 </body>
