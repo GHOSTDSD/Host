@@ -845,6 +845,733 @@ app.get("/logs/:botId", (req, res) => {
   else res.send("")
 })
 
+// ─── Editor de Arquivos ──────────────────────
+
+function walkDir(dir, base) {
+  const result = []
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+    for (const e of entries) {
+      if (e.name === "node_modules" || e.name === ".git") continue
+      const rel = base ? base + "/" + e.name : e.name
+      const full = path.join(dir, e.name)
+      if (e.isDirectory()) {
+        result.push({ type: "dir", name: e.name, path: rel, children: walkDir(full, rel) })
+      } else {
+        result.push({ type: "file", name: e.name, path: rel })
+      }
+    }
+  } catch(e) {}
+  return result.sort((a, b) => {
+    if (a.type !== b.type) return a.type === "dir" ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+const filesRouter = express.Router()
+
+// Extrai botId do path manualmente (evita bug Express 5 com underscores)
+function getBotIdFromPath(reqPath) {
+  const m = reqPath.match(/^\/([^/]+)/)
+  return m ? m[1] : null
+}
+
+// Página principal do editor
+filesRouter.get("/*", (req, res, next) => {
+  const botId = getBotIdFromPath(req.path)
+  if (!botId || req.path.includes("/")) return next()
+  const botPath = path.join(BASE_PATH, botId)
+  if (!fs.existsSync(botPath)) return res.status(404).send("<h2>Bot não encontrado</h2>")
+
+  res.send(`<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ARES — ${botId}</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/editor/editor.main.min.css">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#21262d;
+  --border:#30363d;--text:#e6edf3;--text2:#8b949e;
+  --green:#3fb950;--blue:#58a6ff;--orange:#d29922;
+  --red:#f85149;--purple:#bc8cff;
+}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace;height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:13px}
+
+/* TOPBAR */
+#topbar{background:var(--bg2);border-bottom:1px solid var(--border);padding:0 16px;height:48px;display:flex;align-items:center;gap:10px;flex-shrink:0;z-index:10}
+.logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;color:var(--green);text-decoration:none;white-space:nowrap}
+.logo svg{width:20px;height:20px;fill:var(--green)}
+.bot-chip{background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:12px;color:var(--text2);font-family:monospace}
+.sep{color:var(--border);font-size:16px}
+.spacer{flex:1}
+.tb-btn{display:flex;align-items:center;gap:5px;padding:5px 12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:var(--bg3);color:var(--text);transition:all .15s;white-space:nowrap}
+.tb-btn:hover{border-color:var(--text2)}
+.tb-btn.primary{background:var(--green);border-color:var(--green);color:#000}
+.tb-btn.primary:hover{background:#3dbb4c}
+.tb-btn.danger{border-color:var(--red);color:var(--red)}
+.tb-btn.danger:hover{background:rgba(248,81,73,.1)}
+.tb-btn[hidden]{display:none!important}
+.unsaved-dot{width:8px;height:8px;background:var(--orange);border-radius:50%;display:none}
+
+/* LAYOUT */
+#main{display:flex;flex:1;overflow:hidden}
+
+/* SIDEBAR */
+#sidebar{width:260px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+#sidebar-top{padding:10px 12px 6px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
+#sidebar-top .stitle{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text2)}
+.icon-btns{display:flex;gap:4px}
+.icon-btn{background:none;border:none;color:var(--text2);cursor:pointer;padding:3px 5px;border-radius:4px;font-size:14px;line-height:1;transition:all .15s}
+.icon-btn:hover{background:var(--bg3);color:var(--text)}
+#tree-scroll{flex:1;overflow-y:auto;padding:4px 0}
+#tree-scroll::-webkit-scrollbar{width:4px}
+#tree-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* TREE ITEMS */
+.ti{display:flex;align-items:center;gap:0;padding:3px 0;cursor:pointer;user-select:none;border-radius:4px;position:relative}
+.ti:hover{background:rgba(255,255,255,.04)}
+.ti.active{background:rgba(56,189,248,.08)}
+.ti.active .ti-name{color:var(--blue)}
+.ti-indent{flex-shrink:0}
+.ti-arrow{width:16px;flex-shrink:0;color:var(--text2);font-size:10px;text-align:center;transition:transform .15s}
+.ti-arrow.open{transform:rotate(90deg)}
+.ti-arrow.leaf{opacity:0;pointer-events:none}
+.ti-icon{margin-right:5px;font-size:13px;flex-shrink:0}
+.ti-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.ti-name.dir{color:var(--blue)}
+
+/* TABS */
+#tabs-bar{background:var(--bg2);border-bottom:1px solid var(--border);display:flex;overflow-x:auto;flex-shrink:0;height:36px}
+#tabs-bar::-webkit-scrollbar{height:3px}
+#tabs-bar::-webkit-scrollbar-thumb{background:var(--border)}
+.tab{display:flex;align-items:center;gap:6px;padding:0 12px;height:36px;border-right:1px solid var(--border);cursor:pointer;white-space:nowrap;font-size:12px;color:var(--text2);flex-shrink:0;position:relative;transition:background .1s}
+.tab:hover{background:var(--bg3);color:var(--text)}
+.tab.active{color:var(--text);background:var(--bg)}
+.tab.active::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:var(--blue)}
+.tab .tab-close{opacity:.4;font-size:11px;padding:1px 3px;border-radius:3px;line-height:1}
+.tab .tab-close:hover{opacity:1;background:var(--bg3)}
+.tab .tab-dot{width:7px;height:7px;background:var(--orange);border-radius:50%}
+
+/* BREADCRUMB */
+#breadcrumb{background:var(--bg);border-bottom:1px solid var(--border);padding:4px 16px;font-size:11px;color:var(--text2);display:flex;align-items:center;gap:4px;flex-shrink:0;min-height:28px;font-family:monospace}
+#breadcrumb span{color:var(--text)}
+#breadcrumb .bc-sep{color:var(--border)}
+
+/* EDITOR */
+#editor-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+#editor{flex:1;overflow:hidden}
+#welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:var(--text2);padding:40px}
+#welcome .big{font-size:56px;opacity:.4}
+#welcome h2{font-size:18px;color:var(--text);font-weight:400}
+#welcome p{font-size:13px;text-align:center;max-width:320px;line-height:1.6}
+#welcome kbd{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-family:monospace;font-size:11px;color:var(--text)}
+
+/* STATUSBAR */
+#statusbar{background:#1f2328;border-top:1px solid var(--border);height:22px;display:flex;align-items:center;padding:0 14px;gap:16px;font-size:11px;color:var(--text2);flex-shrink:0}
+#statusbar .sb-item{display:flex;align-items:center;gap:4px}
+#statusbar .sb-item.green{color:var(--green)}
+#statusbar .sb-item.orange{color:var(--orange)}
+
+/* MODAL */
+.overlay{display:none;position:fixed;inset:0;background:rgba(1,4,9,.7);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+.overlay.show{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:24px;width:380px;max-width:90vw;box-shadow:0 16px 48px rgba(1,4,9,.5)}
+.modal h3{margin-bottom:16px;font-size:15px;font-weight:600;color:var(--text)}
+.modal label{display:block;font-size:12px;color:var(--text2);margin-bottom:6px}
+.modal input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px;outline:none;font-family:monospace;transition:border .15s}
+.modal input:focus{border-color:var(--blue)}
+.modal-btns{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+.modal-btns button{padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;border:1px solid var(--border)}
+.mbtn-ok{background:var(--green);border-color:var(--green);color:#000}
+.mbtn-cancel{background:var(--bg3);color:var(--text2)}
+
+/* TOAST */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px 20px;border-radius:8px;font-size:13px;z-index:9999;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;transform:translateX(-50%) translateY(8px);white-space:nowrap}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.ok{border-color:var(--green);color:var(--green)}
+.toast.err{border-color:var(--red);color:var(--red)}
+
+/* CONTEXT MENU */
+.ctx-menu{display:none;position:fixed;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:4px;z-index:500;min-width:160px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.ctx-menu.show{display:block}
+.ctx-item{padding:6px 12px;cursor:pointer;border-radius:4px;font-size:13px;display:flex;align-items:center;gap:8px}
+.ctx-item:hover{background:var(--bg3)}
+.ctx-item.danger{color:var(--red)}
+.ctx-sep{height:1px;background:var(--border);margin:3px 0}
+
+@media(max-width:700px){
+  #sidebar{width:200px}
+  .tb-btn span{display:none}
+}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="logo">
+    <svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+    ARES HOST
+  </span>
+  <span class="sep">/</span>
+  <span class="bot-chip">${botId}</span>
+  <div class="spacer"></div>
+  <div style="display:flex;align-items:center;gap:4px" id="unsaved-dot-wrap" hidden><div class="unsaved-dot" id="unsaved-dot" style="display:block"></div><span style="font-size:11px;color:var(--orange)">não salvo</span></div>
+  <button class="tb-btn" id="btn-rename" onclick="renameFile()" hidden>✏️ <span>Renomear</span></button>
+  <button class="tb-btn danger" id="btn-delete" onclick="deleteFile()" hidden>🗑️ <span>Excluir</span></button>
+  <button class="tb-btn primary" id="btn-save" onclick="saveFile()" hidden>💾 <span>Salvar</span></button>
+</div>
+
+<div id="main">
+  <div id="sidebar">
+    <div id="sidebar-top">
+      <span class="stitle">Explorador</span>
+      <div class="icon-btns">
+        <button class="icon-btn" onclick="newFile()" title="Novo arquivo">📄</button>
+        <button class="icon-btn" onclick="newFolder()" title="Nova pasta">📁</button>
+        <button class="icon-btn" onclick="loadTree()" title="Atualizar">🔄</button>
+      </div>
+    </div>
+    <div id="tree-scroll"><div id="tree"></div></div>
+  </div>
+
+  <div id="editor-wrap">
+    <div id="tabs-bar"></div>
+    <div id="breadcrumb">Selecione um arquivo</div>
+    <div id="editor"></div>
+    <div id="welcome">
+      <div class="big">⚡</div>
+      <h2>ARES Editor</h2>
+      <p>Selecione um arquivo na árvore para editar.<br>Use <kbd>Ctrl+S</kbd> para salvar.</p>
+    </div>
+  </div>
+</div>
+
+<div id="statusbar">
+  <span class="sb-item" id="sb-lang">—</span>
+  <span class="sb-item" id="sb-lines">—</span>
+  <span class="sb-item green" id="sb-status">✓ pronto</span>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="overlay" id="modal-overlay">
+  <div class="modal">
+    <h3 id="modal-title">Novo Arquivo</h3>
+    <label id="modal-label">Nome do arquivo</label>
+    <input id="modal-input" type="text" autocomplete="off" spellcheck="false"/>
+    <div class="modal-btns">
+      <button class="mbtn-cancel" onclick="closeModal()">Cancelar</button>
+      <button class="mbtn-ok" onclick="modalConfirm()">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<div class="ctx-menu" id="ctx-menu">
+  <div class="ctx-item" onclick="ctxRename()">✏️ Renomear</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item danger" onclick="ctxDelete()">🗑️ Excluir</div>
+</div>
+
+<var require="{ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } }"></var>
+<script>var require={paths:{vs:'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs'}}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/editor/editor.main.nls.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/editor/editor.main.js"></script>
+<script>
+const BOT_ID = "${botId}"
+const API = "/files-api/" + BOT_ID
+
+let editor = null
+let currentFile = null
+let isDirty = false
+let modalAction = null
+let ctxTarget = null
+let tabs = [] // [{path, dirty}]
+let models = {} // path -> monaco model
+
+// ── Monaco
+editor = monaco.editor.create(document.getElementById("editor"), {
+  value: "",
+  language: "javascript",
+  theme: "vs-dark",
+  fontSize: 14,
+  automaticLayout: true,
+  minimap: { enabled: window.innerWidth > 900 },
+  scrollBeyondLastLine: false,
+  wordWrap: "on",
+  padding: { top: 12 },
+  renderLineHighlight: "all",
+  bracketPairColorization: { enabled: true },
+  smoothScrolling: true,
+  cursorSmoothCaretAnimation: "on"
+})
+
+// Aplicar tema escuro GitHub-like
+monaco.editor.defineTheme("ares-dark", {
+  base: "vs-dark",
+  inherit: true,
+  rules: [
+    {token:"comment", foreground:"8b949e", fontStyle:"italic"},
+    {token:"keyword", foreground:"ff7b72"},
+    {token:"string", foreground:"a5d6ff"},
+    {token:"number", foreground:"79c0ff"},
+    {token:"type", foreground:"ffa657"},
+    {token:"function", foreground:"d2a8ff"},
+  ],
+  colors: {
+    "editor.background": "#0d1117",
+    "editor.foreground": "#e6edf3",
+    "editor.lineHighlightBackground": "#161b22",
+    "editorLineNumber.foreground": "#3d444d",
+    "editorLineNumber.activeForeground": "#e6edf3",
+    "editor.selectionBackground": "#264f78",
+    "editorCursor.foreground": "#58a6ff",
+    "editorIndentGuide.background1": "#21262d",
+  }
+})
+monaco.editor.setTheme("ares-dark")
+
+document.getElementById("editor").style.display = "none"
+
+editor.onDidChangeModelContent(() => {
+  setDirty(true)
+})
+
+editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveFile)
+
+// ── Helpers lang
+function getExt(name) { const p=name.split("."); return p.length>1?p[p.length-1].toLowerCase():"" }
+function getLang(f) {
+  const m={js:"javascript",ts:"typescript",jsx:"javascript",tsx:"typescript",json:"json",
+    py:"python",md:"markdown",sh:"shell",bash:"shell",html:"html",css:"css",
+    scss:"scss",yml:"yaml",yaml:"yaml",txt:"plaintext",env:"plaintext",
+    sql:"sql",xml:"xml",php:"php",rb:"ruby",go:"go",rs:"rust",java:"java",
+    cpp:"cpp",c:"c",h:"c",cs:"csharp",kt:"kotlin",swift:"swift"}
+  return m[getExt(f)]||"plaintext"
+}
+function fileIcon(name) {
+  const ext=getExt(name)
+  const m={js:"🟨",ts:"🔷",jsx:"🟨",tsx:"🔷",json:"🟧",py:"🐍",md:"📝",html:"🌐",
+    css:"🎨",scss:"🎨",sh:"⚙️",env:"🔑",yml:"📋",yaml:"📋",sql:"🗄️",
+    png:"🖼️",jpg:"🖼️",jpeg:"🖼️",gif:"🖼️",svg:"🖼️",
+    zip:"📦",tar:"📦",gz:"📦",lock:"🔒",gitignore:"👁️"}
+  return m[ext]||"📄"
+}
+function dirIcon(open) { return open?"📂":"📁" }
+function escHtml(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+
+// ── Dirty state
+function setDirty(v) {
+  isDirty = v
+  const w = document.getElementById("unsaved-dot-wrap")
+  if (v) { w.removeAttribute("hidden") } else { w.setAttribute("hidden","") }
+  // atualiza tab
+  renderTabs()
+}
+
+// ── Tree
+let openDirs = new Set()
+
+function buildTreeHTML(items, depth) {
+  let h = ""
+  for (const item of items) {
+    const indent = depth * 14
+    if (item.type === "dir") {
+      const isOpen = openDirs.has(item.path)
+      h += \`<div class="ti" data-dir="\${escHtml(item.path)}" onclick="toggleDir(this,'\${escHtml(item.path)}')" oncontextmenu="showCtx(event,'\${escHtml(item.path)}',true)">
+        <div class="ti-indent" style="width:\${indent}px"></div>
+        <span class="ti-arrow \${isOpen?"open":""}">▶</span>
+        <span class="ti-icon">\${dirIcon(isOpen)}</span>
+        <span class="ti-name dir">\${escHtml(item.name)}</span>
+      </div>\`
+      if (isOpen && item.children.length) {
+        h += \`<div class="ti-children" data-dir-children="\${escHtml(item.path)}">\${buildTreeHTML(item.children, depth+1)}</div>\`
+      }
+    } else {
+      const active = currentFile === item.path ? " active" : ""
+      h += \`<div class="ti tree-file\${active}" data-path="\${escHtml(item.path)}" onclick="openFile('\${escHtml(item.path)}')" oncontextmenu="showCtx(event,'\${escHtml(item.path)}',false)">
+        <div class="ti-indent" style="width:\${indent+16}px"></div>
+        <span class="ti-arrow leaf">▶</span>
+        <span class="ti-icon">\${fileIcon(item.name)}</span>
+        <span class="ti-name">\${escHtml(item.name)}</span>
+      </div>\`
+    }
+  }
+  return h
+}
+
+function toggleDir(el, dirPath) {
+  if (openDirs.has(dirPath)) openDirs.delete(dirPath)
+  else openDirs.add(dirPath)
+  renderTree()
+}
+
+let treeData = []
+async function loadTree() {
+  const r = await fetch(API + "/tree")
+  treeData = await r.json()
+  renderTree()
+}
+
+function renderTree() {
+  document.getElementById("tree").innerHTML = buildTreeHTML(treeData, 0)
+}
+
+// ── Tabs
+function renderTabs() {
+  const bar = document.getElementById("tabs-bar")
+  if (tabs.length === 0) { bar.innerHTML = ""; return }
+  bar.innerHTML = tabs.map(t => {
+    const name = t.path.split("/").pop()
+    const active = t.path === currentFile ? " active" : ""
+    const dot = t.dirty ? \`<span class="tab-dot"></span>\` : \`<span class="tab-close" onclick="closeTab(event,'\${escHtml(t.path)}')">✕</span>\`
+    return \`<div class="tab\${active}" onclick="switchTab('\${escHtml(t.path)}')" title="\${escHtml(t.path)}">
+      <span>\${escHtml(fileIcon(name))} \${escHtml(name)}</span>
+      \${dot}
+    </div>\`
+  }).join("")
+}
+
+function switchTab(filePath) {
+  if (filePath === currentFile) return
+  openFile(filePath)
+}
+
+function closeTab(e, filePath) {
+  e.stopPropagation()
+  const tab = tabs.find(t => t.path === filePath)
+  if (tab && tab.dirty) {
+    if (!confirm("Fechar sem salvar?")) return
+  }
+  tabs = tabs.filter(t => t.path !== filePath)
+  if (models[filePath]) { models[filePath].dispose(); delete models[filePath] }
+  if (currentFile === filePath) {
+    if (tabs.length) openFile(tabs[tabs.length-1].path)
+    else {
+      currentFile = null
+      isDirty = false
+      editor.setValue("")
+      document.getElementById("editor").style.display = "none"
+      document.getElementById("welcome").style.display = "flex"
+      document.getElementById("btn-save").setAttribute("hidden","")
+      document.getElementById("btn-delete").setAttribute("hidden","")
+      document.getElementById("btn-rename").setAttribute("hidden","")
+      document.getElementById("unsaved-dot-wrap").setAttribute("hidden","")
+      document.getElementById("breadcrumb").textContent = "Selecione um arquivo"
+      document.getElementById("sb-lang").textContent = "—"
+    }
+  }
+  renderTabs()
+}
+
+// ── Open file
+async function openFile(filePath) {
+  // Se tem dirty e é arquivo diferente, pede confirmação só se não tiver tab
+  const existingTab = tabs.find(t => t.path === filePath)
+
+  if (!existingTab) {
+    const r = await fetch(API + "/read?path=" + encodeURIComponent(filePath))
+    if (!r.ok) { toast("Erro ao abrir arquivo", "err"); return }
+    const text = await r.text()
+
+    // Cria model monaco
+    const model = monaco.editor.createModel(text, getLang(filePath))
+    models[filePath] = model
+    tabs.push({ path: filePath, dirty: false })
+  }
+
+  currentFile = filePath
+  isDirty = false
+  editor.setModel(models[filePath])
+
+  document.getElementById("editor").style.display = "block"
+  document.getElementById("welcome").style.display = "none"
+  document.getElementById("btn-save").removeAttribute("hidden")
+  document.getElementById("btn-delete").removeAttribute("hidden")
+  document.getElementById("btn-rename").removeAttribute("hidden")
+
+  // breadcrumb
+  const parts = filePath.split("/")
+  document.getElementById("breadcrumb").innerHTML = parts.map((p,i) =>
+    i < parts.length-1
+      ? \`<span>\${escHtml(p)}</span><span class="bc-sep"> / </span>\`
+      : \`<span>\${escHtml(p)}</span>\`
+  ).join("")
+
+  // status bar
+  document.getElementById("sb-lang").textContent = getLang(filePath)
+  updateSbLines()
+
+  setDirty(false)
+  renderTree()
+  renderTabs()
+  editor.focus()
+}
+
+function updateSbLines() {
+  if (!editor.getModel()) return
+  const lines = editor.getModel().getLineCount()
+  document.getElementById("sb-lines").textContent = lines + " linhas"
+}
+
+editor.onDidChangeCursorPosition(updateSbLines)
+
+// ── Save
+async function saveFile() {
+  if (!currentFile) return
+  const content = editor.getValue()
+  document.getElementById("sb-status").textContent = "💾 salvando..."
+  const r = await fetch(API + "/write", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ path: currentFile, content })
+  })
+  if (r.ok) {
+    const tab = tabs.find(t => t.path === currentFile)
+    if (tab) tab.dirty = false
+    setDirty(false)
+    document.getElementById("sb-status").textContent = "✓ salvo"
+    toast("✅ Arquivo salvo!", "ok")
+  } else {
+    document.getElementById("sb-status").textContent = "✗ erro"
+    toast("❌ Erro ao salvar", "err")
+  }
+}
+
+// ── Delete
+async function deleteFile() {
+  if (!currentFile) return
+  if (!confirm(\`Excluir "\${currentFile}"? Não pode ser desfeito.\`)) return
+  const r = await fetch(API + "/delete", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ path: currentFile })
+  })
+  if (r.ok) {
+    toast("🗑️ Excluído!", "ok")
+    closeTab({stopPropagation:()=>{}}, currentFile)
+    await loadTree()
+  } else toast("❌ Erro ao excluir", "err")
+}
+
+// ── New file
+function newFile() {
+  const folder = currentFile ? currentFile.split("/").slice(0,-1).join("/") : ""
+  openModal("Novo Arquivo", "arquivo.js", "Nome do arquivo:", async name => {
+    const p = folder ? folder + "/" + name : name
+    const r = await fetch(API + "/write", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({path:p, content:""})
+    })
+    if (r.ok) { await loadTree(); openFile(p); toast("✅ Arquivo criado!", "ok") }
+    else toast("❌ Erro", "err")
+  })
+}
+
+function newFolder() {
+  const folder = currentFile ? currentFile.split("/").slice(0,-1).join("/") : ""
+  openModal("Nova Pasta", "pasta", "Nome da pasta:", async name => {
+    const p = folder ? folder + "/" + name : name
+    const r = await fetch(API + "/mkdir", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({path:p})
+    })
+    if (r.ok) { await loadTree(); toast("✅ Pasta criada!", "ok") }
+    else toast("❌ Erro", "err")
+  })
+}
+
+function renameFile() {
+  if (!currentFile) return
+  const parts = currentFile.split("/")
+  openModal("Renomear", parts[parts.length-1], "Novo nome:", async newName => {
+    const newPath = [...parts.slice(0,-1), newName].join("/")
+    const r = await fetch(API + "/rename", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({from: currentFile, to: newPath})
+    })
+    if (r.ok) {
+      // atualiza tab e model
+      const tab = tabs.find(t => t.path === currentFile)
+      if (tab) tab.path = newPath
+      if (models[currentFile]) { models[newPath] = models[currentFile]; delete models[currentFile] }
+      currentFile = newPath
+      await loadTree(); openFile(newPath); toast("✅ Renomeado!", "ok")
+    } else toast("❌ Erro", "err")
+  })
+}
+
+// ── Context menu
+function showCtx(e, itemPath, isDir) {
+  e.preventDefault()
+  e.stopPropagation()
+  ctxTarget = {path: itemPath, isDir}
+  const m = document.getElementById("ctx-menu")
+  m.style.left = e.clientX + "px"
+  m.style.top = e.clientY + "px"
+  m.classList.add("show")
+}
+function ctxRename() {
+  closeCtx()
+  if (!ctxTarget) return
+  const parts = ctxTarget.path.split("/")
+  openModal("Renomear", parts[parts.length-1], "Novo nome:", async newName => {
+    const newPath = [...parts.slice(0,-1), newName].join("/")
+    const r = await fetch(API + "/rename", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({from: ctxTarget.path, to: newPath})
+    })
+    if (r.ok) {
+      if (currentFile === ctxTarget.path) {
+        const tab = tabs.find(t => t.path === currentFile)
+        if (tab) tab.path = newPath
+        if (models[currentFile]) { models[newPath]=models[currentFile]; delete models[currentFile] }
+        currentFile = newPath
+      }
+      await loadTree()
+      toast("✅ Renomeado!", "ok")
+    } else toast("❌ Erro", "err")
+  })
+}
+function ctxDelete() {
+  closeCtx()
+  if (!ctxTarget) return
+  if (!confirm(\`Excluir "\${ctxTarget.path}"? Não pode ser desfeito.\`)) return
+  fetch(API + "/delete", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({path: ctxTarget.path})
+  }).then(r => {
+    if (r.ok) {
+      if (!ctxTarget.isDir) closeTab({stopPropagation:()=>{}}, ctxTarget.path)
+      loadTree()
+      toast("🗑️ Excluído!", "ok")
+    } else toast("❌ Erro", "err")
+  })
+}
+function closeCtx() { document.getElementById("ctx-menu").classList.remove("show") }
+document.addEventListener("click", closeCtx)
+
+// ── Modal
+function openModal(title, placeholder, label, cb) {
+  modalAction = cb
+  document.getElementById("modal-title").textContent = title
+  document.getElementById("modal-label").textContent = label
+  document.getElementById("modal-input").value = ""
+  document.getElementById("modal-input").placeholder = placeholder
+  document.getElementById("modal-overlay").classList.add("show")
+  setTimeout(() => document.getElementById("modal-input").focus(), 50)
+}
+function closeModal() {
+  document.getElementById("modal-overlay").classList.remove("show")
+  modalAction = null
+}
+function modalConfirm() {
+  const v = document.getElementById("modal-input").value.trim()
+  if (!v) return
+  closeModal()
+  if (modalAction) modalAction(v)
+}
+document.getElementById("modal-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") modalConfirm()
+  if (e.key === "Escape") closeModal()
+})
+document.getElementById("modal-overlay").addEventListener("click", e => {
+  if (e.target === document.getElementById("modal-overlay")) closeModal()
+})
+
+// ── Toast
+function toast(msg, type) {
+  const t = document.getElementById("toast")
+  t.textContent = msg
+  t.className = "toast show " + (type||"")
+  clearTimeout(t._t)
+  t._t = setTimeout(() => t.className = "toast", 2500)
+}
+
+// ── Init
+loadTree()
+</script>
+</body>
+</html>`)
+})
+
+// ─── API de Arquivos ──────────────────────────
+
+const filesApiRouter = express.Router()
+
+filesApiRouter.get("/tree", (req, res) => {
+  const botId = req.botId
+  const botPath = path.join(BASE_PATH, botId)
+  if (!fs.existsSync(botPath)) return res.status(404).json([])
+  res.json(walkDir(botPath, ""))
+})
+
+filesApiRouter.get("/read", (req, res) => {
+  const botPath = path.join(BASE_PATH, req.botId)
+  const filePath = path.normalize(path.join(botPath, req.query.path || ""))
+  if (!filePath.startsWith(botPath)) return res.status(403).send("Proibido")
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory())
+    return res.status(404).send("Não encontrado")
+  res.setHeader("Content-Type", "text/plain; charset=utf-8")
+  res.send(fs.readFileSync(filePath, "utf8"))
+})
+
+filesApiRouter.post("/write", express.json(), (req, res) => {
+  const botPath = path.join(BASE_PATH, req.botId)
+  const filePath = path.normalize(path.join(botPath, req.body.path || ""))
+  if (!filePath.startsWith(botPath)) return res.status(403).send("Proibido")
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, req.body.content || "")
+  res.send("ok")
+})
+
+filesApiRouter.post("/delete", express.json(), (req, res) => {
+  const botPath = path.join(BASE_PATH, req.botId)
+  const filePath = path.normalize(path.join(botPath, req.body.path || ""))
+  if (!filePath.startsWith(botPath)) return res.status(403).send("Proibido")
+  if (!fs.existsSync(filePath)) return res.status(404).send("Não encontrado")
+  if (fs.statSync(filePath).isDirectory()) fs.rmSync(filePath, { recursive: true, force: true })
+  else fs.unlinkSync(filePath)
+  res.send("ok")
+})
+
+filesApiRouter.post("/mkdir", express.json(), (req, res) => {
+  const botPath = path.join(BASE_PATH, req.botId)
+  const dirPath = path.normalize(path.join(botPath, req.body.path || ""))
+  if (!dirPath.startsWith(botPath)) return res.status(403).send("Proibido")
+  fs.mkdirSync(dirPath, { recursive: true })
+  res.send("ok")
+})
+
+filesApiRouter.post("/rename", express.json(), (req, res) => {
+  const botPath = path.join(BASE_PATH, req.botId)
+  const from = path.normalize(path.join(botPath, req.body.from || ""))
+  const to   = path.normalize(path.join(botPath, req.body.to   || ""))
+  if (!from.startsWith(botPath) || !to.startsWith(botPath)) return res.status(403).send("Proibido")
+  if (!fs.existsSync(from)) return res.status(404).send("Não encontrado")
+  fs.renameSync(from, to)
+  res.send("ok")
+})
+
+// Monta rotas extraindo botId manualmente do URL
+app.use("/files-api", (req, res, next) => {
+  const m = req.path.match(/^\/([^/]+)(\/.*)?$/)
+  if (!m) return res.status(400).send("Bad request")
+  req.botId = m[1]
+  req.url = m[2] || "/"
+  filesApiRouter(req, res, next)
+})
+
+// Rota principal do editor — extrai botId manualmente
+app.use("/files", (req, res, next) => {
+  const m = req.path.match(/^\/([^/]+)\/?$/)
+  if (!m) return next()
+  req.params = { botId: m[1] }
+  filesRouter(req, res, next)
+})
+
 process.on("uncaughtException", err => {
   if (err.code !== "EADDRINUSE") console.error(err)
 })
