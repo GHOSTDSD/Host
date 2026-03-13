@@ -10,7 +10,7 @@ const socketIo = require("socket.io")
 const https = require("https")
 const { EventEmitter } = require("events")
 const multer = require("multer")
-const { execFile, execSync } = require("child_process")
+const { execFile, execSync, exec } = require("child_process")
 const crypto = require("crypto")
 
 EventEmitter.defaultMaxListeners = 200
@@ -175,7 +175,50 @@ function aresBanner() {
 💿 DISCO: ${diskUsage}\n`)
 }
 
-// ─── Cache de node_modules ────────────────────
+// ─── Cache de node_modules com suporte a módulos nativos ─────────
+
+function checkNativeModules(nodeModulesPath) {
+  const nativeModules = ['sqlite3', 'bcrypt', 'sharp', 'canvas', 'grpc', 'better-sqlite3', 'utf-8-validate', 'bufferutil', 'fsevents']
+  
+  for (const mod of nativeModules) {
+    const modPath = path.join(nodeModulesPath, mod)
+    if (fs.existsSync(modPath)) {
+      // Verifica se existem arquivos .node (módulos nativos compilados)
+      const files = fs.readdirSync(modPath, { recursive: true, withFileTypes: true })
+      for (const file of files) {
+        if (file.isFile() && file.name.endsWith('.node')) {
+          return true // Precisa recompilar
+        }
+      }
+    }
+  }
+  return false
+}
+
+function rebuildNativeModules(instancePath) {
+  return new Promise((resolve) => {
+    console.log(`🔄 Recompilando módulos nativos em ${instancePath}`)
+    
+    const env = {
+      ...process.env,
+      NODE_ENV: "production",
+      npm_config_force: "true"
+    }
+    
+    // Tenta rebuild com npm rebuild
+    const rebuild = pty.spawn(
+      os.platform() === "win32" ? "npm.cmd" : "npm",
+      ["rebuild"],
+      { name: "xterm-color", cols: 80, rows: 40, cwd: instancePath, env }
+    )
+    
+    rebuild.onData(d => process.stdout.write(d))
+    rebuild.onExit(() => {
+      console.log(`✅ Rebuild concluído em ${instancePath}`)
+      resolve()
+    })
+  })
+}
 
 function getCachedNodeModules(instancePath, packageJsonPath) {
   if (!fs.existsSync(packageJsonPath)) return false
@@ -190,28 +233,22 @@ function getCachedNodeModules(instancePath, packageJsonPath) {
   // Se cache existe, usa ele
   if (fs.existsSync(cachePath)) {
     try {
-      // No Windows, usa cópia
-      if (os.platform() === "win32") {
-        if (!fs.existsSync(nodeModulesPath)) {
-          fs.cpSync(cachePath, nodeModulesPath, { 
-            recursive: true,
-            force: false,
-            errorOnExist: false
-          })
-        }
-      } else {
-        // Unix: usa symlink
-        if (!fs.existsSync(nodeModulesPath)) {
-          fs.symlinkSync(cachePath, nodeModulesPath, 'dir')
-        }
+      // Remove node_modules existente se houver
+      if (fs.existsSync(nodeModulesPath)) {
+        fs.rmSync(nodeModulesPath, { recursive: true, force: true })
       }
+      
+      // Copia o cache (sempre cópia, não symlink, para módulos nativos)
+      fs.cpSync(cachePath, nodeModulesPath, { 
+        recursive: true,
+        force: true,
+        dereference: true
+      })
+      
       return true
     } catch (e) {
-      // Fallback para cópia
-      if (!fs.existsSync(nodeModulesPath)) {
-        fs.cpSync(cachePath, nodeModulesPath, { recursive: true })
-      }
-      return true
+      console.error("Erro ao usar cache:", e)
+      return false
     }
   }
   
@@ -279,9 +316,23 @@ function detectStart(instancePath) {
   return null
 }
 
-function spawnBot(botId, instancePath) {
+function runInstance(botId, instancePath, botPort, env, start) {
+  const child = pty.spawn(start.cmd, start.args, {
+    name: "xterm-color", cols: 80, rows: 40, cwd: instancePath, env
+  })
+  activeBots[botId] = { process: child, port: botPort, path: instancePath }
+  child.onData(d => writeLog(botId, instancePath, d))
+  child.onExit(() => {
+    releasePort(botPort)
+    delete activeBots[botId]
+    aresBanner()
+  })
+  aresBanner()
+}
+
+async function spawnBot(botId, instancePath) {
   if (activeBots[botId]) {
-    activeBots[botId].process.kill()
+    try { activeBots[botId].process.kill() } catch {}
     delete activeBots[botId]
   }
 
@@ -311,6 +362,8 @@ function spawnBot(botId, instancePath) {
     return
   }
 
+  const runWithStart = () => runInstance(botId, instancePath, botPort, env, start)
+
   if (fs.existsSync(path.join(instancePath, "package.json"))) {
     const packagePath = path.join(instancePath, "package.json")
     
@@ -331,39 +384,45 @@ function spawnBot(botId, instancePath) {
       )
       
       install.onData(d => writeLog(botId, instancePath, d))
-      install.onExit(() => {
+      install.onExit(async () => {
+        // Verifica se precisa recompilar módulos nativos
+        const nm = path.join(instancePath, 'node_modules')
+        if (fs.existsSync(nm)) {
+          const needsRebuild = checkNativeModules(nm)
+          if (needsRebuild) {
+            writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n")
+            await rebuildNativeModules(instancePath)
+          }
+        }
+        
         // Cacheia após instalação
         const hash = crypto.createHash('md5')
           .update(fs.readFileSync(packagePath, 'utf8')).digest('hex')
         const cachePath = path.join(CACHE_DIR, hash)
-        const nm = path.join(instancePath, 'node_modules')
         
         if (fs.existsSync(nm) && !fs.existsSync(cachePath)) {
           fs.cpSync(nm, cachePath, { recursive: true })
         }
-        runInstance(botId, instancePath, botPort, env, start)
+        runWithStart()
       })
     } else {
       writeLog(botId, instancePath, "✅ Usando node_modules em cache\r\n")
-      runInstance(botId, instancePath, botPort, env, start)
+      
+      // Verifica se precisa recompilar módulos nativos
+      const nm = path.join(instancePath, 'node_modules')
+      if (fs.existsSync(nm)) {
+        const needsRebuild = checkNativeModules(nm)
+        if (needsRebuild) {
+          writeLog(botId, instancePath, "🔄 Recompilando módulos nativos do cache...\r\n")
+          await rebuildNativeModules(instancePath)
+        }
+      }
+      
+      runWithStart()
     }
   } else {
-    runInstance(botId, instancePath, botPort, env, start)
+    runWithStart()
   }
-}
-
-function runInstance(botId, instancePath, botPort, env, start) {
-  const child = pty.spawn(start.cmd, start.args, {
-    name: "xterm-color", cols: 80, rows: 40, cwd: instancePath, env
-  })
-  activeBots[botId] = { process: child, port: botPort, path: instancePath }
-  child.onData(d => writeLog(botId, instancePath, d))
-  child.onExit(() => {
-    releasePort(botPort)
-    delete activeBots[botId]
-    aresBanner()
-  })
-  aresBanner()
 }
 
 io.on("connection", socket => {
@@ -772,7 +831,7 @@ bot.onText(/^\/updateWarn (.+)/s, async msg => {
   )
 })
 
-// ─── Limpeza Inteligente ─────────────────────
+// ─── Funções para limpeza ─────────────────────
 
 function getFolderSize(folder) {
   let size = 0
@@ -795,6 +854,70 @@ function getLastAccessed(folder) {
     return 0
   }
 }
+
+// ─── Limpeza forçada (emergência) ────────────
+
+bot.onText(/^\/limpeza_forcada$/, async msg => {
+  const chatId = msg.chat.id
+  if (!isAdmin(chatId)) return
+
+  const statusMsg = await bot.sendMessage(chatId, "🧹 *Limpeza forçada em andamento...*", { parse_mode: "Markdown" })
+  
+  let total = 0
+  
+  // Para todos os bots
+  Object.keys(activeBots).forEach(botId => {
+    try { activeBots[botId].process.kill() } catch {}
+    delete activeBots[botId]
+  })
+  
+  // Remove node_modules de TODOS os bots
+  const bots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_cache_node_modules")
+  for (const botId of bots) {
+    const nm = path.join(BASE_PATH, botId, "node_modules")
+    if (fs.existsSync(nm)) {
+      const size = getFolderSize(nm)
+      fs.rmSync(nm, { recursive: true, force: true })
+      total += size
+      console.log(`🗑️ Removido node_modules de ${botId} (${size.toFixed(0)} MB)`)
+    }
+  }
+  
+  // Limpa cache inteiro
+  if (fs.existsSync(CACHE_DIR)) {
+    const cacheSize = getFolderSize(CACHE_DIR)
+    fs.rmSync(CACHE_DIR, { recursive: true, force: true })
+    fs.mkdirSync(CACHE_DIR, { recursive: true })
+    total += cacheSize
+    console.log(`🗑️ Removido cache (${cacheSize.toFixed(0)} MB)`)
+  }
+  
+  // Limpa logs
+  for (const botId of bots) {
+    const logPath = path.join(BASE_PATH, botId, "terminal.log")
+    if (fs.existsSync(logPath)) {
+      const size = fs.statSync(logPath).size / 1024 / 1024
+      fs.unlinkSync(logPath)
+      total += size
+    }
+  }
+  
+  await bot.editMessageText(
+    `✅ *Limpeza forçada concluída!*\n\n` +
+    `💾 Espaço liberado: *${total.toFixed(0)} MB*\n\n` +
+    `_Reiniciando bots em 3 segundos..._`,
+    { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: "Markdown" }
+  )
+  
+  // Reinicia todos
+  setTimeout(() => {
+    bots.forEach((botId, i) => {
+      setTimeout(() => spawnBot(botId, path.join(BASE_PATH, botId)), i * 2000)
+    })
+  }, 3000)
+})
+
+// ─── Limpeza normal ─────────────────────────
 
 bot.onText(/^\/limpeza$/, async msg => {
   const chatId = msg.chat.id
