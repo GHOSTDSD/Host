@@ -10,10 +10,12 @@ const socketIo = require("socket.io")
 const https = require("https")
 const { EventEmitter } = require("events")
 const multer = require("multer")
+const { execFile } = require("child_process")
 
 EventEmitter.defaultMaxListeners = 200
 
 const TOKEN = "8588565134:AAFez1RxFHhsUm1j7-spZxh4gCfiKxuqoeM"
+const ADMIN_ID = process.env.ADMIN_ID || ""
 const PORT = process.env.PORT || 3000
 const DOMAIN = process.env.RAILWAY_STATIC_URL
   ? `https://${process.env.RAILWAY_STATIC_URL}`
@@ -399,6 +401,153 @@ bot.on("message", async msg => {
       `❌ Erro ao baixar: ${err.message}`,
       { chat_id: loadingMsg.chat.id, message_id: loadingMsg.message_id }
     )
+  }
+})
+
+// ─── Exportar / Importar instâncias ───────────
+
+function isAdmin(chatId) {
+  return !ADMIN_ID || String(chatId) === String(ADMIN_ID)
+}
+
+bot.onText(/^\/exportar$/, async msg => {
+  const chatId = msg.chat.id
+  if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ Sem permissão.")
+
+  const bots = fs.existsSync(BASE_PATH)
+    ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads")
+    : []
+
+  if (!bots.length) return bot.sendMessage(chatId, "📭 Nenhum bot para exportar.")
+
+  const statusMsg = await bot.sendMessage(chatId,
+    `⏳ Exportando *${bots.length}* bot(s)...`,
+    { parse_mode: "Markdown" }
+  )
+
+  const zipPath = path.join(os.tmpdir(), `ares_backup_${Date.now()}.zip`)
+
+  execFile("zip", ["-r", zipPath, "."], { cwd: BASE_PATH }, async (err) => {
+    if (err) {
+      return bot.editMessageText("❌ Erro ao criar backup: " + err.message, {
+        chat_id: chatId, message_id: statusMsg.message_id
+      })
+    }
+
+    const sizeMB = (fs.statSync(zipPath).size / 1024 / 1024).toFixed(1)
+
+    try {
+      await bot.editMessageText(
+        `✅ Backup gerado (${sizeMB} MB), enviando...`,
+        { chat_id: chatId, message_id: statusMsg.message_id }
+      )
+      await bot.sendDocument(chatId, zipPath, {
+        caption:
+          `📦 *ARES Backup*\n` +
+          `🤖 ${bots.length} bot(s) exportados\n` +
+          `💾 ${sizeMB} MB\n\n` +
+          `Para restaurar na nova conta: use /importar e envie este arquivo.`,
+        parse_mode: "Markdown"
+      })
+    } catch (e) {
+      bot.sendMessage(chatId, "❌ Erro ao enviar arquivo: " + e.message)
+    } finally {
+      try { fs.unlinkSync(zipPath) } catch {}
+    }
+  })
+})
+
+// Aguarda ZIP de importação
+const importPending = {}
+
+bot.onText(/^\/importar$/, async msg => {
+  const chatId = msg.chat.id
+  if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ Sem permissão.")
+  importPending[chatId] = true
+  bot.sendMessage(chatId,
+    `📥 *Importar Backup*\n\n` +
+    `Envie agora o arquivo .zip gerado pelo /exportar.\n\n` +
+    `⚠️ Bots que já existem aqui *não* serão sobrescritos.`,
+    { parse_mode: "Markdown" }
+  )
+})
+
+// Handler de documento — verifica se é importação pendente
+const _origDocHandler = []
+bot.on("document", async msg => {
+  const chatId = msg.chat.id
+  if (!importPending[chatId]) return  // outros handlers cuidam do resto
+
+  if (!msg.document.file_name.toLowerCase().endsWith(".zip")) {
+    return bot.sendMessage(chatId, "❌ Envie um arquivo .zip gerado pelo /exportar.")
+  }
+
+  delete importPending[chatId]
+
+  const statusMsg = await bot.sendMessage(chatId, "⏳ Processando backup...", { parse_mode: "Markdown" })
+
+  const tmpZip = path.join(os.tmpdir(), `ares_import_${Date.now()}.zip`)
+  const tmpDir = path.join(os.tmpdir(), `ares_import_${Date.now()}`)
+
+  try {
+    // Download do arquivo
+    const fileInfo = await bot.getFile(msg.document.file_id)
+    const fileUrl  = `https://api.telegram.org/file/bot${TOKEN}/${fileInfo.file_path}`
+    await downloadFile(fileUrl, tmpZip)
+
+    // Extrai para pasta temp
+    fs.mkdirSync(tmpDir, { recursive: true })
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(tmpZip)
+        .pipe(unzipper.Extract({ path: tmpDir }))
+        .on("close", resolve)
+        .on("error", reject)
+    })
+
+    // Copia bots que não existem ainda
+    const entries = fs.readdirSync(tmpDir)
+    let restored = 0, skipped = 0
+
+    for (const name of entries) {
+      if (name === "_uploads") continue
+      const src  = path.join(tmpDir, name)
+      const dest = path.join(BASE_PATH, name)
+      if (!fs.statSync(src).isDirectory()) continue
+
+      if (fs.existsSync(dest)) { skipped++; continue }
+
+      // Copia pasta do bot
+      fs.mkdirSync(dest, { recursive: true })
+      const subEntries = fs.readdirSync(src)
+      for (const f of subEntries) {
+        execFile("cp", ["-r", path.join(src, f), dest])
+      }
+      restored++
+    }
+
+    await bot.editMessageText(
+      `✅ *Importação concluída!*\n\n` +
+      `📦 Restaurados: *${restored}* bot(s)\n` +
+      `⏭️ Ignorados (já existiam): *${skipped}*\n\n` +
+      `Iniciando bots restaurados...`,
+      { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: "Markdown" }
+    )
+
+    // Lança todos os bots que ainda não estão ativos
+    const allBots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads")
+    allBots.forEach((botId, i) => {
+      if (!activeBots[botId]) {
+        setTimeout(() => spawnBot(botId, path.join(BASE_PATH, botId)), i * 1500)
+      }
+    })
+
+  } catch (e) {
+    bot.editMessageText("❌ Erro na importação: " + e.message, {
+      chat_id: chatId, message_id: statusMsg.message_id
+    })
+  } finally {
+    try { fs.unlinkSync(tmpZip) } catch {}
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
   }
 })
 
