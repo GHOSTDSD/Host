@@ -86,7 +86,8 @@ function getUserBots(chatId) {
   if (!fs.existsSync(BASE_PATH)) return []
   return fs.readdirSync(BASE_PATH).filter(f => {
     if (f === "_uploads" || f === "_cache_node_modules") return false
-    return getOwner(f) === String(chatId)
+    const owner = getOwner(f)
+    return owner === String(chatId)
   })
 }
 
@@ -136,8 +137,15 @@ function getFreePort() {
 
 function releasePort(port) { usedPorts.delete(port) }
 
-function getStats(chatId) {
-  const bots = chatId ? getUserBots(chatId) : (fs.existsSync(BASE_PATH) ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_cache_node_modules") : [])
+function getStats(chatId = null) {
+  let bots = []
+  if (chatId) {
+    bots = getUserBots(chatId)
+  } else {
+    bots = fs.existsSync(BASE_PATH) 
+      ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_cache_node_modules") 
+      : []
+  }
   const total = bots.length
   const online = bots.filter(f => !!activeBots[f]).length
   const ram = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
@@ -179,17 +187,14 @@ function getCachedNodeModules(instancePath, packageJsonPath) {
   
   const nodeModulesPath = path.join(instancePath, 'node_modules')
   
-  // Se cache existe, cria symlink
+  // Se cache existe, usa ele
   if (fs.existsSync(cachePath)) {
     try {
-      // No Windows, tenta criar diretório e copiar se symlink falhar
+      // No Windows, usa cópia
       if (os.platform() === "win32") {
         if (!fs.existsSync(nodeModulesPath)) {
-          fs.mkdirSync(nodeModulesPath, { recursive: true })
-          // Copia de forma eficiente (hard links no Windows é complicado)
           fs.cpSync(cachePath, nodeModulesPath, { 
             recursive: true,
-            dereference: true,
             force: false,
             errorOnExist: false
           })
@@ -220,7 +225,7 @@ function writeLog(botId, instancePath, data) {
     logBuffers[botId] = []
     
     // Escreve no disco a cada 5 segundos
-    setInterval(() => {
+    const interval = setInterval(() => {
       if (logBuffers[botId] && logBuffers[botId].length > 0) {
         const logPath = path.join(instancePath, "terminal.log")
         const content = logBuffers[botId].join('')
@@ -237,6 +242,12 @@ function writeLog(botId, instancePath, data) {
           }
         } catch {}
         io.emit("log-" + botId, content)
+      }
+      
+      // Limpa intervalo se bot não existir mais
+      if (!activeBots[botId] && (!logBuffers[botId] || logBuffers[botId].length === 0)) {
+        clearInterval(interval)
+        delete logBuffers[botId]
       }
     }, LOG_CONFIG.BUFFER_TIME)
   }
@@ -269,7 +280,10 @@ function detectStart(instancePath) {
 }
 
 function spawnBot(botId, instancePath) {
-  if (activeBots[botId]) activeBots[botId].process.kill()
+  if (activeBots[botId]) {
+    activeBots[botId].process.kill()
+    delete activeBots[botId]
+  }
 
   const botPort = getFreePort()
   const env = {
@@ -347,7 +361,6 @@ function runInstance(botId, instancePath, botPort, env, start) {
   child.onExit(() => {
     releasePort(botPort)
     delete activeBots[botId]
-    // NÃO remove node_modules ao parar - mantém para cache
     aresBanner()
   })
   aresBanner()
@@ -446,7 +459,7 @@ bot.onText(/\/start/, async msg => {
   const s = getStats(chatId)
   bot.sendMessage(chatId,
     `🚀 *ARES HOST*\n\n` +
-    `🤖 Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
+    `🤖 Seus Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
     `💾 RAM: *${s.ram}MB*  |  ⏱ Uptime: *${s.uptime}*`,
     {
       parse_mode: "Markdown",
@@ -540,8 +553,16 @@ function extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg) {
 // ─── Receber ZIP (upload direto) ──────────────
 
 bot.on("document", async msg => {
+  const chatId = msg.chat.id
+  
+  // Verifica termos primeiro
+  if (!hasAccepted(chatId)) {
+    termoCheck[chatId] = false
+    return sendTermos(chatId, false)
+  }
+  
   if (!msg.document.file_name.toLowerCase().endsWith(".zip")) {
-    return bot.sendMessage(msg.chat.id,
+    return bot.sendMessage(chatId,
       "⚠️ *Arquivo invalido!*\n\nEnvie um arquivo .zip com o codigo do bot.",
       { parse_mode: "Markdown" }
     )
@@ -549,7 +570,7 @@ bot.on("document", async msg => {
 
   const fileSizeMB = (msg.document.file_size / 1024 / 1024).toFixed(1)
   if (msg.document.file_size > 20 * 1024 * 1024) {
-    return bot.sendMessage(msg.chat.id,
+    return bot.sendMessage(chatId,
       `❌ *Arquivo muito grande (${fileSizeMB}MB)*\n\n` +
       "O Telegram tem limite de 20MB para upload.\n\n" +
       "Envie um *link direto* para o ZIP:\n" +
@@ -560,8 +581,8 @@ bot.on("document", async msg => {
     )
   }
 
-  userState[msg.chat.id] = { fileId: msg.document.file_id }
-  bot.sendMessage(msg.chat.id,
+  userState[chatId] = { fileId: msg.document.file_id }
+  bot.sendMessage(chatId,
     `✅ *ZIP recebido* (${fileSizeMB}MB)\n\nAgora envie um *nome* para o bot:\n(ex: meubot, vendas, suporte)`,
     { parse_mode: "Markdown" }
   )
@@ -581,6 +602,7 @@ bot.on("message", async msg => {
 
   const state = userState[chatId]
 
+  // Sem estado ativo: verificar se é um link de ZIP
   if (!state || (!state.fileId && !state.linkUrl)) {
     const text = msg.text?.trim() || ""
     const isLink = /^https?:\/\/.+\.zip(\?.*)?$/i.test(text) || /^https?:\/\//i.test(text)
@@ -594,6 +616,7 @@ bot.on("message", async msg => {
     return
   }
 
+  // Já tem estado mas ainda sem nome
   if (state.botName) return
 
   const name = msg.text.trim().replace(/\s+/g, "_").toLowerCase()
@@ -615,6 +638,7 @@ bot.on("message", async msg => {
   const zipPath = path.join(instancePath, "bot.zip")
 
   try {
+    // Download via link direto
     if (state.linkUrl) {
       delete userState[chatId]
       await downloadFile(state.linkUrl, zipPath)
@@ -622,6 +646,7 @@ bot.on("message", async msg => {
       return
     }
 
+    // Download via Telegram
     delete userState[chatId]
     const file = await bot.getFile(state.fileId)
     await downloadFile(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, zipPath)
@@ -781,7 +806,6 @@ bot.onText(/^\/limpeza$/, async msg => {
 
   let freed = 0
   let totalMB = 0
-  const stats = {}
 
   for (const botId of bots) {
     if (activeBots[botId]) continue
@@ -842,7 +866,10 @@ bot.onText(/^\/exportar$/, async msg => {
   const chatId = msg.chat.id
   if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ Sem permissão.")
 
-  const bots = getUserBots(chatId)
+  const bots = fs.existsSync(BASE_PATH)
+    ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_cache_node_modules")
+    : []
+
   if (!bots.length) return bot.sendMessage(chatId, "📭 Nenhum bot para exportar.")
 
   const statusMsg = await bot.sendMessage(chatId,
@@ -853,7 +880,7 @@ bot.onText(/^\/exportar$/, async msg => {
   const zipPath = path.join(os.tmpdir(), `ares_backup_${Date.now()}.zip`)
 
   // Exclui node_modules do backup e usa compressão máxima
-  execFile("zip", ["-r", "-9", zipPath, ".", "-x", "*/node_modules/*" "-x", "*/.git/*"], 
+  execFile("zip", ["-r", "-9", zipPath, ".", "-x", "*/node_modules/*", "-x", "*/.git/*"], 
     { cwd: BASE_PATH, maxBuffer: 1024 * 1024 * 500 }, async (err) => {
       if (err) {
         return bot.editMessageText("❌ Erro ao criar backup: " + err.message, {
@@ -901,79 +928,99 @@ bot.onText(/^\/importar$/, async msg => {
   )
 })
 
+// Handler de documento — verifica se é importação pendente
 bot.on("document", async msg => {
   const chatId = msg.chat.id
-  if (!importPending[chatId]) return
-
-  if (!msg.document.file_name.toLowerCase().endsWith(".zip")) {
-    return bot.sendMessage(chatId, "❌ Envie um arquivo .zip gerado pelo /exportar.")
-  }
-
-  delete importPending[chatId]
-
-  const statusMsg = await bot.sendMessage(chatId, "⏳ Processando backup...", { parse_mode: "Markdown" })
-
-  const tmpZip = path.join(os.tmpdir(), `ares_import_${Date.now()}.zip`)
-  const tmpDir = path.join(os.tmpdir(), `ares_import_${Date.now()}`)
-
-  try {
-    const fileInfo = await bot.getFile(msg.document.file_id)
-    const fileUrl  = `https://api.telegram.org/file/bot${TOKEN}/${fileInfo.file_path}`
-    await downloadFile(fileUrl, tmpZip)
-
-    fs.mkdirSync(tmpDir, { recursive: true })
-    await new Promise((resolve, reject) => {
-      fs.createReadStream(tmpZip)
-        .pipe(unzipper.Extract({ path: tmpDir }))
-        .on("close", resolve)
-        .on("error", reject)
-    })
-
-    const entries = fs.readdirSync(tmpDir)
-    let restored = 0, skipped = 0
-
-    for (const name of entries) {
-      if (name === "_uploads" || name === "_cache_node_modules") continue
-      const src  = path.join(tmpDir, name)
-      const dest = path.join(BASE_PATH, name)
-      if (!fs.statSync(src).isDirectory()) continue
-
-      if (fs.existsSync(dest)) { skipped++; continue }
-
-      fs.mkdirSync(dest, { recursive: true })
-      const subEntries = fs.readdirSync(src)
-      for (const f of subEntries) {
-        if (f === "node_modules") continue // Não importa node_modules
-        const srcFile = path.join(src, f)
-        const destFile = path.join(dest, f)
-        fs.cpSync(srcFile, destFile, { recursive: true })
-      }
-      restored++
+  
+  // Primeiro verifica se é importação pendente
+  if (importPending[chatId]) {
+    if (!msg.document.file_name.toLowerCase().endsWith(".zip")) {
+      return bot.sendMessage(chatId, "❌ Envie um arquivo .zip gerado pelo /exportar.")
     }
 
-    await bot.editMessageText(
-      `✅ *Importação concluída!*\n\n` +
-      `📦 Restaurados: *${restored}* bot(s)\n` +
-      `⏭️ Ignorados (já existiam): *${skipped}*\n\n` +
-      `Iniciando bots restaurados...`,
-      { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: "Markdown" }
-    )
+    delete importPending[chatId]
 
-    const allBots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_cache_node_modules")
-    allBots.forEach((botId, i) => {
-      if (!activeBots[botId]) {
-        setTimeout(() => spawnBot(botId, path.join(BASE_PATH, botId)), i * 1500)
+    const statusMsg = await bot.sendMessage(chatId, "⏳ Processando backup...", { parse_mode: "Markdown" })
+
+    const tmpZip = path.join(os.tmpdir(), `ares_import_${Date.now()}.zip`)
+    const tmpDir = path.join(os.tmpdir(), `ares_import_${Date.now()}`)
+
+    try {
+      const fileInfo = await bot.getFile(msg.document.file_id)
+      const fileUrl  = `https://api.telegram.org/file/bot${TOKEN}/${fileInfo.file_path}`
+      await downloadFile(fileUrl, tmpZip)
+
+      fs.mkdirSync(tmpDir, { recursive: true })
+      await new Promise((resolve, reject) => {
+        fs.createReadStream(tmpZip)
+          .pipe(unzipper.Extract({ path: tmpDir }))
+          .on("close", resolve)
+          .on("error", reject)
+      })
+
+      const entries = fs.readdirSync(tmpDir)
+      let restored = 0, skipped = 0
+
+      for (const name of entries) {
+        if (name === "_uploads" || name === "_cache_node_modules") continue
+        const src  = path.join(tmpDir, name)
+        const dest = path.join(BASE_PATH, name)
+        if (!fs.statSync(src).isDirectory()) continue
+
+        if (fs.existsSync(dest)) { 
+          skipped++; 
+          continue 
+        }
+
+        fs.mkdirSync(dest, { recursive: true })
+        const subEntries = fs.readdirSync(src)
+        for (const f of subEntries) {
+          if (f === "node_modules") continue // Não importa node_modules
+          const srcFile = path.join(src, f)
+          const destFile = path.join(dest, f)
+          fs.cpSync(srcFile, destFile, { recursive: true })
+        }
+        
+        // Copia meta.json se existir
+        if (fs.existsSync(path.join(src, "meta.json"))) {
+          fs.cpSync(path.join(src, "meta.json"), path.join(dest, "meta.json"))
+        }
+        restored++
       }
-    })
 
-  } catch (e) {
-    bot.editMessageText("❌ Erro na importação: " + e.message, {
-      chat_id: chatId, message_id: statusMsg.message_id
-    })
-  } finally {
-    try { fs.unlinkSync(tmpZip) } catch {}
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+      await bot.editMessageText(
+        `✅ *Importação concluída!*\n\n` +
+        `📦 Restaurados: *${restored}* bot(s)\n` +
+        `⏭️ Ignorados (já existiam): *${skipped}*\n\n` +
+        `Iniciando bots restaurados...`,
+        { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: "Markdown" }
+      )
+
+      const allBots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_cache_node_modules")
+      allBots.forEach((botId, i) => {
+        if (!activeBots[botId]) {
+          setTimeout(() => spawnBot(botId, path.join(BASE_PATH, botId)), i * 1500)
+        }
+      })
+
+    } catch (e) {
+      bot.editMessageText("❌ Erro na importação: " + e.message, {
+        chat_id: chatId, message_id: statusMsg.message_id
+      })
+    } finally {
+      try { fs.unlinkSync(tmpZip) } catch {}
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+    }
+    return
   }
+  
+  // Se não for importação, verifica termos e processa como upload normal
+  if (!hasAccepted(chatId)) {
+    termoCheck[chatId] = false
+    return sendTermos(chatId, false)
+  }
+  
+  // Processa upload normal (já existe handler separado para document)
 })
 
 // ─── Callback queries ─────────────────────────
@@ -1016,7 +1063,7 @@ bot.on("callback_query", async query => {
     return bot.sendMessage(chatId,
       `✅ *Termos aceitos! Bem-vindo ao ARES HOST.*\n\n` +
       `🚀 *ARES HOST*\n\n` +
-      `🤖 Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
+      `🤖 Seus Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
       `💾 RAM: *${s.ram}MB*  |  ⏱ Uptime: *${s.uptime}*`,
       {
         parse_mode: "Markdown",
@@ -1035,7 +1082,7 @@ bot.on("callback_query", async query => {
     const s = getStats(chatId)
     return bot.editMessageText(
       `🚀 *ARES HOST*\n\n` +
-      `🤖 Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
+      `🤖 Seus Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
       `💾 RAM: *${s.ram}MB*  |  ⏱ Uptime: *${s.uptime}*`,
       {
         chat_id: chatId, message_id: msgId,
@@ -1191,7 +1238,10 @@ bot.on("callback_query", async query => {
   }
 
   if (action === "stop") {
-    if (activeBots[id]) activeBots[id].process.kill()
+    if (activeBots[id]) {
+      activeBots[id].process.kill()
+      delete activeBots[id]
+    }
     return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🔴 Offline`,
       {
@@ -1548,7 +1598,7 @@ function walkDir(dir, base) {
   })
 }
 
-// Página do editor (mesmo código HTML do original, mantido por questões de espaço)
+// Página do editor
 app.use("/files", authBot, (req, res, next) => {
   const rawUrl = req.originalUrl.split("?")[0]
   const m = rawUrl.match(/^\/files\/([^/]+)\/?$/)
@@ -1559,8 +1609,343 @@ app.use("/files", authBot, (req, res, next) => {
   if (!fs.existsSync(botPath)) return res.status(404).send("Bot não encontrado")
 
   res.send(`<!DOCTYPE html>
-... [HTML do editor igual ao original, mantido por brevidade] ...
-`)
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>ARES Editor</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--bd:#30363d;--tx:#e6edf3;--tx2:#8b949e;--green:#3fb950;--blue:#58a6ff;--orange:#d29922;--red:#f85149}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+#bar{background:var(--bg2);border-bottom:1px solid var(--bd);height:48px;display:flex;align-items:center;padding:0 10px;gap:8px;flex-shrink:0}
+.logo{color:var(--green);font-weight:700;font-size:15px}
+.chip{background:var(--bg3);border:1px solid var(--bd);border-radius:12px;padding:2px 9px;font-size:11px;color:var(--tx2);font-family:monospace;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#bar .sp{flex:1}
+.tbtn{padding:6px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;border:1px solid var(--bd);background:var(--bg3);color:var(--tx);white-space:nowrap;display:none;align-items:center;gap:4px}
+.tbtn:active{opacity:.7}
+.tbtn.g{background:#238636;border-color:#238636;color:#fff}
+.tbtn.r{border-color:var(--red);color:var(--red)}
+#btn-menu{background:none;border:none;color:var(--tx2);font-size:22px;padding:4px 6px;cursor:pointer;line-height:1;display:none}
+#layout{display:flex;flex:1;overflow:hidden;height:calc(100vh - 48px - 22px)}
+#side{width:260px;background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-direction:column;flex-shrink:0;transition:transform .25s;z-index:5}
+#side-top{padding:8px 10px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+#side-top .stit{font-size:11px;color:var(--tx2);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+#side-top .sbtns{display:flex;gap:2px}
+.ibtn{background:none;border:none;color:var(--tx2);cursor:pointer;padding:5px 7px;border-radius:5px;font-size:15px;line-height:1}
+.ibtn:active{background:var(--bg3);color:var(--tx)}
+#tree{flex:1;overflow-y:auto;padding:4px 0;-webkit-overflow-scrolling:touch}
+#tree::-webkit-scrollbar{width:3px}
+#tree::-webkit-scrollbar-thumb{background:var(--bd)}
+.row{display:flex;align-items:center;padding:6px;cursor:pointer;border-radius:5px;margin:1px 4px;min-height:36px}
+.row:active{background:var(--bg3)}
+.row.sel{background:#1f3a5f}
+.row .ico{margin-right:6px;font-size:14px;width:18px;text-align:center;flex-shrink:0}
+.row .lbl{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.row .lbl.d{color:var(--blue)}
+.row .arr{font-size:9px;color:var(--tx2);margin-right:4px;width:10px;transition:transform .15s;flex-shrink:0}
+.row .arr.o{transform:rotate(90deg)}
+.row .arr.h{opacity:0}
+#side-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:4}
+#right{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+#tabs{background:var(--bg2);border-bottom:1px solid var(--bd);display:flex;overflow-x:auto;flex-shrink:0;min-height:36px}
+#tabs::-webkit-scrollbar{height:0}
+.tab{display:flex;align-items:center;gap:5px;padding:0 10px;height:36px;border-right:1px solid var(--bd);cursor:pointer;font-size:12px;color:var(--tx2);white-space:nowrap;flex-shrink:0;position:relative}
+.tab.on{color:var(--tx);background:var(--bg)}
+.tab.on::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--blue)}
+.tab .x{opacity:0;font-size:11px;padding:2px 4px;border-radius:3px;line-height:1}
+.tab:hover .x,.tab.on .x{opacity:.5}
+.tab .x:hover{opacity:1!important;background:var(--bd)}
+.tab .dot{width:7px;height:7px;background:var(--orange);border-radius:50%}
+#breadcrumb{background:var(--bg);border-bottom:1px solid var(--bd);padding:4px 12px;font-size:11px;color:var(--tx2);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#editor{flex:1;overflow:hidden}
+#welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--tx2);padding:20px;text-align:center}
+#welcome .big{font-size:52px;opacity:.25}
+#welcome h2{font-size:16px;color:var(--tx);font-weight:400}
+#welcome p{font-size:13px;line-height:1.6;max-width:260px}
+#welcome kbd{background:var(--bg3);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-family:monospace;font-size:11px}
+#sbar{background:#1f2328;border-top:1px solid var(--bd);height:22px;display:flex;align-items:center;padding:0 12px;gap:14px;font-size:11px;color:var(--tx2);flex-shrink:0}
+.s-ok{color:var(--green)}.s-warn{color:var(--orange)}
+.ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:999;align-items:flex-end;justify-content:center}
+.ov.on{display:flex}
+@media(min-width:600px){.ov{align-items:center}}
+.box{background:var(--bg2);border:1px solid var(--bd);border-radius:14px 14px 0 0;padding:22px;width:100%;max-width:460px}
+@media(min-width:600px){.box{border-radius:12px}}
+.box h3{margin-bottom:14px;font-size:15px}
+.box input{width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--tx);padding:10px 12px;border-radius:8px;font-size:15px;outline:none;font-family:monospace}
+.box input:focus{border-color:var(--blue)}
+.box .bts{display:flex;gap:8px;margin-top:14px}
+.box .bts button{flex:1;padding:10px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;border:1px solid var(--bd)}
+.ok-btn{background:var(--green);border-color:var(--green);color:#000}
+.cancel-btn{background:var(--bg3);color:var(--tx2)}
+.ctx{display:none;position:fixed;background:var(--bg2);border:1px solid var(--bd);border-radius:10px;padding:4px;z-index:888;min-width:160px;box-shadow:0 8px 28px rgba(0,0,0,.5)}
+.ctx.on{display:block}
+.ctx-item{padding:9px 14px;cursor:pointer;border-radius:6px;font-size:14px;display:flex;align-items:center;gap:8px}
+.ctx-item:active{background:var(--bg3)}
+.ctx-item.danger{color:var(--red)}
+.ctx-hr{height:1px;background:var(--bd);margin:3px 0}
+.toast{position:fixed;bottom:34px;left:50%;transform:translateX(-50%) translateY(8px);background:var(--bg2);border:1px solid var(--bd);padding:10px 20px;border-radius:10px;font-size:13px;z-index:9999;opacity:0;transition:.2s;pointer-events:none;white-space:nowrap;max-width:90vw;text-align:center}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.toast.ok{border-color:var(--green);color:var(--green)}
+.toast.err{border-color:var(--red);color:var(--red)}
+@media(max-width:700px){
+  #side{position:fixed;top:48px;left:0;bottom:22px;width:82vw;max-width:300px;transform:translateX(-100%);box-shadow:4px 0 24px rgba(0,0,0,.5)}
+  #side.open{transform:translateX(0)}
+  #side-overlay.on{display:block}
+  #btn-menu{display:block}
+  .chip{max-width:90px}
+  .tbtn span{display:none}
+}
+</style>
+</head>
+<body>
+<div id="bar">
+  <button id="btn-menu" onclick="toggleSide()">☰</button>
+  <span class="logo">⚡</span>
+  <span class="chip" title="${botId}">${botId}</span>
+  <div class="sp"></div>
+  <span id="unsaved" style="display:none;font-size:11px;color:var(--orange);margin-right:2px">●</span>
+  <button class="tbtn" id="btn-ren" onclick="doRename()">✏️ <span>Renomear</span></button>
+  <button class="tbtn r" id="btn-del" onclick="doDel()">🗑️ <span>Excluir</span></button>
+  <button class="tbtn g" id="btn-save" onclick="doSave()">💾 Salvar</button>
+</div>
+<div id="layout">
+  <div id="side-overlay" onclick="closeSide()"></div>
+  <div id="side">
+    <div id="side-top">
+      <span class="stit">Arquivos</span>
+      <div class="sbtns">
+        <button class="ibtn" title="Novo arquivo" onclick="doNewFile()">📄</button>
+        <button class="ibtn" title="Nova pasta" onclick="doNewFolder()">📁</button>
+        <button class="ibtn" title="Atualizar" onclick="refreshTree()">↺</button>
+      </div>
+    </div>
+    <div id="tree"><div style="padding:12px;font-size:12px;color:var(--tx2)">Carregando...</div></div>
+  </div>
+  <div id="right">
+    <div id="tabs"></div>
+    <div id="breadcrumb">—</div>
+    <div id="editor"></div>
+    <div id="welcome">
+      <div class="big">📂</div>
+      <h2>ARES Editor</h2>
+      <p>Selecione um arquivo para editar<br><kbd>Ctrl+S</kbd> salva</p>
+    </div>
+  </div>
+</div>
+<div id="sbar">
+  <span id="sb-lang">—</span>
+  <span id="sb-lines">—</span>
+  <span id="sb-status" class="s-ok">✓ pronto</span>
+</div>
+<div class="ov" id="modal">
+  <div class="box">
+    <h3 id="modal-title">Nome</h3>
+    <input id="modal-in" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+    <div class="bts">
+      <button class="cancel-btn" onclick="closeModal()">Cancelar</button>
+      <button class="ok-btn" onclick="confirmModal()">OK</button>
+    </div>
+  </div>
+</div>
+<div class="ctx" id="ctx">
+  <div class="ctx-item" onclick="ctxDoRename()">✏️ Renomear</div>
+  <div class="ctx-hr"></div>
+  <div class="ctx-item danger" onclick="ctxDoDel()">🗑️ Excluir</div>
+</div>
+<div class="toast" id="toast"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+<script>
+require.config({paths:{vs:'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs'}})
+const BOT_ID="${botId}", TOKEN="${token}", API="/files-api/"+BOT_ID
+function apiUrl(action,extra){return API+action+"?s="+TOKEN+(extra?"&"+extra:"")}
+
+let ed=null,currentFile=null,isDirty=false,openDirs=new Set(),treeData=[],tabs=[],models={},modalCb=null,ctxTarget=null
+
+function toggleSide(){document.getElementById("side").classList.toggle("open");document.getElementById("side-overlay").classList.toggle("on")}
+function closeSide(){document.getElementById("side").classList.remove("open");document.getElementById("side-overlay").classList.remove("on")}
+
+require(["vs/editor/editor.main"],function(){
+  monaco.editor.defineTheme("ares",{base:"vs-dark",inherit:true,
+    rules:[{token:"comment",foreground:"8b949e",fontStyle:"italic"},{token:"keyword",foreground:"ff7b72"},{token:"string",foreground:"a5d6ff"},{token:"number",foreground:"79c0ff"}],
+    colors:{"editor.background":"#0d1117","editor.foreground":"#e6edf3","editor.lineHighlightBackground":"#161b22","editorLineNumber.foreground":"#484f58","editorLineNumber.activeForeground":"#e6edf3","editor.selectionBackground":"#264f78","editorCursor.foreground":"#58a6ff"}
+  })
+  ed=monaco.editor.create(document.getElementById("editor"),{theme:"ares",fontSize:14,automaticLayout:true,minimap:{enabled:false},scrollBeyondLastLine:false,wordWrap:"on",padding:{top:10}})
+  ed.onDidChangeModelContent(()=>markDirty())
+  ed.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS,doSave)
+  document.getElementById("editor").style.display="none"
+  loadTree()
+})
+
+function ext(n){return n.includes(".")?n.split(".").pop().toLowerCase():""}
+function langIcon(n){const m={js:"🟨",ts:"🔷",jsx:"🟨",tsx:"🔷",json:"🟧",py:"🐍",md:"📝",html:"🌐",css:"🎨",sh:"⚙️",env:"🔑",yml:"📋",yaml:"📋",sql:"🗄️",png:"🖼️",jpg:"🖼️",jpeg:"🖼️",svg:"🖼️",zip:"📦",lock:"🔒"};return m[ext(n)]||"📄"}
+function getLang(n){const m={js:"javascript",ts:"typescript",jsx:"javascript",tsx:"typescript",json:"json",py:"python",md:"markdown",sh:"shell",bash:"shell",html:"html",css:"css",scss:"css",yml:"yaml",yaml:"yaml",sql:"sql",xml:"xml",php:"php",rb:"ruby",go:"go",rs:"rust",java:"java",cpp:"cpp",c:"c",h:"c",cs:"csharp",txt:"plaintext",env:"plaintext"};return m[ext(n)]||"plaintext"}
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
+
+function buildRows(items,depth){
+  return items.map(item=>{
+    const pad=8+depth*14
+    if(item.type==="dir"){
+      const open=openDirs.has(item.path)
+      return \`<div class="row" style="padding-left:\${pad}px" onclick="toggleDir('\${esc(item.path)}')" oncontextmenu="showCtx(event,'\${esc(item.path)}',true)"><span class="arr \${open?"o":""}">▶</span><span class="ico">\${open?"📂":"📁"}</span><span class="lbl d">\${esc(item.name)}</span></div>\`+(open?buildRows(item.children,depth+1):"")
+    }
+    return \`<div class="row\${currentFile===item.path?" sel":""}" style="padding-left:\${pad+14}px" onclick="openFile('\${esc(item.path)}')" oncontextmenu="showCtx(event,'\${esc(item.path)}',false)"><span class="arr h">▶</span><span class="ico">\${langIcon(item.name)}</span><span class="lbl">\${esc(item.name)}</span></div>\`
+  }).join("")
+}
+
+function renderTree(){document.getElementById("tree").innerHTML=treeData.length?buildRows(treeData,0):'<div style="padding:12px;font-size:12px;color:var(--tx2)">Pasta vazia</div>'}
+function toggleDir(p){openDirs.has(p)?openDirs.delete(p):openDirs.add(p);renderTree()}
+
+async function loadTree(){
+  try{
+    const r=await fetch(apiUrl("/tree"))
+    if(!r.ok){document.getElementById("tree").innerHTML=\`<div style="padding:12px;font-size:12px;color:var(--red)">Erro \${r.status}: acesso negado</div>\`;return}
+    treeData=await r.json();renderTree()
+  }catch(e){document.getElementById("tree").innerHTML=\`<div style="padding:12px;font-size:12px;color:var(--red)">\${e.message}</div>\`}
+}
+function refreshTree(){loadTree()}
+
+function renderTabs(){
+  document.getElementById("tabs").innerHTML=tabs.map(t=>{
+    const name=t.path.split("/").pop(),on=t.path===currentFile?" on":""
+    const ind=t.dirty?\`<span class="dot"></span>\`:\`<span class="x" onclick="closeTab(event,'\${esc(t.path)}')">✕</span>\`
+    return \`<div class="tab\${on}" onclick="switchTo('\${esc(t.path)}')" title="\${esc(t.path)}">\${langIcon(name)} \${esc(name)}\${ind}</div>\`
+  }).join("")
+}
+function switchTo(p){if(p!==currentFile)openFile(p)}
+function closeTab(e,p){
+  e.stopPropagation()
+  const t=tabs.find(x=>x.path===p)
+  if(t&&t.dirty&&!confirm("Fechar sem salvar?"))return
+  tabs=tabs.filter(x=>x.path!==p)
+  if(models[p]){models[p].dispose();delete models[p]}
+  if(currentFile===p){tabs.length?openFile(tabs[tabs.length-1].path):clearEditor()}
+  renderTabs()
+}
+function clearEditor(){
+  currentFile=null;isDirty=false
+  if(ed)ed.setValue("")
+  document.getElementById("editor").style.display="none"
+  document.getElementById("welcome").style.display="flex"
+  document.getElementById("breadcrumb").textContent="—"
+  document.getElementById("sb-lang").textContent="—"
+  document.getElementById("unsaved").style.display="none"
+  ;["btn-save","btn-del","btn-ren"].forEach(id=>document.getElementById(id).style.display="none")
+  renderTree()
+}
+
+async function openFile(p){
+  if(!ed)return
+  if(!models[p]){
+    const r=await fetch(apiUrl("/read","path="+encodeURIComponent(p)))
+    if(!r.ok){toast("Erro ao abrir: "+r.status,"err");return}
+    models[p]=monaco.editor.createModel(await r.text(),getLang(p))
+    if(!tabs.find(t=>t.path===p))tabs.push({path:p,dirty:false})
+  }
+  currentFile=p;isDirty=false
+  ed.setModel(models[p])
+  document.getElementById("editor").style.display="block"
+  document.getElementById("welcome").style.display="none"
+  document.getElementById("breadcrumb").textContent=p
+  document.getElementById("sb-lang").textContent=getLang(p)
+  document.getElementById("sb-lines").textContent=ed.getModel().getLineCount()+" linhas"
+  ;["btn-save","btn-del","btn-ren"].forEach(id=>{document.getElementById(id).style.display="inline-flex"})
+  markDirty(false);renderTree();renderTabs();closeSide();ed.focus()
+}
+
+function markDirty(v){
+  if(v===false){isDirty=false;document.getElementById("unsaved").style.display="none";const t=tabs.find(x=>x.path===currentFile);if(t)t.dirty=false}
+  else if(!isDirty){isDirty=true;document.getElementById("unsaved").style.display="inline";const t=tabs.find(x=>x.path===currentFile);if(t)t.dirty=true}
+  renderTabs()
+}
+
+async function doSave(){
+  if(!currentFile||!ed)return
+  const sb=document.getElementById("sb-status");sb.textContent="💾...";sb.className="s-warn"
+  try{
+    const r=await fetch(apiUrl("/write"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:currentFile,content:ed.getValue()})})
+    if(r.ok){markDirty(false);sb.textContent="✓ salvo";sb.className="s-ok";toast("✅ Salvo!","ok")}
+    else throw new Error(r.status)
+  }catch(e){sb.textContent="✗ erro";toast("Erro: "+e.message,"err")}
+}
+
+async function doDel(){
+  if(!currentFile||!confirm('Excluir "'+currentFile+'"?'))return
+  const r=await fetch(apiUrl("/delete"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:currentFile})})
+  if(r.ok){toast("🗑️ Excluído!","ok");closeTab({stopPropagation:()=>{}},currentFile);loadTree()}
+  else toast("Erro "+r.status,"err")
+}
+
+async function doRename(){
+  if(!currentFile)return
+  const parts=currentFile.split("/")
+  openModal("Renomear",parts[parts.length-1],async newName=>{
+    const newPath=[...parts.slice(0,-1),newName].join("/")
+    const r=await fetch(apiUrl("/rename"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({from:currentFile,to:newPath})})
+    if(r.ok){const t=tabs.find(x=>x.path===currentFile);if(t)t.path=newPath;if(models[currentFile]){models[newPath]=models[currentFile];delete models[currentFile]}currentFile=newPath;await loadTree();openFile(newPath);toast("✅ Renomeado!","ok")}
+    else toast("Erro ao renomear","err")
+  })
+}
+
+function doNewFile(){
+  const folder=currentFile?currentFile.split("/").slice(0,-1).join("/"):""
+  openModal("Novo arquivo","index.js",async name=>{
+    const p=folder?folder+"/"+name:name
+    const r=await fetch(apiUrl("/write"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:p,content:""})})
+    if(r.ok){await loadTree();openFile(p);toast("✅ Criado!","ok")}else toast("Erro ao criar","err")
+  })
+}
+function doNewFolder(){
+  openModal("Nova pasta","pasta",async name=>{
+    const r=await fetch(apiUrl("/mkdir"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:name})})
+    if(r.ok){await loadTree();toast("✅ Pasta criada!","ok")}else toast("Erro","err")
+  })
+}
+
+function showCtx(e,p,isDir){
+  e.preventDefault();e.stopPropagation();ctxTarget={path:p,isDir}
+  const el=document.getElementById("ctx")
+  el.style.left=Math.min(e.clientX,window.innerWidth-170)+"px"
+  el.style.top=Math.min(e.clientY,window.innerHeight-100)+"px"
+  el.classList.add("on")
+}
+function closeCtx(){document.getElementById("ctx").classList.remove("on")}
+document.addEventListener("click",closeCtx)
+
+function ctxDoRename(){
+  closeCtx();if(!ctxTarget)return
+  const parts=ctxTarget.path.split("/")
+  openModal("Renomear",parts[parts.length-1],async newName=>{
+    const newPath=[...parts.slice(0,-1),newName].join("/")
+    const r=await fetch(apiUrl("/rename"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({from:ctxTarget.path,to:newPath})})
+    if(r.ok){if(currentFile===ctxTarget.path){const t=tabs.find(x=>x.path===currentFile);if(t)t.path=newPath;if(models[currentFile]){models[newPath]=models[currentFile];delete models[currentFile]}currentFile=newPath}await loadTree();renderTabs();toast("✅ Renomeado!","ok")}
+    else toast("Erro ao renomear","err")
+  })
+}
+function ctxDoDel(){
+  closeCtx();if(!ctxTarget)return
+  if(!confirm('Excluir "'+ctxTarget.path+'"?'))return
+  fetch(apiUrl("/delete"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:ctxTarget.path})})
+    .then(r=>{if(r.ok){if(!ctxTarget.isDir)closeTab({stopPropagation:()=>{}},ctxTarget.path);loadTree();toast("🗑️ Excluído!","ok")}else toast("Erro","err")})
+}
+
+function openModal(title,placeholder,cb){
+  modalCb=cb
+  document.getElementById("modal-title").textContent=title
+  document.getElementById("modal-in").value=""
+  document.getElementById("modal-in").placeholder=placeholder
+  document.getElementById("modal").classList.add("on")
+  setTimeout(()=>document.getElementById("modal-in").focus(),100)
+}
+function closeModal(){document.getElementById("modal").classList.remove("on");modalCb=null}
+function confirmModal(){const v=document.getElementById("modal-in").value.trim();if(!v)return;closeModal();if(modalCb)modalCb(v)}
+document.getElementById("modal-in").addEventListener("keydown",e=>{if(e.key==="Enter")confirmModal();if(e.key==="Escape")closeModal()})
+document.getElementById("modal").addEventListener("click",e=>{if(e.target===document.getElementById("modal"))closeModal()})
+
+function toast(msg,type){const el=document.getElementById("toast");el.textContent=msg;el.className="toast on "+(type||"");clearTimeout(el._t);el._t=setTimeout(()=>el.className="toast",2500)}
+</script>
+</body>
+</html>`)
 })
 
 // ── API de Arquivos
