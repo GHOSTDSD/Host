@@ -160,8 +160,14 @@ function checkSession(req) {
 
 function authBot(req, res, next) {
   const rawUrl = req.originalUrl.split("?")[0]
-  const m = rawUrl.match(/\/([^\/]+)\/?(?:\?|$)/)
-  const botId = m ? m[1] : null
+
+  let botId = null
+  const mApi = rawUrl.match(/^\/files-api\/([^/]+)/)
+  const mPage = rawUrl.match(/^\/(?:terminal|files)\/([^/?]+)/)
+
+  if (mApi) botId = mApi[1]
+  else if (mPage) botId = mPage[1]
+
   const chatId = checkSession(req)
   if (!chatId) return res.status(401).send("Acesso negado. Abra o link pelo Telegram.")
   const owner = botId ? getOwner(botId) : null
@@ -866,8 +872,7 @@ bot.on("callback_query", async query => {
       fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2))
       console.log("✅ package.json criado")
       
-      const indexJs = `// Seu bot aqui
-console.log("🤖 Bot iniciado com sucesso!");
+      const indexJs = `console.log("🤖 Bot iniciado com sucesso!");
 
 const http = require('http');
 const server = http.createServer((req, res) => {
