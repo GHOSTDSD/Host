@@ -1554,11 +1554,11 @@ app.get("/files/:botId", authBot, (req, res) => {
   </div>
   <div class="toast" id="toast"></div>
   <script>
+    const socket = io();
     require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
     const BOT_ID = "${botId}";
     const TOKEN = "${sessionToken}";
     const API = "/files-api/" + BOT_ID;
-    const socket = io();
     function apiUrl(action, extra) {
       return API + action + "?s=" + TOKEN + (extra ? "&" + extra : "");
     }
