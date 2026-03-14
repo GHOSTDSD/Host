@@ -151,18 +151,28 @@ function getUserBots(chatId) {
   })
 }
 
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex")
+
 function genWebSession(chatId) {
-  const tok = crypto.randomBytes(24).toString("hex")
-  webSessions[tok] = { chatId: String(chatId), at: Date.now() }
-  setTimeout(() => delete webSessions[tok], 24 * 60 * 60 * 1000)
+  const payload = String(chatId) + ":" + Date.now()
+  const sig = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("hex").slice(0, 24)
+  const tok = Buffer.from(payload).toString("base64url") + "." + sig
   return tok
 }
 
 function checkSession(req) {
   const tok = req.query.s
   if (!tok) return null
-  const s = webSessions[tok]
-  return s ? s.chatId : null
+  try {
+    const [b64, sig] = tok.split(".")
+    if (!b64 || !sig) return null
+    const payload = Buffer.from(b64, "base64url").toString()
+    const expected = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("hex").slice(0, 24)
+    if (sig !== expected) return null
+    const [chatId, ts] = payload.split(":")
+    if (Date.now() - Number(ts) > 7 * 24 * 60 * 60 * 1000) return null
+    return chatId
+  } catch { return null }
 }
 
 function authBot(req, res, next) {
@@ -1700,6 +1710,7 @@ function buildEditorHtml(botId, sessionToken, API) {
     '</div>',
     '<div class="toast" id="toast"></div>',
     '<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>',
+    '<script src="/socket.io/socket.io.js"></script>',
     '<script>',
     'var BOT_ID=' + JSON.stringify(botId) + ';',
     'var TOK=' + JSON.stringify(sessionToken) + ';',
@@ -2162,20 +2173,12 @@ function buildEditorHtml(botId, sessionToken, API) {
     '  });',
     '}',
     '',
-    'function loadSocketIO(cb){',
-    '  var s=document.createElement("script");',
-    '  s.src="/socket.io/socket.io.js";',
-    '  s.onload=function(){',
-    '    socket=io();',
+    'document.addEventListener("DOMContentLoaded",function(){',
+    '  try{socket=io();}catch(e){console.warn("socket.io indisponivel",e);}',
+    '  if(socket){',
     '    socket.on("connect",function(){setStatus("Conectado","ok");});',
     '    socket.on("disconnect",function(){setStatus("Desconectado","err");});',
-    '    if(cb)cb();',
-    '  };',
-    '  s.onerror=function(){console.warn("socket.io nao carregou");if(cb)cb();};',
-    '  document.head.appendChild(s);',
-    '}',
-    '',
-    'document.addEventListener("DOMContentLoaded",function(){',
+    '  }',
     '  document.getElementById("find-in").addEventListener("keydown",function(e){',
     '    if(e.key==="Enter"){e.shiftKey?findPrev():findNext();}',
     '    if(e.key==="Escape")closeFindBar();',
@@ -2202,7 +2205,7 @@ function buildEditorHtml(botId, sessionToken, API) {
     '    window._srT=setTimeout(function(){doSearch(q);},300);',
     '  });',
     '  initDragDrop();',
-    '  loadSocketIO(initMonaco);',
+    '  initMonaco();',
     '});',
     '</script>',
     '</body>',
