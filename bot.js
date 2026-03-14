@@ -9,7 +9,7 @@ const http = require("http")
 const socketIo = require("socket.io")
 const { EventEmitter } = require("events")
 const multer = require("multer")
-const { execFile, execSync, exec } = require("child_process")
+const { execFile, execSync } = require("child_process")
 const crypto = require("crypto")
 const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3")
 const tar = require("tar")
@@ -33,7 +33,6 @@ const io = socketIo(server)
 io.sockets.setMaxListeners(200)
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
-app.use(express.static('public'))
 
 const BUCKET_CONFIG = {
   endpoint: process.env.BUCKET_ENDPOINT || "https://t3.storageapi.dev",
@@ -867,7 +866,6 @@ bot.on("callback_query", async query => {
       const instancePath = path.join(BASE_PATH, botId)
       console.log("📁 Criando pasta:", instancePath)
       fs.mkdirSync(instancePath, { recursive: true, mode: 0o755 })
-      
       const packageJson = {
         name: "meu-bot",
         version: "1.0.0",
@@ -887,15 +885,7 @@ bot.on("callback_query", async query => {
       const packagePath = path.join(instancePath, "package.json")
       fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2))
       console.log("✅ package.json criado")
-      
       const indexJs = `// 🚀 Modo Fácil ARES
-// Use os comandos abaixo para instalar bibliotecas:
-// npm run install:express   - Para instalar Express
-// npm run install:telegraf   - Para instalar Telegraf (bot Telegram)
-// npm run install:mongoose   - Para instalar Mongoose (MongoDB)
-// npm run install:axios      - Para instalar Axios (HTTP requests)
-// npm run install:sqlite3    - Para instalar SQLite3
-
 console.log("🤖 Bot iniciado com sucesso!");
 console.log("📦 Dependências instaladas:", Object.keys(require('./package.json').dependencies || {}));
 
@@ -917,7 +907,6 @@ process.on('uncaughtException', (err) => {
       const indexPath = path.join(instancePath, "index.js")
       fs.writeFileSync(indexPath, indexJs)
       console.log("✅ index.js criado")
-      
       const readmePath = path.join(instancePath, "README.md")
       fs.writeFileSync(readmePath, `# 🤖 Meu Bot ARES
 
@@ -939,38 +928,27 @@ process.on('uncaughtException', (err) => {
 ### Exemplo de código com bibliotecas instaladas:
 
 \`\`\`javascript
-// Depois de instalar as dependências, você pode usá-las assim:
-
-// Express (servidor web)
 const express = require('express');
 const app = express();
 
-// Telegraf (bot Telegram)
 const { Telegraf } = require('telegraf');
 const bot = new Telegraf('SEU_TOKEN');
 
-// Mongoose (MongoDB)
 const mongoose = require('mongoose');
 mongoose.connect('mongodb://localhost:27017/meubot');
 
-// Axios (HTTP requests)
 const axios = require('axios');
 
-// SQLite3
 const sqlite3 = require('sqlite3').verbose();
 \`\`\`
 `)
       console.log("✅ README.md criado")
-      
       saveMeta(botId, chatId, "meu-bot")
       console.log("✅ Meta salva")
-      
       const sessionToken = genWebSession(chatId)
       const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
       const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
-      
       console.log("✅ Bot criado com sucesso:", botId)
-      
       return bot.editMessageText(
         `✅ *Bot criado do zero!*\n\n` +
         `🆔 ID: \`${botId}\`\n` +
@@ -1436,7 +1414,12 @@ app.get("/files/:botId", authBot, (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ARES Editor - ${botId}</title>
+  <title>ARES Studio - ${botId}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     :root { --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --bd: #30363d; --tx: #e6edf3; --tx2: #8b949e; --green: #3fb950; --blue: #58a6ff; --orange: #d29922; --red: #f85149; }
@@ -1480,8 +1463,12 @@ app.get("/files/:botId", authBot, (req, res) => {
     .tab .x:hover { opacity: 1 !important; background: var(--bd); }
     .tab .dot { width: 7px; height: 7px; background: var(--orange); border-radius: 50%; }
     #breadcrumb { background: var(--bg); border-bottom: 1px solid var(--bd); padding: 4px 12px; font-size: 11px; color: var(--tx2); flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #editor { flex: 1; overflow: hidden; }
-    #welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--tx2); padding: 20px; text-align: center; }
+    #editor-container { flex: 1; overflow: hidden; min-height: 0; }
+    #terminal-container { height: 200px; background: #1e1e1e; border-top: 1px solid var(--bd); display: flex; flex-direction: column; flex-shrink: 0; }
+    #terminal-header { background: var(--bg3); padding: 4px 10px; font-size: 11px; color: var(--tx2); display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--bd); }
+    #terminal-header span { color: var(--green); }
+    #terminal-body { flex: 1; overflow: hidden; }
+    #welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--tx2); padding: 20px; text-align: center; height: 100%; }
     #welcome .big { font-size: 52px; opacity: .25; }
     #welcome h2 { font-size: 16px; color: var(--tx); font-weight: 400; }
     #welcome p { font-size: 13px; line-height: 1.6; max-width: 260px; }
@@ -1515,7 +1502,7 @@ app.get("/files/:botId", authBot, (req, res) => {
 <body>
   <div id="bar">
     <button id="btn-menu" onclick="toggleSide()">☰</button>
-    <span class="logo">⚡</span>
+    <span class="logo">⚡ ARES Studio</span>
     <span class="chip" title="${botId}">${botId}</span>
     <div class="sp"></div>
     <span id="unsaved" style="display:none;font-size:11px;color:var(--orange);margin-right:2px">●</span>
@@ -1527,7 +1514,7 @@ app.get("/files/:botId", authBot, (req, res) => {
     <div id="side-overlay" onclick="closeSide()"></div>
     <div id="side">
       <div id="side-top">
-        <span class="stit">Arquivos</span>
+        <span class="stit">EXPLORADOR</span>
         <div class="sbtns">
           <button class="ibtn" title="Novo arquivo" onclick="doNewFile()">📄</button>
           <button class="ibtn" title="Nova pasta" onclick="doNewFolder()">📁</button>
@@ -1539,11 +1526,19 @@ app.get("/files/:botId", authBot, (req, res) => {
     <div id="right">
       <div id="tabs"></div>
       <div id="breadcrumb">—</div>
-      <div id="editor"></div>
-      <div id="welcome">
-        <div class="big">📂</div>
-        <h2>ARES Editor</h2>
-        <p>Selecione um arquivo para editar</p>
+      <div id="editor-container">
+        <div id="welcome">
+          <div class="big">📂</div>
+          <h2>ARES Studio</h2>
+          <p>Selecione um arquivo para editar<br>ou use o terminal abaixo</p>
+        </div>
+      </div>
+      <div id="terminal-container">
+        <div id="terminal-header">
+          <span>⬢</span> TERMINAL
+          <span style="margin-left:auto; font-size:11px;">${botId}</span>
+        </div>
+        <div id="terminal-body"></div>
       </div>
     </div>
   </div>
@@ -1558,144 +1553,124 @@ app.get("/files/:botId", authBot, (req, res) => {
     </div>
   </div>
   <div class="toast" id="toast"></div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
   <script>
-    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } })
-    const BOT_ID = "${botId}"
-    const TOKEN = "${sessionToken}"
-    const API = "/files-api/" + BOT_ID
+    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
+    const BOT_ID = "${botId}";
+    const TOKEN = "${sessionToken}";
+    const API = "/files-api/" + BOT_ID;
+    const socket = io();
     function apiUrl(action, extra) {
-      return API + action + "?s=" + TOKEN + (extra ? "&" + extra : "")
+      return API + action + "?s=" + TOKEN + (extra ? "&" + extra : "");
     }
-    let ed = null
-    let currentFile = null
-    let isDirty = false
-    let openDirs = new Set()
-    let treeData = []
-    let tabs = []
-    let models = {}
-    let modalCb = null
+    let ed = null;
+    let currentFile = null;
+    let isDirty = false;
+    let openDirs = new Set();
+    let treeData = [];
+    let tabs = [];
+    let models = {};
+    let modalCb = null;
+    let term = null;
+    let fitAddon = null;
     function toggleSide() {
-      document.getElementById("side").classList.toggle("open")
-      document.getElementById("side-overlay").classList.toggle("on")
+      document.getElementById("side").classList.toggle("open");
+      document.getElementById("side-overlay").classList.toggle("on");
     }
     function closeSide() {
-      document.getElementById("side").classList.remove("open")
-      document.getElementById("side-overlay").classList.remove("on")
+      document.getElementById("side").classList.remove("open");
+      document.getElementById("side-overlay").classList.remove("on");
     }
-    function ext(n) {
-      return n.includes(".") ? n.split(".").pop().toLowerCase() : ""
-    }
+    function ext(n) { return n.includes(".") ? n.split(".").pop().toLowerCase() : ""; }
     function langIcon(n) {
-      const m = { js: "🟨", json: "🟧", py: "🐍", md: "📝", html: "🌐", css: "🎨", sh: "⚙️", env: "🔑", yml: "📋", txt: "📄" }
-      return m[ext(n)] || "📄"
+      const m = { js: "🟨", json: "🟧", py: "🐍", md: "📝", html: "🌐", css: "🎨", sh: "⚙️", env: "🔑", yml: "📋", txt: "📄" };
+      return m[ext(n)] || "📄";
     }
     function getLang(n) {
       const m = {
         js: "javascript", json: "json", py: "python", md: "markdown",
         sh: "shell", html: "html", css: "css", yml: "yaml", txt: "plaintext"
-      }
-      return m[ext(n)] || "plaintext"
+      };
+      return m[ext(n)] || "plaintext";
     }
-    function esc(s) {
-      return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    }
+    function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
     function buildRows(items, depth) {
-      let html = ""
+      let html = "";
       for (const item of items) {
-        const pad = 8 + depth * 14
+        const pad = 8 + depth * 14;
         if (item.type === "dir") {
-          const open = openDirs.has(item.path)
-          html += \`<div class="row" style="padding-left:\${pad}px" onclick="toggleDir('\${esc(item.path)}')">\`
-          html += \`<span class="arr \${open ? 'o' : ''}">▶</span>\`
-          html += \`<span class="ico">\${open ? '📂' : '📁'}</span>\`
-          html += \`<span class="lbl d">\${esc(item.name)}</span></div>\`
-          if (open && item.children) {
-            html += buildRows(item.children, depth + 1)
-          }
+          const open = openDirs.has(item.path);
+          html += \`<div class="row" style="padding-left:\${pad}px" onclick="toggleDir('\${esc(item.path)}')">\`;
+          html += \`<span class="arr \${open ? 'o' : ''}">▶</span>\`;
+          html += \`<span class="ico">\${open ? '📂' : '📁'}</span>\`;
+          html += \`<span class="lbl d">\${esc(item.name)}</span></div>\`;
+          if (open && item.children) html += buildRows(item.children, depth + 1);
         } else {
-          html += \`<div class="row\${currentFile === item.path ? ' sel' : ''}" style="padding-left:\${pad + 14}px" onclick="openFile('\${esc(item.path)}')">\`
-          html += \`<span class="arr h">▶</span>\`
-          html += \`<span class="ico">\${langIcon(item.name)}</span>\`
-          html += \`<span class="lbl">\${esc(item.name)}</span></div>\`
+          html += \`<div class="row\${currentFile === item.path ? ' sel' : ''}" style="padding-left:\${pad + 14}px" onclick="openFile('\${esc(item.path)}')">\`;
+          html += \`<span class="arr h">▶</span>\`;
+          html += \`<span class="ico">\${langIcon(item.name)}</span>\`;
+          html += \`<span class="lbl">\${esc(item.name)}</span></div>\`;
         }
       }
-      return html
+      return html;
     }
     function renderTree() {
-      const treeEl = document.getElementById("tree")
-      if (treeData.length) {
-        treeEl.innerHTML = buildRows(treeData, 0)
-      } else {
-        treeEl.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--tx2)">Pasta vazia</div>'
-      }
+      const treeEl = document.getElementById("tree");
+      treeEl.innerHTML = treeData.length ? buildRows(treeData, 0) : '<div style="padding:12px;font-size:12px;color:var(--tx2)">Pasta vazia</div>';
     }
     function toggleDir(p) {
-      if (openDirs.has(p)) {
-        openDirs.delete(p)
-      } else {
-        openDirs.add(p)
-      }
-      renderTree()
+      openDirs.has(p) ? openDirs.delete(p) : openDirs.add(p);
+      renderTree();
     }
     async function loadTree() {
       try {
-        const r = await fetch(apiUrl("/tree"))
-        if (!r.ok) throw new Error(r.status)
-        treeData = await r.json()
-        renderTree()
+        const r = await fetch(apiUrl("/tree"));
+        if (!r.ok) throw new Error(r.status);
+        treeData = await r.json();
+        renderTree();
       } catch (e) {
-        document.getElementById("tree").innerHTML = \`<div style="padding:12px;font-size:12px;color:var(--red)">Erro: \${e.message}</div>\`
+        document.getElementById("tree").innerHTML = \`<div style="padding:12px;font-size:12px;color:var(--red)">Erro: \${e.message}</div>\`;
       }
     }
-    function refreshTree() { loadTree() }
+    function refreshTree() { loadTree(); }
     function renderTabs() {
-      const tabsEl = document.getElementById("tabs")
+      const tabsEl = document.getElementById("tabs");
       tabsEl.innerHTML = tabs.map(t => {
-        const name = t.path.split("/").pop()
-        const on = t.path === currentFile ? " on" : ""
-        const ind = t.dirty ? '<span class="dot"></span>' : \`<span class="x" onclick="closeTab(event,'\${esc(t.path)}')">✕</span>\`
-        return \`<div class="tab\${on}" onclick="switchTo('\${esc(t.path)}')" title="\${esc(t.path)}">\${langIcon(name)} \${esc(name)}\${ind}</div>\`
-      }).join("")
+        const name = t.path.split("/").pop();
+        const on = t.path === currentFile ? " on" : "";
+        const ind = t.dirty ? '<span class="dot"></span>' : \`<span class="x" onclick="closeTab(event,'\${esc(t.path)}')">✕</span>\`;
+        return \`<div class="tab\${on}" onclick="switchTo('\${esc(t.path)}')" title="\${esc(t.path)}">\${langIcon(name)} \${esc(name)}\${ind}</div>\`;
+      }).join("");
     }
-    function switchTo(p) {
-      if (p !== currentFile) openFile(p)
-    }
+    function switchTo(p) { if (p !== currentFile) openFile(p); }
     function closeTab(e, p) {
-      e.stopPropagation()
-      const t = tabs.find(x => x.path === p)
-      if (t && t.dirty && !confirm("Fechar sem salvar?")) return
-      tabs = tabs.filter(x => x.path !== p)
-      if (models[p]) {
-        models[p].dispose()
-        delete models[p]
-      }
+      e.stopPropagation();
+      const t = tabs.find(x => x.path === p);
+      if (t && t.dirty && !confirm("Fechar sem salvar?")) return;
+      tabs = tabs.filter(x => x.path !== p);
+      if (models[p]) { models[p].dispose(); delete models[p]; }
       if (currentFile === p) {
-        if (tabs.length) {
-          openFile(tabs[tabs.length - 1].path)
-        } else {
-          clearEditor()
-        }
+        if (tabs.length) openFile(tabs[tabs.length - 1].path);
+        else clearEditor();
       }
-      renderTabs()
+      renderTabs();
     }
     function clearEditor() {
-      currentFile = null
-      isDirty = false
-      if (ed) ed.setValue("")
-      document.getElementById("editor").style.display = "none"
-      document.getElementById("welcome").style.display = "flex"
-      document.getElementById("breadcrumb").textContent = "—"
-      document.getElementById("unsaved").style.display = "none"
-      ;["btn-save", "btn-del", "btn-ren"].forEach(id => {
-        document.getElementById(id).style.display = "none"
-      })
-      renderTree()
+      currentFile = null; isDirty = false;
+      if (ed) ed.setValue("");
+      document.getElementById("editor-container").innerHTML = \`
+        <div id="welcome">
+          <div class="big">📂</div>
+          <h2>ARES Studio</h2>
+          <p>Selecione um arquivo para editar<br>ou use o terminal abaixo</p>
+        </div>\`;
+      document.getElementById("breadcrumb").textContent = "—";
+      document.getElementById("unsaved").style.display = "none";
+      ["btn-save", "btn-del", "btn-ren"].forEach(id => document.getElementById(id).style.display = "none");
+      renderTree();
     }
     require(["vs/editor/editor.main"], function() {
       monaco.editor.defineTheme("ares", {
-        base: "vs-dark",
-        inherit: true,
+        base: "vs-dark", inherit: true,
         rules: [
           { token: "comment", foreground: "8b949e", fontStyle: "italic" },
           { token: "keyword", foreground: "ff7b72" },
@@ -1708,7 +1683,9 @@ app.get("/files/:botId", authBot, (req, res) => {
           "editorLineNumber.foreground": "#484f58",
           "editorLineNumber.activeForeground": "#e6edf3"
         }
-      })
+      });
+      const editorContainer = document.getElementById("editor-container");
+      editorContainer.innerHTML = '<div id="editor" style="height:100%;"></div>';
       ed = monaco.editor.create(document.getElementById("editor"), {
         theme: "ares",
         fontSize: 14,
@@ -1717,205 +1694,210 @@ app.get("/files/:botId", authBot, (req, res) => {
         scrollBeyondLastLine: false,
         wordWrap: "on",
         padding: { top: 10 }
-      })
+      });
       ed.onDidChangeModelContent(() => {
         if (!isDirty) {
-          isDirty = true
-          document.getElementById("unsaved").style.display = "inline"
-          const t = tabs.find(x => x.path === currentFile)
-          if (t) t.dirty = true
-          renderTabs()
+          isDirty = true;
+          document.getElementById("unsaved").style.display = "inline";
+          const t = tabs.find(x => x.path === currentFile);
+          if (t) t.dirty = true;
+          renderTabs();
         }
-      })
-      ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, doSave)
-      document.getElementById("editor").style.display = "none"
-      loadTree()
-    })
+      });
+      ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, doSave);
+      loadTree();
+    });
     async function openFile(p) {
-      if (!ed) return
+      if (!ed) return;
       if (!models[p]) {
         try {
-          const r = await fetch(apiUrl("/read", "path=" + encodeURIComponent(p)))
-          if (!r.ok) {
-            toast("Erro ao abrir: " + r.status, "err")
-            return
-          }
-          models[p] = monaco.editor.createModel(await r.text(), getLang(p))
-          if (!tabs.find(t => t.path === p)) {
-            tabs.push({ path: p, dirty: false })
-          }
-        } catch (e) {
-          toast("Erro ao carregar arquivo", "err")
-          return
-        }
+          const r = await fetch(apiUrl("/read", "path=" + encodeURIComponent(p)));
+          if (!r.ok) { toast("Erro ao abrir: " + r.status, "err"); return; }
+          models[p] = monaco.editor.createModel(await r.text(), getLang(p));
+          if (!tabs.find(t => t.path === p)) tabs.push({ path: p, dirty: false });
+        } catch (e) { toast("Erro ao carregar arquivo", "err"); return; }
       }
-      currentFile = p
-      isDirty = false
-      ed.setModel(models[p])
-      document.getElementById("editor").style.display = "block"
-      document.getElementById("welcome").style.display = "none"
-      document.getElementById("breadcrumb").textContent = p
-      document.getElementById("unsaved").style.display = "none"
-      ;["btn-save", "btn-del", "btn-ren"].forEach(id => {
-        document.getElementById(id).style.display = "inline-flex"
-      })
-      const t = tabs.find(x => x.path === p)
-      if (t) t.dirty = false
-      renderTree()
-      renderTabs()
-      closeSide()
-      ed.focus()
+      currentFile = p;
+      isDirty = false;
+      ed.setModel(models[p]);
+      if (!document.getElementById("editor")) {
+        document.getElementById("editor-container").innerHTML = '<div id="editor" style="height:100%;"></div>';
+        ed = monaco.editor.create(document.getElementById("editor"), {
+          theme: "ares", fontSize: 14, automaticLayout: true,
+          minimap: { enabled: false }, scrollBeyondLastLine: false, wordWrap: "on", padding: { top: 10 }
+        });
+        ed.setModel(models[p]);
+      }
+      document.getElementById("breadcrumb").textContent = p;
+      document.getElementById("unsaved").style.display = "none";
+      ["btn-save", "btn-del", "btn-ren"].forEach(id => document.getElementById(id).style.display = "inline-flex");
+      const t = tabs.find(x => x.path === p);
+      if (t) t.dirty = false;
+      renderTree();
+      renderTabs();
+      closeSide();
+      ed.focus();
     }
     async function doSave() {
-      if (!currentFile || !ed) return
+      if (!currentFile || !ed) return;
       try {
         const r = await fetch(apiUrl("/write"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: currentFile, content: ed.getValue() })
-        })
+        });
         if (r.ok) {
-          isDirty = false
-          document.getElementById("unsaved").style.display = "none"
-          const t = tabs.find(x => x.path === currentFile)
-          if (t) t.dirty = false
-          renderTabs()
-          toast("✅ Salvo!", "ok")
-        } else {
-          throw new Error(r.status)
-        }
-      } catch (e) {
-        toast("Erro: " + e.message, "err")
-      }
+          isDirty = false;
+          document.getElementById("unsaved").style.display = "none";
+          const t = tabs.find(x => x.path === currentFile);
+          if (t) t.dirty = false;
+          renderTabs();
+          toast("✅ Salvo!", "ok");
+        } else throw new Error(r.status);
+      } catch (e) { toast("Erro: " + e.message, "err"); }
     }
     async function doDel() {
-      if (!currentFile || !confirm('Excluir "' + currentFile + '"?')) return
+      if (!currentFile || !confirm('Excluir "' + currentFile + '"?')) return;
       try {
         const r = await fetch(apiUrl("/delete"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: currentFile })
-        })
-        if (r.ok) {
-          toast("🗑️ Excluído!", "ok")
-          closeTab({ stopPropagation: () => {} }, currentFile)
-          loadTree()
-        } else {
-          toast("Erro " + r.status, "err")
-        }
-      } catch (e) {
-        toast("Erro ao excluir", "err")
-      }
+        });
+        if (r.ok) { toast("🗑️ Excluído!", "ok"); closeTab({ stopPropagation: () => {} }, currentFile); loadTree(); }
+        else toast("Erro " + r.status, "err");
+      } catch (e) { toast("Erro ao excluir", "err"); }
     }
     async function doRename() {
-      if (!currentFile) return
-      const parts = currentFile.split("/")
-      const oldName = parts[parts.length - 1]
-      const newName = prompt("Novo nome:", oldName)
-      if (!newName || newName === oldName) return
-      const newPath = [...parts.slice(0, -1), newName].join("/")
+      if (!currentFile) return;
+      const parts = currentFile.split("/");
+      const oldName = parts[parts.length - 1];
+      const newName = prompt("Novo nome:", oldName);
+      if (!newName || newName === oldName) return;
+      const newPath = [...parts.slice(0, -1), newName].join("/");
       try {
         const r = await fetch(apiUrl("/rename"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ from: currentFile, to: newPath })
-        })
+        });
         if (r.ok) {
-          const t = tabs.find(x => x.path === currentFile)
-          if (t) t.path = newPath
+          const t = tabs.find(x => x.path === currentFile);
+          if (t) t.path = newPath;
           if (models[currentFile]) {
-            models[newPath] = models[currentFile]
-            delete models[currentFile]
+            models[newPath] = models[currentFile];
+            delete models[currentFile];
           }
-          currentFile = newPath
-          await loadTree()
-          openFile(newPath)
-          toast("✅ Renomeado!", "ok")
-        } else {
-          toast("Erro ao renomear", "err")
-        }
-      } catch (e) {
-        toast("Erro ao renomear", "err")
-      }
+          currentFile = newPath;
+          await loadTree();
+          openFile(newPath);
+          toast("✅ Renomeado!", "ok");
+        } else toast("Erro ao renomear", "err");
+      } catch (e) { toast("Erro ao renomear", "err"); }
     }
     function doNewFile() {
-      const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : ""
-      const fileName = prompt("Nome do arquivo:", "novo.js")
-      if (!fileName) return
-      const path = folder ? folder + "/" + fileName : fileName
-      const safePath = path.replace(/[^a-zA-Z0-9\\/_.-]/g, "_")
+      const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : "";
+      const fileName = prompt("Nome do arquivo:", "novo.js");
+      if (!fileName) return;
+      const path = folder ? folder + "/" + fileName : fileName;
+      const safePath = path.replace(/[^a-zA-Z0-9\\/_.-]/g, "_");
       fetch(apiUrl("/write"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: safePath, content: "" })
       })
       .then(r => {
-        if (r.ok) {
-          loadTree()
-          toast("✅ Arquivo criado!", "ok")
-          setTimeout(() => openFile(safePath), 500)
-        } else {
-          return r.text().then(t => { throw new Error(t) })
-        }
+        if (r.ok) { loadTree(); toast("✅ Arquivo criado!", "ok"); setTimeout(() => openFile(safePath), 500); }
+        else return r.text().then(t => { throw new Error(t); });
       })
-      .catch(e => toast("Erro: " + e.message, "err"))
+      .catch(e => toast("Erro: " + e.message, "err"));
     }
     function doNewFolder() {
-      const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : ""
-      const folderName = prompt("Nome da pasta:", "nova-pasta")
-      if (!folderName) return
-      const path = folder ? folder + "/" + folderName : folderName
-      const safePath = path.replace(/[^a-zA-Z0-9\\/_-]/g, "_")
+      const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : "";
+      const folderName = prompt("Nome da pasta:", "nova-pasta");
+      if (!folderName) return;
+      const path = folder ? folder + "/" + folderName : folderName;
+      const safePath = path.replace(/[^a-zA-Z0-9\\/_-]/g, "_");
       fetch(apiUrl("/mkdir"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: safePath })
       })
       .then(r => {
-        if (r.ok) {
-          loadTree()
-          toast("✅ Pasta criada!", "ok")
-        } else {
-          return r.text().then(t => { throw new Error(t) })
-        }
+        if (r.ok) { loadTree(); toast("✅ Pasta criada!", "ok"); }
+        else return r.text().then(t => { throw new Error(t); });
       })
-      .catch(e => toast("Erro: " + e.message, "err"))
+      .catch(e => toast("Erro: " + e.message, "err"));
     }
     function openModal(title, placeholder, cb) {
-      modalCb = cb
-      document.getElementById("modal-title").textContent = title
-      document.getElementById("modal-in").value = placeholder || ""
-      document.getElementById("modal-in").placeholder = placeholder || ""
-      document.getElementById("modal").classList.add("on")
-      setTimeout(() => document.getElementById("modal-in").focus(), 100)
+      modalCb = cb;
+      document.getElementById("modal-title").textContent = title;
+      document.getElementById("modal-in").value = placeholder || "";
+      document.getElementById("modal-in").placeholder = placeholder || "";
+      document.getElementById("modal").classList.add("on");
+      setTimeout(() => document.getElementById("modal-in").focus(), 100);
     }
-    function closeModal() {
-      document.getElementById("modal").classList.remove("on")
-      modalCb = null
-    }
+    function closeModal() { document.getElementById("modal").classList.remove("on"); modalCb = null; }
     function confirmModal() {
-      const v = document.getElementById("modal-in").value.trim()
-      if (!v) return
-      closeModal()
-      if (modalCb) modalCb(v)
+      const v = document.getElementById("modal-in").value.trim();
+      if (!v) return;
+      closeModal();
+      if (modalCb) modalCb(v);
     }
     document.getElementById("modal-in").addEventListener("keydown", e => {
-      if (e.key === "Enter") confirmModal()
-      if (e.key === "Escape") closeModal()
-    })
+      if (e.key === "Enter") confirmModal();
+      if (e.key === "Escape") closeModal();
+    });
     document.getElementById("modal").addEventListener("click", e => {
-      if (e.target === document.getElementById("modal")) closeModal()
-    })
+      if (e.target === document.getElementById("modal")) closeModal();
+    });
     function toast(msg, type) {
-      const el = document.getElementById("toast")
-      el.textContent = msg
-      el.className = "toast on " + (type || "")
-      clearTimeout(el._t)
-      el._t = setTimeout(() => el.className = "toast", 2500)
+      const el = document.getElementById("toast");
+      el.textContent = msg;
+      el.className = "toast on " + (type || "");
+      clearTimeout(el._t);
+      el._t = setTimeout(() => el.className = "toast", 2500);
     }
+    function initTerminal() {
+      const terminalBody = document.getElementById("terminal-body");
+      term = new Terminal({
+        cursorBlink: true,
+        fontSize: 13,
+        fontFamily: 'Menlo, Consolas, monospace',
+        theme: { background: '#1e1e1e', foreground: '#cccccc' },
+        scrollback: 5000
+      });
+      fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(terminalBody);
+      fitAddon.fit();
+      socket.on('connect', () => {
+        term.writeln('\\x1b[32m✅ Conectado ao terminal\\x1b[0m');
+        term.writeln('\\x1b[33m💡 Dica: use "npm install <pacote>" para instalar dependências\\x1b[0m');
+        term.writeln('');
+        socket.emit('request-history', { botId: BOT_ID });
+      });
+      socket.on('history-' + BOT_ID, (data) => {
+        term.write(data);
+      });
+      socket.on('log-' + BOT_ID, (data) => {
+        term.write(data);
+      });
+      term.onData(data => {
+        socket.emit('input', { botId: BOT_ID, data });
+      });
+      window.addEventListener('resize', () => {
+        if (fitAddon) fitAddon.fit();
+      });
+      term.attachCustomKeyEventHandler((arg) => {
+        if (arg.ctrlKey && arg.key === 'l') {
+          term.clear();
+          return false;
+        }
+        return true;
+      });
+    }
+    window.onload = () => {
+      initTerminal();
+    };
   </script>
 </body>
-</html>`)
+</html>`);
 })
 
 app.use("/files-api", authBot, (req, res, next) => {
