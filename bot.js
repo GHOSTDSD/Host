@@ -64,10 +64,8 @@ try {
   } else {
     console.log("✅ Pasta instances já existe")
   }
-  
   fs.accessSync(BASE_PATH, fs.constants.W_OK)
   console.log("✅ Permissão de escrita OK")
-  
   const testFile = path.join(BASE_PATH, "test.txt")
   fs.writeFileSync(testFile, "test")
   fs.unlinkSync(testFile)
@@ -867,10 +865,8 @@ bot.on("callback_query", async query => {
       console.log("🆕 Criando bot do zero para:", chatId)
       const botId = generateBotId()
       const instancePath = path.join(BASE_PATH, botId)
-      
       console.log("📁 Criando pasta:", instancePath)
       fs.mkdirSync(instancePath, { recursive: true, mode: 0o755 })
-      
       const packageJson = {
         name: "meu-bot",
         version: "1.0.0",
@@ -882,7 +878,6 @@ bot.on("callback_query", async query => {
       const packagePath = path.join(instancePath, "package.json")
       fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2))
       console.log("✅ package.json criado")
-      
       const indexJs = `// Seu bot aqui
 console.log("🤖 Bot iniciado com sucesso!");
 
@@ -903,20 +898,15 @@ process.on('uncaughtException', (err) => {
       const indexPath = path.join(instancePath, "index.js")
       fs.writeFileSync(indexPath, indexJs)
       console.log("✅ index.js criado")
-      
       const readmePath = path.join(instancePath, "README.md")
       fs.writeFileSync(readmePath, "# Meu Bot\n\nBot criado do zero no ARES HOST.")
       console.log("✅ README.md criado")
-      
       saveMeta(botId, chatId, "meu-bot")
       console.log("✅ Meta salva")
-      
       const sessionToken = genWebSession(chatId)
       const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
       const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
-      
       console.log("✅ Bot criado com sucesso:", botId)
-      
       return bot.editMessageText(
         `✅ *Bot criado do zero!*\n\n` +
         `🆔 ID: \`${botId}\`\n` +
@@ -1366,17 +1356,14 @@ app.get("/files/:botId", authBot, (req, res) => {
   const botId = req.params.botId
   const sessionToken = req.query.s
   const botPath = path.join(BASE_PATH, botId)
-  
   if (!fs.existsSync(botPath)) {
     return res.status(404).send("Bot não encontrado")
   }
-
   try {
     fs.accessSync(botPath, fs.constants.R_OK | fs.constants.W_OK)
   } catch {
     return res.status(403).send("Sem permissão de acesso à pasta do bot")
   }
-
   res.send(`<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1786,52 +1773,46 @@ app.get("/files/:botId", authBot, (req, res) => {
     }
     function doNewFile() {
       const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : ""
-      const name = prompt("Nome do arquivo:", "novo.js")
-      if (!name) return
-      const path = folder ? folder + "/" + name : name
-      openModal("Novo arquivo", name, async (newName) => {
-        const finalPath = folder ? folder + "/" + newName : newName
-        try {
-          const r = await fetch(apiUrl("/write"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: finalPath, content: "" })
-          })
-          if (r.ok) {
-            await loadTree()
-            openFile(finalPath)
-            toast("✅ Criado!", "ok")
-          } else {
-            toast("Erro ao criar", "err")
-          }
-        } catch (e) {
-          toast("Erro ao criar arquivo", "err")
+      const fileName = prompt("Nome do arquivo:", "novo.js")
+      if (!fileName) return
+      const path = folder ? folder + "/" + fileName : fileName
+      const safePath = path.replace(/[^a-zA-Z0-9\\/_.-]/g, "_")
+      fetch(apiUrl("/write"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: safePath, content: "" })
+      })
+      .then(r => {
+        if (r.ok) {
+          loadTree()
+          toast("✅ Arquivo criado!", "ok")
+          setTimeout(() => openFile(safePath), 500)
+        } else {
+          return r.text().then(t => { throw new Error(t) })
         }
       })
+      .catch(e => toast("Erro: " + e.message, "err"))
     }
     function doNewFolder() {
       const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : ""
-      const name = prompt("Nome da pasta:", "nova-pasta")
-      if (!name) return
-      const path = folder ? folder + "/" + name : name
-      openModal("Nova pasta", name, async (newName) => {
-        const finalPath = folder ? folder + "/" + newName : newName
-        try {
-          const r = await fetch(apiUrl("/mkdir"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: finalPath })
-          })
-          if (r.ok) {
-            await loadTree()
-            toast("✅ Pasta criada!", "ok")
-          } else {
-            toast("Erro", "err")
-          }
-        } catch (e) {
-          toast("Erro ao criar pasta", "err")
+      const folderName = prompt("Nome da pasta:", "nova-pasta")
+      if (!folderName) return
+      const path = folder ? folder + "/" + folderName : folderName
+      const safePath = path.replace(/[^a-zA-Z0-9\\/_-]/g, "_")
+      fetch(apiUrl("/mkdir"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: safePath })
+      })
+      .then(r => {
+        if (r.ok) {
+          loadTree()
+          toast("✅ Pasta criada!", "ok")
+        } else {
+          return r.text().then(t => { throw new Error(t) })
         }
       })
+      .catch(e => toast("Erro: " + e.message, "err"))
     }
     function openModal(title, placeholder, cb) {
       modalCb = cb
@@ -1877,21 +1858,17 @@ app.use("/files-api", authBot, (req, res, next) => {
   const botId = m[1]
   const action = m[2]
   const botPath = path.join(BASE_PATH, botId)
-  
   if (!fs.existsSync(botPath)) {
     return res.status(404).send("Bot não encontrado")
   }
-
   try {
     fs.accessSync(botPath, fs.constants.R_OK | fs.constants.W_OK)
   } catch {
     return res.status(403).send("Sem permissão de acesso")
   }
-
   if (action === "/tree") {
     return res.json(walkDir(botPath, ""))
   }
-  
   if (action === "/read") {
     const fp = path.normalize(path.join(botPath, req.query.path || ""))
     if (!fp.startsWith(botPath)) return res.status(403).send("Proibido")
@@ -1901,7 +1878,6 @@ app.use("/files-api", authBot, (req, res, next) => {
     res.setHeader("Content-Type", "text/plain; charset=utf-8")
     return res.send(fs.readFileSync(fp, "utf8"))
   }
-  
   express.json()(req, res, () => {
     if (action === "/write") {
       const fp = path.normalize(path.join(botPath, req.body.path || ""))
@@ -2008,9 +1984,7 @@ process.on("uncaughtException", err => {
 
 server.listen(PORT, () => {
   aresBanner()
-  
   const SAVE_FILE = path.join(BASE_PATH, "bots_save.json")
-  
   function saveBotsState() {
     try {
       const bots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== ".git" && f !== "node_modules")
@@ -2031,7 +2005,6 @@ server.listen(PORT, () => {
       console.error("Erro ao salvar estado dos bots:", err)
     }
   }
-
   function loadBotsState() {
     try {
       if (!fs.existsSync(SAVE_FILE)) {
@@ -2040,36 +2013,28 @@ server.listen(PORT, () => {
       }
       const state = JSON.parse(fs.readFileSync(SAVE_FILE, "utf8"))
       console.log(`📂 Estado anterior carregado: ${state.bots.length} bots`)
-      
       const currentBots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== ".git" && f !== "node_modules")
       const missingBots = state.bots.filter(b => !currentBots.includes(b.id))
-      
       if (missingBots.length > 0) {
         console.log(`⚠️  ${missingBots.length} bots não encontrados no disco`)
       }
-      
       return state
     } catch (err) {
       console.error("Erro ao carregar estado dos bots:", err)
     }
   }
-
   setInterval(saveBotsState, 5 * 60 * 1000)
-
   process.on('SIGTERM', () => {
     console.log('📥 Recebido SIGTERM, salvando estado...')
     saveBotsState()
     process.exit(0)
   })
-
   process.on('SIGINT', () => {
     console.log('📥 Recebido SIGINT, salvando estado...')
     saveBotsState()
     process.exit(0)
   })
-
   const savedState = loadBotsState()
-  
   if (fs.existsSync(BASE_PATH)) {
     const bots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== ".git" && f !== "node_modules")
     if (bots.length > 0) {
