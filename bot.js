@@ -866,6 +866,7 @@ bot.on("callback_query", async query => {
       const instancePath = path.join(BASE_PATH, botId)
       console.log("📁 Criando pasta:", instancePath)
       fs.mkdirSync(instancePath, { recursive: true, mode: 0o755 })
+      
       const packageJson = {
         name: "meu-bot",
         version: "1.0.0",
@@ -885,6 +886,7 @@ bot.on("callback_query", async query => {
       const packagePath = path.join(instancePath, "package.json")
       fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2))
       console.log("✅ package.json criado")
+      
       const indexJs = `// 🚀 Modo Fácil ARES
 console.log("🤖 Bot iniciado com sucesso!");
 console.log("📦 Dependências instaladas:", Object.keys(require('./package.json').dependencies || {}));
@@ -907,6 +909,7 @@ process.on('uncaughtException', (err) => {
       const indexPath = path.join(instancePath, "index.js")
       fs.writeFileSync(indexPath, indexJs)
       console.log("✅ index.js criado")
+      
       const readmePath = path.join(instancePath, "README.md")
       fs.writeFileSync(readmePath, `# 🤖 Meu Bot ARES
 
@@ -943,12 +946,16 @@ const sqlite3 = require('sqlite3').verbose();
 \`\`\`
 `)
       console.log("✅ README.md criado")
+      
       saveMeta(botId, chatId, "meu-bot")
       console.log("✅ Meta salva")
+      
       const sessionToken = genWebSession(chatId)
       const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
       const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
+      
       console.log("✅ Bot criado com sucesso:", botId)
+      
       return bot.editMessageText(
         `✅ *Bot criado do zero!*\n\n` +
         `🆔 ID: \`${botId}\`\n` +
@@ -1401,14 +1408,17 @@ app.get("/files/:botId", authBot, (req, res) => {
   const botId = req.params.botId
   const sessionToken = req.query.s
   const botPath = path.join(BASE_PATH, botId)
+  
   if (!fs.existsSync(botPath)) {
     return res.status(404).send("Bot não encontrado")
   }
+
   try {
     fs.accessSync(botPath, fs.constants.R_OK | fs.constants.W_OK)
   } catch {
     return res.status(403).send("Sem permissão de acesso à pasta do bot")
   }
+
   res.send(`<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1907,17 +1917,21 @@ app.use("/files-api", authBot, (req, res, next) => {
   const botId = m[1]
   const action = m[2]
   const botPath = path.join(BASE_PATH, botId)
+  
   if (!fs.existsSync(botPath)) {
     return res.status(404).send("Bot não encontrado")
   }
+
   try {
     fs.accessSync(botPath, fs.constants.R_OK | fs.constants.W_OK)
   } catch {
     return res.status(403).send("Sem permissão de acesso")
   }
+
   if (action === "/tree") {
     return res.json(walkDir(botPath, ""))
   }
+  
   if (action === "/read") {
     const fp = path.normalize(path.join(botPath, req.query.path || ""))
     if (!fp.startsWith(botPath)) return res.status(403).send("Proibido")
@@ -1927,6 +1941,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     res.setHeader("Content-Type", "text/plain; charset=utf-8")
     return res.send(fs.readFileSync(fp, "utf8"))
   }
+  
   express.json()(req, res, () => {
     if (action === "/write") {
       const fp = path.normalize(path.join(botPath, req.body.path || ""))
