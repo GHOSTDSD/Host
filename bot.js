@@ -1902,6 +1902,8 @@ app.get("/files/:botId", authBot, (req, res) => {
       
       function initTerminal() {
         const terminalBody = document.getElementById("terminal-body");
+        if (!terminalBody) return;
+        
         term = new Terminal({
           cursorBlink: true,
           fontSize: 13,
@@ -1909,10 +1911,14 @@ app.get("/files/:botId", authBot, (req, res) => {
           theme: { background: '#1e1e1e', foreground: '#cccccc' },
           scrollback: 5000
         });
+        
         fitAddon = new FitAddon.FitAddon();
         term.loadAddon(fitAddon);
         term.open(terminalBody);
-        fitAddon.fit();
+        
+        setTimeout(() => {
+          if (fitAddon) fitAddon.fit();
+        }, 100);
         
         socket.on('connect', () => {
           term.writeln('\\x1b[32m✅ Conectado ao terminal\\x1b[0m');
@@ -1922,19 +1928,27 @@ app.get("/files/:botId", authBot, (req, res) => {
         });
         
         socket.on('history-' + BOT_ID, (data) => {
-          term.write(data);
+          if (data && term) {
+            term.write(data);
+          }
         });
         
         socket.on('log-' + BOT_ID, (data) => {
-          term.write(data);
+          if (data && term) {
+            term.write(data);
+          }
         });
         
         term.onData(data => {
-          socket.emit('input', { botId: BOT_ID, data });
+          if (socket && socket.connected) {
+            socket.emit('input', { botId: BOT_ID, data });
+          }
         });
         
         window.addEventListener('resize', () => {
-          if (fitAddon) fitAddon.fit();
+          if (fitAddon) {
+            setTimeout(() => fitAddon.fit(), 50);
+          }
         });
         
         term.attachCustomKeyEventHandler((arg) => {
@@ -1942,12 +1956,18 @@ app.get("/files/:botId", authBot, (req, res) => {
             term.clear();
             return false;
           }
+          if (arg.ctrlKey && arg.key === 'c') {
+            socket.emit('input', { botId: BOT_ID, data: '\\x03' });
+            return false;
+          }
           return true;
         });
+        
+        setTimeout(() => term.focus(), 200);
       }
       
       window.onload = function() {
-        initTerminal();
+        setTimeout(initTerminal, 500);
       };
       
       window.toggleSide = toggleSide;
