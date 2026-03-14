@@ -54,7 +54,22 @@ const s3Client = new S3Client({
 })
 
 const BASE_PATH = path.resolve(process.cwd(), "instances")
-if (!fs.existsSync(BASE_PATH)) fs.mkdirSync(BASE_PATH, { recursive: true })
+console.log("📁 BASE_PATH:", BASE_PATH)
+
+try {
+  if (!fs.existsSync(BASE_PATH)) {
+    fs.mkdirSync(BASE_PATH, { recursive: true })
+    console.log("✅ Pasta instances criada")
+  } else {
+    console.log("✅ Pasta instances já existe")
+  }
+  
+  fs.accessSync(BASE_PATH, fs.constants.W_OK)
+  console.log("✅ Permissão de escrita OK")
+} catch (err) {
+  console.error("❌ Erro com pasta instances:", err)
+  process.exit(1)
+}
 
 const activeBots = {}
 const userState = {}
@@ -70,19 +85,30 @@ const LOG_CONFIG = {
 }
 
 function saveMeta(botId, chatId, name) {
-  const mp = path.join(BASE_PATH, botId, "meta.json")
-  fs.writeFileSync(mp, JSON.stringify({ 
-    owner: String(chatId), 
-    name, 
-    createdAt: Date.now(),
-    lastAccessed: Date.now(),
-    nodeModulesHash: null
-  }))
+  try {
+    const botPath = path.join(BASE_PATH, botId)
+    if (!fs.existsSync(botPath)) {
+      fs.mkdirSync(botPath, { recursive: true })
+    }
+    const mp = path.join(botPath, "meta.json")
+    fs.writeFileSync(mp, JSON.stringify({ 
+      owner: String(chatId), 
+      name, 
+      createdAt: Date.now(),
+      lastAccessed: Date.now(),
+      nodeModulesHash: null
+    }))
+    console.log(`✅ Meta salva para ${botId}`)
+  } catch (err) {
+    console.error(`❌ Erro ao salvar meta para ${botId}:`, err)
+  }
 }
 
 function getMeta(botId) {
   try { 
-    return JSON.parse(fs.readFileSync(path.join(BASE_PATH, botId, "meta.json"), "utf8")) 
+    const metaPath = path.join(BASE_PATH, botId, "meta.json")
+    if (!fs.existsSync(metaPath)) return null
+    return JSON.parse(fs.readFileSync(metaPath, "utf8")) 
   } catch { return null }
 }
 
@@ -111,6 +137,8 @@ function getUserBots(chatId) {
   if (!fs.existsSync(BASE_PATH)) return []
   return fs.readdirSync(BASE_PATH).filter(f => {
     if (f === "_uploads") return false
+    const fullPath = path.join(BASE_PATH, f)
+    if (!fs.statSync(fullPath).isDirectory()) return false
     const owner = getOwner(f)
     return owner === String(chatId)
   })
@@ -163,7 +191,11 @@ function getStats(chatId = null) {
     bots = getUserBots(chatId)
   } else {
     bots = fs.existsSync(BASE_PATH) 
-      ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads") 
+      ? fs.readdirSync(BASE_PATH).filter(f => {
+          if (f === "_uploads") return false
+          const fullPath = path.join(BASE_PATH, f)
+          return fs.statSync(fullPath).isDirectory()
+        }) 
       : []
   }
   const total = bots.length
@@ -814,19 +846,27 @@ bot.on("callback_query", async query => {
     )
   }
   if (action === "create_from_scratch") {
-    const botId = generateBotId()
-    const instancePath = path.join(BASE_PATH, botId)
-    fs.mkdirSync(instancePath, { recursive: true })
-    const packageJson = {
-      name: "meu-bot",
-      version: "1.0.0",
-      description: "Bot criado do zero",
-      main: "index.js",
-      scripts: { start: "node index.js" },
-      dependencies: {}
-    }
-    fs.writeFileSync(path.join(instancePath, "package.json"), JSON.stringify(packageJson, null, 2))
-    const indexJs = `// Seu bot aqui
+    try {
+      console.log("🆕 Criando bot do zero para:", chatId)
+      const botId = generateBotId()
+      const instancePath = path.join(BASE_PATH, botId)
+      
+      console.log("📁 Criando pasta:", instancePath)
+      fs.mkdirSync(instancePath, { recursive: true })
+      
+      const packageJson = {
+        name: "meu-bot",
+        version: "1.0.0",
+        description: "Bot criado do zero",
+        main: "index.js",
+        scripts: { start: "node index.js" },
+        dependencies: {}
+      }
+      const packagePath = path.join(instancePath, "package.json")
+      fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2))
+      console.log("✅ package.json criado")
+      
+      const indexJs = `// Seu bot aqui
 console.log("🤖 Bot iniciado com sucesso!");
 
 const http = require('http');
@@ -843,29 +883,50 @@ server.listen(PORT, () => {
 process.on('uncaughtException', (err) => {
   console.error('Erro não tratado:', err);
 });`
-    fs.writeFileSync(path.join(instancePath, "index.js"), indexJs)
-    fs.writeFileSync(path.join(instancePath, "README.md"), "# Meu Bot\n\nBot criado do zero no ARES HOST.")
-    saveMeta(botId, chatId, "meu-bot")
-    const sessionToken = genWebSession(chatId)
-    const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
-    const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
-    return bot.editMessageText(
-      `✅ *Bot criado do zero!*\n\n` +
-      `🆔 ID: \`${botId}\`\n` +
-      `📁 Estrutura básica criada\n\n` +
-      `Agora edite os arquivos e depois inicie o bot.`,
-      {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "📁 Abrir Editor", url: editorUrl }],
-            [{ text: "📟 Abrir Terminal", url: terminalUrl }],
-            [{ text: "▶️ Iniciar Bot", callback_data: `start:${botId}` }],
-            [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
-          ]
+      const indexPath = path.join(instancePath, "index.js")
+      fs.writeFileSync(indexPath, indexJs)
+      console.log("✅ index.js criado")
+      
+      const readmePath = path.join(instancePath, "README.md")
+      fs.writeFileSync(readmePath, "# Meu Bot\n\nBot criado do zero no ARES HOST.")
+      console.log("✅ README.md criado")
+      
+      saveMeta(botId, chatId, "meu-bot")
+      console.log("✅ Meta salva")
+      
+      const sessionToken = genWebSession(chatId)
+      const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
+      const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
+      
+      console.log("✅ Bot criado com sucesso:", botId)
+      
+      return bot.editMessageText(
+        `✅ *Bot criado do zero!*\n\n` +
+        `🆔 ID: \`${botId}\`\n` +
+        `📁 Estrutura básica criada:\n` +
+        `• package.json\n` +
+        `• index.js\n` +
+        `• README.md\n\n` +
+        `Agora edite os arquivos e depois inicie o bot.`,
+        {
+          chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "📁 Abrir Editor", url: editorUrl }],
+              [{ text: "📟 Abrir Terminal", url: terminalUrl }],
+              [{ text: "▶️ Iniciar Bot", callback_data: `start:${botId}` }],
+              [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
+            ]
+          }
         }
-      }
-    )
+      )
+    } catch (err) {
+      console.error("❌ Erro ao criar bot do zero:", err)
+      return bot.editMessageText(
+        `❌ *Erro ao criar bot:*\n\n${err.message}`,
+        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
+      )
+    }
   }
   if (action === "menu_list") {
     const folders = getUserBots(chatId)
