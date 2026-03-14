@@ -1426,10 +1426,10 @@ app.get("/files/:botId", authBot, (req, res) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ARES Studio - ${botId}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
-  <script src="/socket.io/socket.io.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     :root { --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --bd: #30363d; --tx: #e6edf3; --tx2: #8b949e; --green: #3fb950; --blue: #58a6ff; --orange: #d29922; --red: #f85149; }
@@ -1564,347 +1564,405 @@ app.get("/files/:botId", authBot, (req, res) => {
   </div>
   <div class="toast" id="toast"></div>
   <script>
-    const socket = io();
-    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
-    const BOT_ID = "${botId}";
-    const TOKEN = "${sessionToken}";
-    const API = "/files-api/" + BOT_ID;
-    function apiUrl(action, extra) {
-      return API + action + "?s=" + TOKEN + (extra ? "&" + extra : "");
-    }
-    let ed = null;
-    let currentFile = null;
-    let isDirty = false;
-    let openDirs = new Set();
-    let treeData = [];
-    let tabs = [];
-    let models = {};
-    let modalCb = null;
-    let term = null;
-    let fitAddon = null;
-    function toggleSide() {
-      document.getElementById("side").classList.toggle("open");
-      document.getElementById("side-overlay").classList.toggle("on");
-    }
-    function closeSide() {
-      document.getElementById("side").classList.remove("open");
-      document.getElementById("side-overlay").classList.remove("on");
-    }
-    function ext(n) { return n.includes(".") ? n.split(".").pop().toLowerCase() : ""; }
-    function langIcon(n) {
-      const m = { js: "🟨", json: "🟧", py: "🐍", md: "📝", html: "🌐", css: "🎨", sh: "⚙️", env: "🔑", yml: "📋", txt: "📄" };
-      return m[ext(n)] || "📄";
-    }
-    function getLang(n) {
-      const m = {
-        js: "javascript", json: "json", py: "python", md: "markdown",
-        sh: "shell", html: "html", css: "css", yml: "yaml", txt: "plaintext"
-      };
-      return m[ext(n)] || "plaintext";
-    }
-    function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
-    function buildRows(items, depth) {
-      let html = "";
-      for (const item of items) {
-        const pad = 8 + depth * 14;
-        if (item.type === "dir") {
-          const open = openDirs.has(item.path);
-          html += \`<div class="row" style="padding-left:\${pad}px" onclick="toggleDir('\${esc(item.path)}')">\`;
-          html += \`<span class="arr \${open ? 'o' : ''}">▶</span>\`;
-          html += \`<span class="ico">\${open ? '📂' : '📁'}</span>\`;
-          html += \`<span class="lbl d">\${esc(item.name)}</span></div>\`;
-          if (open && item.children) html += buildRows(item.children, depth + 1);
-        } else {
-          html += \`<div class="row\${currentFile === item.path ? ' sel' : ''}" style="padding-left:\${pad + 14}px" onclick="openFile('\${esc(item.path)}')">\`;
-          html += \`<span class="arr h">▶</span>\`;
-          html += \`<span class="ico">\${langIcon(item.name)}</span>\`;
-          html += \`<span class="lbl">\${esc(item.name)}</span></div>\`;
-        }
+    (function() {
+      const socket = io();
+      const BOT_ID = "${botId}";
+      const TOKEN = "${sessionToken}";
+      const API = "/files-api/" + BOT_ID;
+      
+      function apiUrl(action, extra) {
+        return API + action + "?s=" + TOKEN + (extra ? "&" + extra : "");
       }
-      return html;
-    }
-    function renderTree() {
-      const treeEl = document.getElementById("tree");
-      treeEl.innerHTML = treeData.length ? buildRows(treeData, 0) : '<div style="padding:12px;font-size:12px;color:var(--tx2)">Pasta vazia</div>';
-    }
-    function toggleDir(p) {
-      openDirs.has(p) ? openDirs.delete(p) : openDirs.add(p);
-      renderTree();
-    }
-    async function loadTree() {
-      try {
-        const r = await fetch(apiUrl("/tree"));
-        if (!r.ok) throw new Error(r.status);
-        treeData = await r.json();
-        renderTree();
-      } catch (e) {
-        document.getElementById("tree").innerHTML = \`<div style="padding:12px;font-size:12px;color:var(--red)">Erro: \${e.message}</div>\`;
+      
+      let ed = null;
+      let currentFile = null;
+      let isDirty = false;
+      let openDirs = new Set();
+      let treeData = [];
+      let tabs = [];
+      let models = {};
+      let modalCb = null;
+      let term = null;
+      let fitAddon = null;
+      
+      function toggleSide() {
+        document.getElementById("side").classList.toggle("open");
+        document.getElementById("side-overlay").classList.toggle("on");
       }
-    }
-    function refreshTree() { loadTree(); }
-    function renderTabs() {
-      const tabsEl = document.getElementById("tabs");
-      tabsEl.innerHTML = tabs.map(t => {
-        const name = t.path.split("/").pop();
-        const on = t.path === currentFile ? " on" : "";
-        const ind = t.dirty ? '<span class="dot"></span>' : \`<span class="x" onclick="closeTab(event,'\${esc(t.path)}')">✕</span>\`;
-        return \`<div class="tab\${on}" onclick="switchTo('\${esc(t.path)}')" title="\${esc(t.path)}">\${langIcon(name)} \${esc(name)}\${ind}</div>\`;
-      }).join("");
-    }
-    function switchTo(p) { if (p !== currentFile) openFile(p); }
-    function closeTab(e, p) {
-      e.stopPropagation();
-      const t = tabs.find(x => x.path === p);
-      if (t && t.dirty && !confirm("Fechar sem salvar?")) return;
-      tabs = tabs.filter(x => x.path !== p);
-      if (models[p]) { models[p].dispose(); delete models[p]; }
-      if (currentFile === p) {
-        if (tabs.length) openFile(tabs[tabs.length - 1].path);
-        else clearEditor();
+      
+      function closeSide() {
+        document.getElementById("side").classList.remove("open");
+        document.getElementById("side-overlay").classList.remove("on");
       }
-      renderTabs();
-    }
-    function clearEditor() {
-      currentFile = null; isDirty = false;
-      if (ed) ed.setValue("");
-      document.getElementById("editor-container").innerHTML = \`
-        <div id="welcome">
-          <div class="big">📂</div>
-          <h2>ARES Studio</h2>
-          <p>Selecione um arquivo para editar<br>ou use o terminal abaixo</p>
-        </div>\`;
-      document.getElementById("breadcrumb").textContent = "—";
-      document.getElementById("unsaved").style.display = "none";
-      ["btn-save", "btn-del", "btn-ren"].forEach(id => document.getElementById(id).style.display = "none");
-      renderTree();
-    }
-    require(["vs/editor/editor.main"], function() {
-      monaco.editor.defineTheme("ares", {
-        base: "vs-dark", inherit: true,
-        rules: [
-          { token: "comment", foreground: "8b949e", fontStyle: "italic" },
-          { token: "keyword", foreground: "ff7b72" },
-          { token: "string", foreground: "a5d6ff" }
-        ],
-        colors: {
-          "editor.background": "#0d1117",
-          "editor.foreground": "#e6edf3",
-          "editor.lineHighlightBackground": "#161b22",
-          "editorLineNumber.foreground": "#484f58",
-          "editorLineNumber.activeForeground": "#e6edf3"
-        }
-      });
-      const editorContainer = document.getElementById("editor-container");
-      editorContainer.innerHTML = '<div id="editor" style="height:100%;"></div>';
-      ed = monaco.editor.create(document.getElementById("editor"), {
-        theme: "ares",
-        fontSize: 14,
-        automaticLayout: true,
-        minimap: { enabled: false },
-        scrollBeyondLastLine: false,
-        wordWrap: "on",
-        padding: { top: 10 }
-      });
-      ed.onDidChangeModelContent(() => {
-        if (!isDirty) {
-          isDirty = true;
-          document.getElementById("unsaved").style.display = "inline";
-          const t = tabs.find(x => x.path === currentFile);
-          if (t) t.dirty = true;
-          renderTabs();
-        }
-      });
-      ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, doSave);
-      loadTree();
-    });
-    async function openFile(p) {
-      if (!ed) return;
-      if (!models[p]) {
-        try {
-          const r = await fetch(apiUrl("/read", "path=" + encodeURIComponent(p)));
-          if (!r.ok) { toast("Erro ao abrir: " + r.status, "err"); return; }
-          models[p] = monaco.editor.createModel(await r.text(), getLang(p));
-          if (!tabs.find(t => t.path === p)) tabs.push({ path: p, dirty: false });
-        } catch (e) { toast("Erro ao carregar arquivo", "err"); return; }
+      
+      function ext(n) { return n.includes(".") ? n.split(".").pop().toLowerCase() : ""; }
+      
+      function langIcon(n) {
+        const m = { js: "🟨", json: "🟧", py: "🐍", md: "📝", html: "🌐", css: "🎨", sh: "⚙️", env: "🔑", yml: "📋", txt: "📄" };
+        return m[ext(n)] || "📄";
       }
-      currentFile = p;
-      isDirty = false;
-      ed.setModel(models[p]);
-      if (!document.getElementById("editor")) {
-        document.getElementById("editor-container").innerHTML = '<div id="editor" style="height:100%;"></div>';
-        ed = monaco.editor.create(document.getElementById("editor"), {
-          theme: "ares", fontSize: 14, automaticLayout: true,
-          minimap: { enabled: false }, scrollBeyondLastLine: false, wordWrap: "on", padding: { top: 10 }
-        });
-        ed.setModel(models[p]);
+      
+      function getLang(n) {
+        const m = {
+          js: "javascript", json: "json", py: "python", md: "markdown",
+          sh: "shell", html: "html", css: "css", yml: "yaml", txt: "plaintext"
+        };
+        return m[ext(n)] || "plaintext";
       }
-      document.getElementById("breadcrumb").textContent = p;
-      document.getElementById("unsaved").style.display = "none";
-      ["btn-save", "btn-del", "btn-ren"].forEach(id => document.getElementById(id).style.display = "inline-flex");
-      const t = tabs.find(x => x.path === p);
-      if (t) t.dirty = false;
-      renderTree();
-      renderTabs();
-      closeSide();
-      ed.focus();
-    }
-    async function doSave() {
-      if (!currentFile || !ed) return;
-      try {
-        const r = await fetch(apiUrl("/write"), {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: currentFile, content: ed.getValue() })
-        });
-        if (r.ok) {
-          isDirty = false;
-          document.getElementById("unsaved").style.display = "none";
-          const t = tabs.find(x => x.path === currentFile);
-          if (t) t.dirty = false;
-          renderTabs();
-          toast("✅ Salvo!", "ok");
-        } else throw new Error(r.status);
-      } catch (e) { toast("Erro: " + e.message, "err"); }
-    }
-    async function doDel() {
-      if (!currentFile || !confirm('Excluir "' + currentFile + '"?')) return;
-      try {
-        const r = await fetch(apiUrl("/delete"), {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: currentFile })
-        });
-        if (r.ok) { toast("🗑️ Excluído!", "ok"); closeTab({ stopPropagation: () => {} }, currentFile); loadTree(); }
-        else toast("Erro " + r.status, "err");
-      } catch (e) { toast("Erro ao excluir", "err"); }
-    }
-    async function doRename() {
-      if (!currentFile) return;
-      const parts = currentFile.split("/");
-      const oldName = parts[parts.length - 1];
-      const newName = prompt("Novo nome:", oldName);
-      if (!newName || newName === oldName) return;
-      const newPath = [...parts.slice(0, -1), newName].join("/");
-      try {
-        const r = await fetch(apiUrl("/rename"), {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ from: currentFile, to: newPath })
-        });
-        if (r.ok) {
-          const t = tabs.find(x => x.path === currentFile);
-          if (t) t.path = newPath;
-          if (models[currentFile]) {
-            models[newPath] = models[currentFile];
-            delete models[currentFile];
+      
+      function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+      
+      function buildRows(items, depth) {
+        let html = "";
+        for (const item of items) {
+          const pad = 8 + depth * 14;
+          if (item.type === "dir") {
+            const open = openDirs.has(item.path);
+            html += \`<div class="row" style="padding-left:\${pad}px" onclick="toggleDir('\${esc(item.path)}')">\`;
+            html += \`<span class="arr \${open ? 'o' : ''}">▶</span>\`;
+            html += \`<span class="ico">\${open ? '📂' : '📁'}</span>\`;
+            html += \`<span class="lbl d">\${esc(item.name)}</span></div>\`;
+            if (open && item.children) html += buildRows(item.children, depth + 1);
+          } else {
+            html += \`<div class="row\${currentFile === item.path ? ' sel' : ''}" style="padding-left:\${pad + 14}px" onclick="openFile('\${esc(item.path)}')">\`;
+            html += \`<span class="arr h">▶</span>\`;
+            html += \`<span class="ico">\${langIcon(item.name)}</span>\`;
+            html += \`<span class="lbl">\${esc(item.name)}</span></div>\`;
           }
-          currentFile = newPath;
-          await loadTree();
-          openFile(newPath);
-          toast("✅ Renomeado!", "ok");
-        } else toast("Erro ao renomear", "err");
-      } catch (e) { toast("Erro ao renomear", "err"); }
-    }
-    function doNewFile() {
-      const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : "";
-      const fileName = prompt("Nome do arquivo:", "novo.js");
-      if (!fileName) return;
-      const path = folder ? folder + "/" + fileName : fileName;
-      const safePath = path.replace(/[^a-zA-Z0-9\\/_.-]/g, "_");
-      fetch(apiUrl("/write"), {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: safePath, content: "" })
-      })
-      .then(r => {
-        if (r.ok) { loadTree(); toast("✅ Arquivo criado!", "ok"); setTimeout(() => openFile(safePath), 500); }
-        else return r.text().then(t => { throw new Error(t); });
-      })
-      .catch(e => toast("Erro: " + e.message, "err"));
-    }
-    function doNewFolder() {
-      const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : "";
-      const folderName = prompt("Nome da pasta:", "nova-pasta");
-      if (!folderName) return;
-      const path = folder ? folder + "/" + folderName : folderName;
-      const safePath = path.replace(/[^a-zA-Z0-9\\/_-]/g, "_");
-      fetch(apiUrl("/mkdir"), {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: safePath })
-      })
-      .then(r => {
-        if (r.ok) { loadTree(); toast("✅ Pasta criada!", "ok"); }
-        else return r.text().then(t => { throw new Error(t); });
-      })
-      .catch(e => toast("Erro: " + e.message, "err"));
-    }
-    function openModal(title, placeholder, cb) {
-      modalCb = cb;
-      document.getElementById("modal-title").textContent = title;
-      document.getElementById("modal-in").value = placeholder || "";
-      document.getElementById("modal-in").placeholder = placeholder || "";
-      document.getElementById("modal").classList.add("on");
-      setTimeout(() => document.getElementById("modal-in").focus(), 100);
-    }
-    function closeModal() { document.getElementById("modal").classList.remove("on"); modalCb = null; }
-    function confirmModal() {
-      const v = document.getElementById("modal-in").value.trim();
-      if (!v) return;
-      closeModal();
-      if (modalCb) modalCb(v);
-    }
-    document.getElementById("modal-in").addEventListener("keydown", e => {
-      if (e.key === "Enter") confirmModal();
-      if (e.key === "Escape") closeModal();
-    });
-    document.getElementById("modal").addEventListener("click", e => {
-      if (e.target === document.getElementById("modal")) closeModal();
-    });
-    function toast(msg, type) {
-      const el = document.getElementById("toast");
-      el.textContent = msg;
-      el.className = "toast on " + (type || "");
-      clearTimeout(el._t);
-      el._t = setTimeout(() => el.className = "toast", 2500);
-    }
-    function initTerminal() {
-      const terminalBody = document.getElementById("terminal-body");
-      term = new Terminal({
-        cursorBlink: true,
-        fontSize: 13,
-        fontFamily: 'Menlo, Consolas, monospace',
-        theme: { background: '#1e1e1e', foreground: '#cccccc' },
-        scrollback: 5000
-      });
-      fitAddon = new FitAddon.FitAddon();
-      term.loadAddon(fitAddon);
-      term.open(terminalBody);
-      fitAddon.fit();
-      socket.on('connect', () => {
-        term.writeln('\\x1b[32m✅ Conectado ao terminal\\x1b[0m');
-        term.writeln('\\x1b[33m💡 Dica: use "npm install <pacote>" para instalar dependências\\x1b[0m');
-        term.writeln('');
-        socket.emit('request-history', { botId: BOT_ID });
-      });
-      socket.on('history-' + BOT_ID, (data) => {
-        term.write(data);
-      });
-      socket.on('log-' + BOT_ID, (data) => {
-        term.write(data);
-      });
-      term.onData(data => {
-        socket.emit('input', { botId: BOT_ID, data });
-      });
-      window.addEventListener('resize', () => {
-        if (fitAddon) fitAddon.fit();
-      });
-      term.attachCustomKeyEventHandler((arg) => {
-        if (arg.ctrlKey && arg.key === 'l') {
-          term.clear();
-          return false;
         }
-        return true;
+        return html;
+      }
+      
+      function renderTree() {
+        const treeEl = document.getElementById("tree");
+        treeEl.innerHTML = treeData.length ? buildRows(treeData, 0) : '<div style="padding:12px;font-size:12px;color:var(--tx2)">Pasta vazia</div>';
+      }
+      
+      function toggleDir(p) {
+        openDirs.has(p) ? openDirs.delete(p) : openDirs.add(p);
+        renderTree();
+      }
+      
+      async function loadTree() {
+        try {
+          const r = await fetch(apiUrl("/tree"));
+          if (!r.ok) throw new Error(r.status);
+          treeData = await r.json();
+          renderTree();
+        } catch (e) {
+          document.getElementById("tree").innerHTML = \`<div style="padding:12px;font-size:12px;color:var(--red)">Erro: \${e.message}</div>\`;
+        }
+      }
+      
+      function refreshTree() { loadTree(); }
+      
+      function renderTabs() {
+        const tabsEl = document.getElementById("tabs");
+        tabsEl.innerHTML = tabs.map(t => {
+          const name = t.path.split("/").pop();
+          const on = t.path === currentFile ? " on" : "";
+          const ind = t.dirty ? '<span class="dot"></span>' : \`<span class="x" onclick="closeTab(event,'\${esc(t.path)}')">✕</span>\`;
+          return \`<div class="tab\${on}" onclick="switchTo('\${esc(t.path)}')" title="\${esc(t.path)}">\${langIcon(name)} \${esc(name)}\${ind}</div>\`;
+        }).join("");
+      }
+      
+      function switchTo(p) { if (p !== currentFile) openFile(p); }
+      
+      function closeTab(e, p) {
+        e.stopPropagation();
+        const t = tabs.find(x => x.path === p);
+        if (t && t.dirty && !confirm("Fechar sem salvar?")) return;
+        tabs = tabs.filter(x => x.path !== p);
+        if (models[p]) { models[p].dispose(); delete models[p]; }
+        if (currentFile === p) {
+          if (tabs.length) openFile(tabs[tabs.length - 1].path);
+          else clearEditor();
+        }
+        renderTabs();
+      }
+      
+      function clearEditor() {
+        currentFile = null; isDirty = false;
+        if (ed) ed.setValue("");
+        document.getElementById("editor-container").innerHTML = \`
+          <div id="welcome">
+            <div class="big">📂</div>
+            <h2>ARES Studio</h2>
+            <p>Selecione um arquivo para editar<br>ou use o terminal abaixo</p>
+          </div>\`;
+        document.getElementById("breadcrumb").textContent = "—";
+        document.getElementById("unsaved").style.display = "none";
+        ["btn-save", "btn-del", "btn-ren"].forEach(id => document.getElementById(id).style.display = "none");
+        renderTree();
+      }
+      
+      require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
+      
+      require(["vs/editor/editor.main"], function() {
+        monaco.editor.defineTheme("ares", {
+          base: "vs-dark", inherit: true,
+          rules: [
+            { token: "comment", foreground: "8b949e", fontStyle: "italic" },
+            { token: "keyword", foreground: "ff7b72" },
+            { token: "string", foreground: "a5d6ff" }
+          ],
+          colors: {
+            "editor.background": "#0d1117",
+            "editor.foreground": "#e6edf3",
+            "editor.lineHighlightBackground": "#161b22",
+            "editorLineNumber.foreground": "#484f58",
+            "editorLineNumber.activeForeground": "#e6edf3"
+          }
+        });
+        
+        const editorContainer = document.getElementById("editor-container");
+        editorContainer.innerHTML = '<div id="editor" style="height:100%;"></div>';
+        
+        ed = monaco.editor.create(document.getElementById("editor"), {
+          theme: "ares",
+          fontSize: 14,
+          automaticLayout: true,
+          minimap: { enabled: false },
+          scrollBeyondLastLine: false,
+          wordWrap: "on",
+          padding: { top: 10 }
+        });
+        
+        ed.onDidChangeModelContent(() => {
+          if (!isDirty) {
+            isDirty = true;
+            document.getElementById("unsaved").style.display = "inline";
+            const t = tabs.find(x => x.path === currentFile);
+            if (t) t.dirty = true;
+            renderTabs();
+          }
+        });
+        
+        ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, doSave);
+        loadTree();
       });
-    }
-    window.onload = () => {
-      initTerminal();
-    };
+      
+      async function openFile(p) {
+        if (!ed) return;
+        if (!models[p]) {
+          try {
+            const r = await fetch(apiUrl("/read", "path=" + encodeURIComponent(p)));
+            if (!r.ok) { toast("Erro ao abrir: " + r.status, "err"); return; }
+            models[p] = monaco.editor.createModel(await r.text(), getLang(p));
+            if (!tabs.find(t => t.path === p)) tabs.push({ path: p, dirty: false });
+          } catch (e) { toast("Erro ao carregar arquivo", "err"); return; }
+        }
+        currentFile = p;
+        isDirty = false;
+        ed.setModel(models[p]);
+        if (!document.getElementById("editor")) {
+          document.getElementById("editor-container").innerHTML = '<div id="editor" style="height:100%;"></div>';
+          ed = monaco.editor.create(document.getElementById("editor"), {
+            theme: "ares", fontSize: 14, automaticLayout: true,
+            minimap: { enabled: false }, scrollBeyondLastLine: false, wordWrap: "on", padding: { top: 10 }
+          });
+          ed.setModel(models[p]);
+        }
+        document.getElementById("breadcrumb").textContent = p;
+        document.getElementById("unsaved").style.display = "none";
+        ["btn-save", "btn-del", "btn-ren"].forEach(id => document.getElementById(id).style.display = "inline-flex");
+        const t = tabs.find(x => x.path === p);
+        if (t) t.dirty = false;
+        renderTree();
+        renderTabs();
+        closeSide();
+        ed.focus();
+      }
+      
+      async function doSave() {
+        if (!currentFile || !ed) return;
+        try {
+          const r = await fetch(apiUrl("/write"), {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: currentFile, content: ed.getValue() })
+          });
+          if (r.ok) {
+            isDirty = false;
+            document.getElementById("unsaved").style.display = "none";
+            const t = tabs.find(x => x.path === currentFile);
+            if (t) t.dirty = false;
+            renderTabs();
+            toast("✅ Salvo!", "ok");
+          } else throw new Error(r.status);
+        } catch (e) { toast("Erro: " + e.message, "err"); }
+      }
+      
+      async function doDel() {
+        if (!currentFile || !confirm('Excluir "' + currentFile + '"?')) return;
+        try {
+          const r = await fetch(apiUrl("/delete"), {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: currentFile })
+          });
+          if (r.ok) { toast("🗑️ Excluído!", "ok"); closeTab({ stopPropagation: () => {} }, currentFile); loadTree(); }
+          else toast("Erro " + r.status, "err");
+        } catch (e) { toast("Erro ao excluir", "err"); }
+      }
+      
+      async function doRename() {
+        if (!currentFile) return;
+        const parts = currentFile.split("/");
+        const oldName = parts[parts.length - 1];
+        const newName = prompt("Novo nome:", oldName);
+        if (!newName || newName === oldName) return;
+        const newPath = [...parts.slice(0, -1), newName].join("/");
+        try {
+          const r = await fetch(apiUrl("/rename"), {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ from: currentFile, to: newPath })
+          });
+          if (r.ok) {
+            const t = tabs.find(x => x.path === currentFile);
+            if (t) t.path = newPath;
+            if (models[currentFile]) {
+              models[newPath] = models[currentFile];
+              delete models[currentFile];
+            }
+            currentFile = newPath;
+            await loadTree();
+            openFile(newPath);
+            toast("✅ Renomeado!", "ok");
+          } else toast("Erro ao renomear", "err");
+        } catch (e) { toast("Erro ao renomear", "err"); }
+      }
+      
+      function doNewFile() {
+        const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : "";
+        const fileName = prompt("Nome do arquivo:", "novo.js");
+        if (!fileName) return;
+        const path = folder ? folder + "/" + fileName : fileName;
+        const safePath = path.replace(/[^a-zA-Z0-9\\/_.-]/g, "_");
+        fetch(apiUrl("/write"), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: safePath, content: "" })
+        })
+        .then(r => {
+          if (r.ok) { loadTree(); toast("✅ Arquivo criado!", "ok"); setTimeout(() => openFile(safePath), 500); }
+          else return r.text().then(t => { throw new Error(t); });
+        })
+        .catch(e => toast("Erro: " + e.message, "err"));
+      }
+      
+      function doNewFolder() {
+        const folder = currentFile ? currentFile.split("/").slice(0, -1).join("/") : "";
+        const folderName = prompt("Nome da pasta:", "nova-pasta");
+        if (!folderName) return;
+        const path = folder ? folder + "/" + folderName : folderName;
+        const safePath = path.replace(/[^a-zA-Z0-9\\/_-]/g, "_");
+        fetch(apiUrl("/mkdir"), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: safePath })
+        })
+        .then(r => {
+          if (r.ok) { loadTree(); toast("✅ Pasta criada!", "ok"); }
+          else return r.text().then(t => { throw new Error(t); });
+        })
+        .catch(e => toast("Erro: " + e.message, "err"));
+      }
+      
+      function openModal(title, placeholder, cb) {
+        modalCb = cb;
+        document.getElementById("modal-title").textContent = title;
+        document.getElementById("modal-in").value = placeholder || "";
+        document.getElementById("modal-in").placeholder = placeholder || "";
+        document.getElementById("modal").classList.add("on");
+        setTimeout(() => document.getElementById("modal-in").focus(), 100);
+      }
+      
+      function closeModal() { document.getElementById("modal").classList.remove("on"); modalCb = null; }
+      
+      function confirmModal() {
+        const v = document.getElementById("modal-in").value.trim();
+        if (!v) return;
+        closeModal();
+        if (modalCb) modalCb(v);
+      }
+      
+      document.getElementById("modal-in").addEventListener("keydown", e => {
+        if (e.key === "Enter") confirmModal();
+        if (e.key === "Escape") closeModal();
+      });
+      
+      document.getElementById("modal").addEventListener("click", e => {
+        if (e.target === document.getElementById("modal")) closeModal();
+      });
+      
+      function toast(msg, type) {
+        const el = document.getElementById("toast");
+        el.textContent = msg;
+        el.className = "toast on " + (type || "");
+        clearTimeout(el._t);
+        el._t = setTimeout(() => el.className = "toast", 2500);
+      }
+      
+      function initTerminal() {
+        const terminalBody = document.getElementById("terminal-body");
+        term = new Terminal({
+          cursorBlink: true,
+          fontSize: 13,
+          fontFamily: 'Menlo, Consolas, monospace',
+          theme: { background: '#1e1e1e', foreground: '#cccccc' },
+          scrollback: 5000
+        });
+        fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(terminalBody);
+        fitAddon.fit();
+        
+        socket.on('connect', () => {
+          term.writeln('\\x1b[32m✅ Conectado ao terminal\\x1b[0m');
+          term.writeln('\\x1b[33m💡 Dica: use "npm install <pacote>" para instalar dependências\\x1b[0m');
+          term.writeln('');
+          socket.emit('request-history', { botId: BOT_ID });
+        });
+        
+        socket.on('history-' + BOT_ID, (data) => {
+          term.write(data);
+        });
+        
+        socket.on('log-' + BOT_ID, (data) => {
+          term.write(data);
+        });
+        
+        term.onData(data => {
+          socket.emit('input', { botId: BOT_ID, data });
+        });
+        
+        window.addEventListener('resize', () => {
+          if (fitAddon) fitAddon.fit();
+        });
+        
+        term.attachCustomKeyEventHandler((arg) => {
+          if (arg.ctrlKey && arg.key === 'l') {
+            term.clear();
+            return false;
+          }
+          return true;
+        });
+      }
+      
+      window.onload = function() {
+        initTerminal();
+      };
+      
+      window.toggleSide = toggleSide;
+      window.closeSide = closeSide;
+      window.toggleDir = toggleDir;
+      window.openFile = openFile;
+      window.doSave = doSave;
+      window.doDel = doDel;
+      window.doRename = doRename;
+      window.doNewFile = doNewFile;
+      window.doNewFolder = doNewFolder;
+      window.refreshTree = refreshTree;
+      window.closeModal = closeModal;
+      window.confirmModal = confirmModal;
+    })();
   </script>
 </body>
 </html>`);
