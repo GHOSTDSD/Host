@@ -9,7 +9,7 @@ const http = require("http")
 const socketIo = require("socket.io")
 const { EventEmitter } = require("events")
 const multer = require("multer")
-const { execFile, execSync } = require("child_process")
+const { execFile, execSync, exec } = require("child_process")
 const crypto = require("crypto")
 const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3")
 const tar = require("tar")
@@ -867,24 +867,43 @@ bot.on("callback_query", async query => {
       const instancePath = path.join(BASE_PATH, botId)
       console.log("📁 Criando pasta:", instancePath)
       fs.mkdirSync(instancePath, { recursive: true, mode: 0o755 })
+      
       const packageJson = {
         name: "meu-bot",
         version: "1.0.0",
         description: "Bot criado do zero",
         main: "index.js",
-        scripts: { start: "node index.js" },
+        scripts: { 
+          start: "node index.js",
+          install: "npm install",
+          "install:express": "npm install express",
+          "install:telegraf": "npm install telegraf",
+          "install:mongoose": "npm install mongoose",
+          "install:axios": "npm install axios",
+          "install:sqlite3": "npm install sqlite3"
+        },
         dependencies: {}
       }
       const packagePath = path.join(instancePath, "package.json")
       fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2))
       console.log("✅ package.json criado")
-      const indexJs = `// Seu bot aqui
+      
+      const indexJs = `// 🚀 Modo Fácil ARES
+// Use os comandos abaixo para instalar bibliotecas:
+// npm run install:express   - Para instalar Express
+// npm run install:telegraf   - Para instalar Telegraf (bot Telegram)
+// npm run install:mongoose   - Para instalar Mongoose (MongoDB)
+// npm run install:axios      - Para instalar Axios (HTTP requests)
+// npm run install:sqlite3    - Para instalar SQLite3
+
 console.log("🤖 Bot iniciado com sucesso!");
+console.log("📦 Dependências instaladas:", Object.keys(require('./package.json').dependencies || {}));
 
 const http = require('http');
+
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot está rodando!');
+  res.end('Bot ARES está rodando!');
 });
 
 const PORT = process.env.PORT || 3000;
@@ -898,23 +917,71 @@ process.on('uncaughtException', (err) => {
       const indexPath = path.join(instancePath, "index.js")
       fs.writeFileSync(indexPath, indexJs)
       console.log("✅ index.js criado")
+      
       const readmePath = path.join(instancePath, "README.md")
-      fs.writeFileSync(readmePath, "# Meu Bot\n\nBot criado do zero no ARES HOST.")
+      fs.writeFileSync(readmePath, `# 🤖 Meu Bot ARES
+
+## 📦 Comandos de Instalação Rápida
+
+### Instalar dependências básicas:
+- \`npm run install:express\` - Servidor web
+- \`npm run install:telegraf\` - Bot para Telegram
+- \`npm run install:mongoose\` - Banco MongoDB
+- \`npm run install:axios\` - Requisições HTTP
+- \`npm run install:sqlite3\` - Banco SQLite
+
+### Como usar no terminal:
+1. Abra o terminal do bot
+2. Digite o comando desejado
+3. As dependências serão instaladas automaticamente
+4. Reinicie o bot após instalar
+
+### Exemplo de código com bibliotecas instaladas:
+
+\`\`\`javascript
+// Depois de instalar as dependências, você pode usá-las assim:
+
+// Express (servidor web)
+const express = require('express');
+const app = express();
+
+// Telegraf (bot Telegram)
+const { Telegraf } = require('telegraf');
+const bot = new Telegraf('SEU_TOKEN');
+
+// Mongoose (MongoDB)
+const mongoose = require('mongoose');
+mongoose.connect('mongodb://localhost:27017/meubot');
+
+// Axios (HTTP requests)
+const axios = require('axios');
+
+// SQLite3
+const sqlite3 = require('sqlite3').verbose();
+\`\`\`
+`)
       console.log("✅ README.md criado")
+      
       saveMeta(botId, chatId, "meu-bot")
       console.log("✅ Meta salva")
+      
       const sessionToken = genWebSession(chatId)
       const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
       const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
+      
       console.log("✅ Bot criado com sucesso:", botId)
+      
       return bot.editMessageText(
         `✅ *Bot criado do zero!*\n\n` +
         `🆔 ID: \`${botId}\`\n` +
-        `📁 Estrutura básica criada:\n` +
-        `• package.json\n` +
-        `• index.js\n` +
-        `• README.md\n\n` +
-        `Agora edite os arquivos e depois inicie o bot.`,
+        `📁 Estrutura básica criada\n\n` +
+        `📦 *Comandos de instalação rápida:*\n` +
+        `• \`npm run install:express\` - Servidor web\n` +
+        `• \`npm run install:telegraf\` - Bot Telegram\n` +
+        `• \`npm run install:mongoose\` - MongoDB\n` +
+        `• \`npm run install:axios\` - HTTP requests\n` +
+        `• \`npm run install:sqlite3\` - SQLite3\n\n` +
+        `Digite os comandos no terminal para instalar!`,
         {
           chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
           reply_markup: {
