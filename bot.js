@@ -516,7 +516,15 @@ function runInstance(botId, instancePath, botPort, env, start) {
   })
   activeBots[botId] = { process: child, port: botPort, path: instancePath }
   child.onData(d => writeLog(botId, instancePath, d))
-  child.onExit(() => { releasePort(botPort); delete activeBots[botId]; aresBanner() })
+  child.onExit(() => {
+    releasePort(botPort)
+    delete activeBots[botId]
+    const nmPath = path.join(instancePath, "node_modules")
+    if (fs.existsSync(nmPath)) {
+      try { fs.rmSync(nmPath, { recursive: true, force: true }) } catch {}
+    }
+    aresBanner()
+  })
   aresBanner()
 }
 
@@ -668,7 +676,7 @@ bot.onText(/^\/meuid$/, msg => {
   bot.sendMessage(msg.chat.id, `🪪 *Seu Telegram ID:*\n\n\`${msg.chat.id}\``, { parse_mode: "Markdown" })
 })
 
-bot.onText(/^\/limpar$/, async msg => {
+bot.onText(/^\/(limpar|limpeza)$/, async msg => {
   const chatId = msg.chat.id
   if (String(chatId) !== String(OWNER_ID)) {
     return bot.sendMessage(chatId, "❌ Sem permissão.")
@@ -876,20 +884,38 @@ bot.on("callback_query", async query => {
     if (String(chatId) !== String(OWNER_ID)) return
     bot.editMessageText("🧹 Limpando instâncias locais...", { chat_id: chatId, message_id: msgId })
     try {
+      const diskBefore = getDiskPercent()
       let count = 0
+      let nmCount = 0
+      let logCount = 0
       if (fs.existsSync(BASE_PATH)) {
         const entries = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_users")
         for (const entry of entries) {
           const fullPath = path.join(BASE_PATH, entry)
           try {
-            fs.rmSync(fullPath, { recursive: true, force: true })
+            const nmPath = path.join(fullPath, "node_modules")
+            const logPath = path.join(fullPath, "terminal.log")
+            if (fs.existsSync(nmPath)) { fs.rmSync(nmPath, { recursive: true, force: true }); nmCount++ }
+            if (fs.existsSync(logPath)) { fs.unlinkSync(logPath); logCount++ }
             count++
           } catch {}
         }
       }
-      fs.mkdirSync(BASE_PATH, { recursive: true, mode: 0o755 })
+      const diskAfter = getDiskPercent()
       return bot.editMessageText(
-        `✅ *Limpeza concluída!*\n\n🗑️ ${count} instância(s) removida(s) do disco.\nOs buckets S3 não foram afetados.`,
+        `✅ *Limpeza concluída!*
+
+` +
+        `🗑️ Instâncias: *${count}*
+` +
+        `📦 node_modules removidos: *${nmCount}*
+` +
+        `📋 Logs removidos: *${logCount}*
+
+` +
+        `💿 Disco antes: *${diskBefore}%*
+` +
+        `💿 Disco depois: *${diskAfter}%*`,
         { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
     } catch (err) {
@@ -2625,23 +2651,32 @@ app.use("/files-api", authBot, (req, res, next) => {
   next()
 })
 
+function getDiskPercent() {
+  try {
+    const df = execSync("df / | tail -1").toString()
+    const parts = df.split(/\s+/)
+    return parseInt(parts[4].replace("%", ""))
+  } catch { return 0 }
+}
+
 function cleanupOldLogs() {
-  console.log("🧹 Iniciando limpeza de logs antigos...")
+  console.log("🧹 Iniciando limpeza de logs...")
   if (!fs.existsSync(BASE_PATH)) return
   const bots = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_users")
   const now = Date.now()
-  const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000
+  const diskPct = getDiskPercent()
+  const MAX_AGE = diskPct >= 85 ? 1 * 60 * 60 * 1000 : diskPct >= 75 ? 4 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000
   let logsRemovidos = 0
   let espacoLiberado = 0
+  let nmRemovidos = 0
   for (const botId of bots) {
     const logPath = path.join(BASE_PATH, botId, "terminal.log")
     if (fs.existsSync(logPath)) {
       try {
         const stats = fs.statSync(logPath)
         const idade = now - stats.mtimeMs
-        if (idade > TWENTY_FOUR_HOURS) {
-          const tamanho = stats.size / 1024
-          espacoLiberado += tamanho
+        if (idade > MAX_AGE || stats.size > 500 * 1024) {
+          espacoLiberado += stats.size / 1024
           if (activeBots[botId]) {
             fs.writeFileSync(logPath, `--- Log limpo em ${new Date().toISOString()} ---\n`)
           } else {
@@ -2653,20 +2688,40 @@ function cleanupOldLogs() {
         console.error(`Erro ao processar log de ${botId}:`, err.message)
       }
     }
+    const nmPath = path.join(BASE_PATH, botId, "node_modules")
+    if (fs.existsSync(nmPath) && !activeBots[botId]) {
+      try {
+        const nmSize = execSync(`du -sk "${nmPath}" 2>/dev/null || echo "0"`).toString().split("\t")[0]
+        espacoLiberado += parseInt(nmSize) || 0
+        fs.rmSync(nmPath, { recursive: true, force: true })
+        nmRemovidos++
+      } catch {}
+    }
   }
-  console.log(`✅ Limpeza concluída: ${logsRemovidos} logs processados, ${espacoLiberado.toFixed(2)} KB liberados`)
-  if (ADMIN_ID && logsRemovidos > 0) {
-    bot.sendMessage(ADMIN_ID,
-      `🧹 *Limpeza Automática de Logs*\n\n` +
-      `📊 Logs processados: *${logsRemovidos}*\n` +
-      `💾 Espaço liberado: *${espacoLiberado.toFixed(2)} KB*`,
+  console.log(`✅ Limpeza: ${logsRemovidos} logs, ${nmRemovidos} node_modules, ${(espacoLiberado/1024).toFixed(1)} MB liberados`)
+}
+
+function checkDiskAlert() {
+  const pct = getDiskPercent()
+  const alertId = OWNER_ID || ADMIN_ID
+  if (!alertId) return
+  if (pct >= 90) {
+    bot.sendMessage(alertId,
+      `🚨 *DISCO CRÍTICO: ${pct}%*\n\nO servidor está quase sem espaço! Use /limpar para liberar espaço local.`,
+      { parse_mode: "Markdown" }
+    ).catch(() => {})
+  } else if (pct >= 80) {
+    bot.sendMessage(alertId,
+      `⚠️ *Disco em ${pct}%*\n\nFique atento ao espaço em disco.`,
       { parse_mode: "Markdown" }
     ).catch(() => {})
   }
 }
 
-setInterval(cleanupOldLogs, 24 * 60 * 60 * 1000)
-setTimeout(cleanupOldLogs, 5 * 60 * 1000)
+setInterval(cleanupOldLogs, 2 * 60 * 60 * 1000)
+setTimeout(cleanupOldLogs, 2 * 60 * 1000)
+setInterval(checkDiskAlert, 30 * 60 * 1000)
+setTimeout(checkDiskAlert, 10 * 60 * 1000)
 
 process.on("uncaughtException", err => {
   if (err.code !== "EADDRINUSE") console.error("Erro não tratado:", err)
@@ -2692,6 +2747,8 @@ process.on("SIGINT", async () => {
 })
 
 server.listen(PORT, async () => {
+  const diskPctInit = getDiskPercent()
+  console.log(`💿 DISCO NO STARTUP: ${diskPctInit}%`)
   aresBanner()
   bot.startPolling({ restart: true }).catch(() => {})
   await restoreAllBotsFromBucket()
