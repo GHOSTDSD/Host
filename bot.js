@@ -25,7 +25,7 @@ const DOMAIN = process.env.RAILWAY_STATIC_URL
   ? `https://${process.env.RAILWAY_STATIC_URL}`
   : `http://localhost:${PORT}`
 
-const bot = new TelegramBot(TOKEN, { polling: true })
+const bot = new TelegramBot(TOKEN, { polling: false })
 const app = express()
 const server = http.createServer(app)
 const io = socketIo(server)
@@ -2614,6 +2614,8 @@ process.on("SIGINT", async () => {
 
 server.listen(PORT, async () => {
   aresBanner()
+  await bot.deleteWebhook({ drop_pending_updates: true }).catch(() => {})
+  bot.startPolling()
   await restoreAllBotsFromBucket()
   if (fs.existsSync(BASE_PATH)) {
     const bots = fs.readdirSync(BASE_PATH).filter(f => {
