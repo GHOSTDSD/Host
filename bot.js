@@ -48,7 +48,7 @@ const BUCKETS = [1, 2, 3].map(i => ({
 })).filter(b => b.bucketName && b.credentials.accessKeyId && b.credentials.secretAccessKey)
 
 if (BUCKETS.length === 0) {
-  console.error("❌ Nenhum bucket configurado! Defina BUCKET_1_NAME, BUCKET_1_KEY, BUCKET_1_SECRET no Railway.")
+  console.error("Nenhum bucket configurado! Defina BUCKET_1_NAME, BUCKET_1_KEY, BUCKET_1_SECRET no Railway.")
   process.exit(1)
 }
 
@@ -905,7 +905,7 @@ bot.on("callback_query", async query => {
       return bot.editMessageText(
         `✅ Limpeza concluída!\n\n` +
         `🗑️ Instâncias: ${count}\n` +
-        `📦 node\_modules removidos: ${nmCount}\n` +
+        `📦 node_modules removidos: ${nmCount}\n` +
         `📋 Logs removidos: ${logCount}\n\n` +
         `💿 Disco antes: ${diskBefore}%\n` +
         `💿 Disco depois: ${diskAfter}%`,
@@ -1516,7 +1516,7 @@ function buildEditorHtml(botId, sessionToken, API) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ARES — ${botId}</title>
+<title>ARES \u2014 ${botId}</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1604,10 +1604,10 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   <div class="bot-chip" title="${botId}">${botId}</div>
   <div class="sp"></div>
   <div id="status-wrap"><div id="si"></div><span id="st"></span></div>
-  <span id="unsaved" style="display:none;font-size:10px;color:var(--orange);margin:0 4px">●</span>
+  <span id="unsaved" style="display:none;font-size:10px;color:var(--orange);margin:0 4px">&#9679;</span>
   <button class="tbtn" id="btn-ren" style="display:none" onclick="doRename()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg><span>Renomear</span></button>
   <button class="tbtn r" id="btn-del" style="display:none" onclick="doDel()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg><span>Excluir</span></button>
-  <button class="tbtn g" id="btn-save" style="display:none" onclick="doSave()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Salvar</button>
+  <button class="tbtn g" id="btn-save" style="display:none" onclick="doSave()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2 2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Salvar</button>
 </div>
 <div id="layout">
   <div id="side-ov" onclick="closeSide()"></div>
@@ -1655,7 +1655,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
       <button class="fbtn" onclick="findReplace()">Replace</button>
       <button id="find-close" onclick="closeFindBar()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
-    <div id="infobar" style="display:none"><div id="ib-lang">—</div><div class="ssep"></div><div id="ib-size">—</div><div class="ssep"></div><div>UTF-8</div><div id="cur-pos">Ln 1, Col 1</div></div>
+    <div id="infobar" style="display:none"><div id="ib-lang">&mdash;</div><div class="ssep"></div><div id="ib-size">&mdash;</div><div class="ssep"></div><div>UTF-8</div><div id="cur-pos">Ln 1, Col 1</div></div>
     <div id="editor-wrap" style="display:none"></div>
     <div id="welcome">
       <svg class="wlogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
@@ -1677,9 +1677,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 </div>
 <div class="toast" id="toast"></div>
 <script src="/socket.io/socket.io.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
 <script>
 var socket = io();
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+<script>
 var BOT_ID = ${B};
 var TOK = ${T};
 var API = ${A};
@@ -2065,7 +2067,12 @@ function dlFile(p) {
 }
 
 function doNewFile() {
-  var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
+  var folder = '';
+  if (curFile) {
+    var parts = curFile.split('/');
+    parts.pop();
+    folder = parts.join('/');
+  }
   openModal('Novo arquivo', 'nome.js', async function(fn) {
     if (!fn) return;
     var fp = folder ? folder + '/' + fn : fn;
@@ -2076,16 +2083,16 @@ function doNewFile() {
     });
     if (r.ok) {
       await loadTree();
+      openFile(fp);
       toast('Arquivo criado', 'ok');
-      setTimeout(function() { openFile(fp); }, 100);
     } else {
-      toast('Erro: ' + await r.text(), 'err');
+      var errText = await r.text();
+      toast('Erro: ' + errText, 'err');
     }
   });
 }
 
 function doNewFileIn(folder) {
-  if (!folder) return;
   openModal('Novo arquivo em /' + folder, 'nome.js', async function(fn) {
     if (!fn) return;
     var fp = folder + '/' + fn;
@@ -2096,18 +2103,25 @@ function doNewFileIn(folder) {
     });
     if (r.ok) {
       await loadTree();
+      openFile(fp);
       toast('Arquivo criado', 'ok');
-      setTimeout(function() { openFile(fp); }, 100);
     } else {
-      toast('Erro: ' + await r.text(), 'err');
+      var errText = await r.text();
+      toast('Erro: ' + errText, 'err');
     }
   });
 }
 
 function doNewFolder() {
-  var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
+  var folder = '';
+  if (curFile) {
+    var parts = curFile.split('/');
+    parts.pop();
+    folder = parts.join('/');
+  }
   openModal('Nova pasta', 'minha-pasta', async function(fn) {
     if (!fn) return;
+    fn = fn.replace(/[^a-z0-9_\-]/gi, '_').toLowerCase();
     var fp = folder ? folder + '/' + fn : fn;
     var r = await fetch(au('/mkdir'), {
       method: 'POST',
@@ -2116,25 +2130,29 @@ function doNewFolder() {
     });
     if (r.ok) {
       await loadTree();
+      var parentPath = folder || '';
+      if (parentPath) {
+        openDirs.add(parentPath);
+      }
       openDirs.add(fp);
       renderTree();
       toast('Pasta criada', 'ok');
     } else {
-      toast('Erro: ' + await r.text(), 'err');
+      var errText = await r.text();
+      toast('Erro: ' + errText, 'err');
     }
   });
 }
 
 function getTpl(n) {
   var e = xExt(n);
-  if (e === 'js') return '// ' + n + '\n\n';
+  if (e === 'js') return '// Novo arquivo JavaScript\n\n';
   if (e === 'json') return '{\n  \n}\n';
   if (e === 'html') return '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <title></title>\n</head>\n<body>\n  \n</body>\n</html>';
   if (e === 'md') return '# ' + n.replace('.md', '') + '\n\n';
-  if (e === 'py') return '# ' + n + '\n\n';
-  if (e === 'css') return '/* ' + n + ' */\n\n';
-  if (e === 'env') return '# Environment variables\n\n';
-  if (e === 'txt') return '';
+  if (e === 'py') return '# Novo arquivo Python\n\n';
+  if (e === 'css') return '/* Novo arquivo CSS */\n\n';
+  if (e === 'env') return '# Variaveis de ambiente\n\n';
   return '';
 }
 
@@ -2154,17 +2172,17 @@ async function uploadFiles(files) {
     prog.textContent = 'Enviando ' + f.name + '...';
     var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
     var fp = folder ? folder + '/' + f.name : f.name;
-    try {
-      var content = await f.text();
-      var r = await fetch(au('/write'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: fp, content: content })
-      });
-      if (r.ok) ok++;
-    } catch (e) {
-      prog.textContent = 'Erro: ' + f.name;
+    var content = await f.text().catch(function() { return null; });
+    if (content === null) {
+      prog.textContent = 'Erro: ' + f.name + ' (binario)';
+      continue;
     }
+    var r = await fetch(au('/write'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fp, content: content })
+    });
+    if (r.ok) ok++;
   }
   prog.textContent = ok + '/' + files.length + ' enviado(s)';
   await loadTree();
@@ -2215,7 +2233,7 @@ async function runNpm(args, label) {
   var term = document.getElementById('pkg-term');
   var out = document.getElementById('pkg-out');
   term.classList.add('on');
-  out.textContent = label + '\n';
+  out.textContent = label + '\\n';
   setStatus(label, 'loading');
   try {
     var r = await fetch(au('/npm-run'), {
@@ -2224,7 +2242,7 @@ async function runNpm(args, label) {
       body: JSON.stringify({ args: args })
     });
     if (!r.ok) {
-      out.textContent += '\nErro: ' + await r.text();
+      out.textContent += '\\nErro: ' + await r.text();
       setStatus('Erro', 'err');
       return;
     }
@@ -2236,12 +2254,12 @@ async function runNpm(args, label) {
       out.textContent += dec.decode(x.value);
       term.scrollTop = term.scrollHeight;
     }
-    out.textContent += '\nConcluido!';
+    out.textContent += '\\nConcluido!';
     term.scrollTop = term.scrollHeight;
     setStatus('Pronto', 'ok');
     toast(label, 'ok');
   } catch (e) {
-    out.textContent += '\nErro: ' + e.message;
+    out.textContent += '\\nErro: ' + e.message;
     setStatus('Erro', 'err');
     toast('Erro: ' + e.message, 'err');
   }
@@ -2307,10 +2325,7 @@ function closeModal() {
 
 function confirmModal() {
   var v = document.getElementById('modal-in').value.trim();
-  if (!v) {
-    toast('Nome não pode estar vazio', 'err');
-    return;
-  }
+  if (!v) return;
   closeModal();
   if (modalCb) modalCb(v);
 }
@@ -2531,16 +2546,27 @@ app.use("/files-api", authBot, (req, res, next) => {
   if (action === "/write") {
     const body = req.body || {}
     const fp = safe(body.path)
-    if (!fp) return res.status(400).send("Caminho inválido. Recebido: " + JSON.stringify(body))
+    if (!fp) {
+      console.error('Caminho inválido:', body)
+      return res.status(400).send("Caminho inválido. Recebido: " + JSON.stringify(body))
+    }
     try {
       const dir = path.dirname(fp)
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
+        console.log('📁 Pasta criada:', dir)
       }
-      fs.writeFileSync(fp, body.content !== undefined ? body.content : "", "utf8")
-      saveBotFilesToBucket(botId).catch(() => {})
+      const content = body.content !== undefined ? body.content : ""
+      fs.writeFileSync(fp, content, "utf8")
+      console.log('✅ Arquivo escrito:', fp, 'tamanho:', content.length)
+      
+      saveBotFilesToBucket(botId).catch(err => {
+        console.error('Erro ao salvar no bucket:', err)
+      })
+      
       return res.send("ok")
     } catch (err) {
+      console.error('Erro ao escrever arquivo:', err)
       return res.status(500).send("Erro ao escrever: " + err.message)
     }
   }
@@ -2560,12 +2586,23 @@ app.use("/files-api", authBot, (req, res, next) => {
   if (action === "/mkdir") {
     const body = req.body || {}
     const dp = safe(body.path)
-    if (!dp) return res.status(400).send("Caminho inválido")
+    if (!dp) {
+      console.error('Caminho inválido para mkdir:', body)
+      return res.status(400).send("Caminho inválido")
+    }
     try {
       fs.mkdirSync(dp, { recursive: true, mode: 0o755 })
-      saveBotFilesToBucket(botId).catch(() => {})
+      console.log('📁 Pasta criada (mkdir):', dp)
+      
+      saveBotFilesToBucket(botId).catch(err => {
+        console.error('Erro ao salvar no bucket:', err)
+      })
+      
       return res.send("ok")
-    } catch (err) { return res.status(500).send("Erro ao criar pasta: " + err.message) }
+    } catch (err) {
+      console.error('Erro ao criar pasta:', err)
+      return res.status(500).send("Erro ao criar pasta: " + err.message)
+    }
   }
 
   if (action === "/rename") {
