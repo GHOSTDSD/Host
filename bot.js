@@ -903,20 +903,13 @@ bot.on("callback_query", async query => {
       }
       const diskAfter = getDiskPercent()
       return bot.editMessageText(
-        `✅ *Limpeza concluída!*
-
-` +
-        `🗑️ Instâncias: *${count}*
-` +
-        `📦 node_modules removidos: *${nmCount}*
-` +
-        `📋 Logs removidos: *${logCount}*
-
-` +
-        `💿 Disco antes: *${diskBefore}%*
-` +
-        `💿 Disco depois: *${diskAfter}%*`,
-        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
+        `✅ Limpeza concluída!\n\n` +
+        `🗑️ Instâncias: ${count}\n` +
+        `📦 node\_modules removidos: ${nmCount}\n` +
+        `📋 Logs removidos: ${logCount}\n\n` +
+        `💿 Disco antes: ${diskBefore}%\n` +
+        `💿 Disco depois: ${diskAfter}%`,
+        { chat_id: chatId, message_id: msgId }
       )
     } catch (err) {
       return bot.editMessageText(`❌ Erro: ${err.message}`, { chat_id: chatId, message_id: msgId })
