@@ -3817,28 +3817,36 @@ function avatarLetter(name) {
 
 function buildCard(b) {
   var liked = Array.isArray(b.likes) && myChatId && b.likes.includes(myChatId);
-  var html = '<div class="card" onclick="openDetail(\'' + b.id + '\')">';
-  html += '<div class="card-banner">';
-  html += '<div class="card-banner-icon">' + catEmoji(b.category) + '</div>';
-  html += '<div class="card-cat-badge">' + (b.category || 'geral') + '</div>';
-  html += '</div>';
-  html += '<div class="card-body">';
-  html += '<div class="card-title">' + esc(b.name) + '</div>';
-  html += '<div class="card-desc">' + esc(b.description) + '</div>';
-  if (b.tags && b.tags.length) {
-    html += '<div class="card-tags">' + b.tags.map(function(t){ return '<span class="tag">' + esc(t) + '</span>'; }).join('') + '</div>';
-  }
-  html += '</div>';
-  html += '<div class="card-footer">';
-  html += '<div class="card-author"><div class="card-avatar">' + esc(avatarLetter(b.author)) + '</div><span class="card-author-name">' + esc(b.author || 'Anônimo') + '</span></div>';
-  html += '<div class="card-stats">';
-  html += '<span class="cstat"><svg width="12" height="12" viewBox="0 0 24 24" fill="' + (liked ? 'var(--red)' : 'none') + '" stroke="' + (liked ? 'var(--red)' : 'currentColor') + '" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>' + fmtNum((b.likes||[]).length) + '</span>';
-  html += '<span class="cstat"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' + fmtNum(b.downloads||0) + '</span>';
-  html += '</div>';
-  html += '</div>';
-  html += '</div>';
-  return html;
+  var lk = (b.likes || []).length;
+  var dl = b.downloads || 0;
+  var d = document.createElement('div');
+  d.className = 'card';
+  d.addEventListener('click', function(){ openDetail(b.id); });
+  var banner = '<div class="card-banner"><div class="card-banner-icon">' + catEmoji(b.category) + '</div><div class="card-cat-badge">' + esc(b.category || 'geral') + '</div></div>';
+  var tagsHtml = (b.tags && b.tags.length) ? '<div class="card-tags">' + b.tags.map(function(t){ return '<span class="tag">' + esc(t) + '</span>'; }).join('') + '</div>' : '';
+  var hrt = liked ? 'var(--red)' : 'none';
+  var hrc = liked ? 'var(--red)' : 'currentColor';
+  var heartSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="' + hrt + '" stroke="' + hrc + '" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+  var dlSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  d.innerHTML = banner +
+    '<div class="card-body">' +
+      '<div class="card-title">' + esc(b.name) + '</div>' +
+      '<div class="card-desc">' + esc(b.description) + '</div>' +
+      tagsHtml +
+    '</div>' +
+    '<div class="card-footer">' +
+      '<div class="card-author">' +
+        '<div class="card-avatar">' + esc(avatarLetter(b.author)) + '</div>' +
+        '<span class="card-author-name">' + esc(b.author || 'Anônimo') + '</span>' +
+      '</div>' +
+      '<div class="card-stats">' +
+        '<span class="cstat">' + heartSvg + fmtNum(lk) + '</span>' +
+        '<span class="cstat">' + dlSvg + fmtNum(dl) + '</span>' +
+      '</div>' +
+    '</div>';
+  return d;
 }
+
 
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -3873,7 +3881,10 @@ function render() {
     return;
   }
   empty.style.display = 'none';
-  grid.innerHTML = list.map(buildCard).join('');
+  grid.innerHTML = '';
+  var frag = document.createDocumentFragment();
+  list.forEach(function(b) { frag.appendChild(buildCard(b)); });
+  grid.appendChild(frag);
 }
 
 function updateStats() {
