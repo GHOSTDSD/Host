@@ -1578,13 +1578,15 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   </div>
 </div>
 <div class="toast" id="toast"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
+<script>
+var socket = io();
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
 <script>
 var BOT_ID = ${B};
 var TOK = ${T};
 var API = ${A};
-var socket = null;
 var ed = null;
 var curFile = null;
 var openDirs = new Set();
@@ -2269,13 +2271,8 @@ function initMonaco() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-  try {
-    socket = io();
-    socket.on('connect', function() { setStatus('Conectado', 'ok'); });
-    socket.on('disconnect', function() { setStatus('Desconectado', 'err'); });
-  } catch (e) {
-    console.warn('socket:', e);
-  }
+  socket.on('connect', function() { setStatus('Conectado', 'ok'); });
+  socket.on('disconnect', function() { setStatus('Desconectado', 'err'); });
 
   document.getElementById('tree').addEventListener('click', function(e) {
     var b = e.target.closest('[data-act]');
