@@ -1506,7 +1506,7 @@ app.get("/files/:botId", authBot, (req, res) => {
   res.send(buildEditorHtml(botId, sessionToken, "/files-api/" + botId))
 })
 
-function function buildEditorHtml(botId, sessionToken, API) {
+function buildEditorHtml(botId, sessionToken, API) {
   const B = JSON.stringify(botId)
   const T = JSON.stringify(sessionToken)
   const A = JSON.stringify(API)
