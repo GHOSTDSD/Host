@@ -2614,8 +2614,7 @@ process.on("SIGINT", async () => {
 
 server.listen(PORT, async () => {
   aresBanner()
-  await bot.deleteWebhook({ drop_pending_updates: true }).catch(() => {})
-  bot.startPolling()
+  bot.startPolling({ restart: true }).catch(() => {})
   await restoreAllBotsFromBucket()
   if (fs.existsSync(BASE_PATH)) {
     const bots = fs.readdirSync(BASE_PATH).filter(f => {
