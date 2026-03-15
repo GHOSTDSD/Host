@@ -668,6 +668,34 @@ bot.onText(/^\/meuid$/, msg => {
   bot.sendMessage(msg.chat.id, `🪪 *Seu Telegram ID:*\n\n\`${msg.chat.id}\``, { parse_mode: "Markdown" })
 })
 
+bot.onText(/^\/limpar$/, async msg => {
+  const chatId = msg.chat.id
+  if (String(chatId) !== String(OWNER_ID)) {
+    return bot.sendMessage(chatId, "❌ Sem permissão.")
+  }
+  const confirm = await bot.sendMessage(chatId,
+    "⚠️ *Limpar instâncias locais?*\n\nIsso remove todos os arquivos locais em disco.\nOs bots salvos nos buckets continuam intactos.",
+    {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🗑️ Sim, limpar", callback_data: "owner_limpar_confirm" }],
+          [{ text: "❌ Cancelar", callback_data: "owner_limpar_cancel" }]
+        ]
+      }
+    }
+  )
+})
+
+bot.onText(/^\/reiniciar$/, async msg => {
+  const chatId = msg.chat.id
+  if (String(chatId) !== String(OWNER_ID)) {
+    return bot.sendMessage(chatId, "❌ Sem permissão.")
+  }
+  bot.sendMessage(chatId, "🔄 Reiniciando processo...")
+  setTimeout(() => process.exit(0), 1000)
+})
+
 bot.onText(/\/start/, async msg => {
   const chatId = msg.chat.id
   if (!hasAccepted(chatId)) {
@@ -843,6 +871,35 @@ bot.on("callback_query", async query => {
   const action = colonIdx === -1 ? data : data.slice(0, colonIdx)
   const id = colonIdx === -1 ? null : data.slice(colonIdx + 1)
   bot.answerCallbackQuery(query.id)
+
+  if (action === "owner_limpar_confirm") {
+    if (String(chatId) !== String(OWNER_ID)) return
+    bot.editMessageText("🧹 Limpando instâncias locais...", { chat_id: chatId, message_id: msgId })
+    try {
+      let count = 0
+      if (fs.existsSync(BASE_PATH)) {
+        const entries = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_users")
+        for (const entry of entries) {
+          const fullPath = path.join(BASE_PATH, entry)
+          try {
+            fs.rmSync(fullPath, { recursive: true, force: true })
+            count++
+          } catch {}
+        }
+      }
+      fs.mkdirSync(BASE_PATH, { recursive: true, mode: 0o755 })
+      return bot.editMessageText(
+        `✅ *Limpeza concluída!*\n\n🗑️ ${count} instância(s) removida(s) do disco.\nOs buckets S3 não foram afetados.`,
+        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
+      )
+    } catch (err) {
+      return bot.editMessageText(`❌ Erro: ${err.message}`, { chat_id: chatId, message_id: msgId })
+    }
+  }
+
+  if (action === "owner_limpar_cancel") {
+    return bot.editMessageText("❌ Limpeza cancelada.", { chat_id: chatId, message_id: msgId })
+  }
 
   if (action === "termo_check") {
     const nowChecked = id === "1"
