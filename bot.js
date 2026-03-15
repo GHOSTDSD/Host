@@ -1734,7 +1734,8 @@ async function loadTree() {
   try {
     var r = await fetch(au('/tree'));
     if (!r.ok) {
-      el.innerHTML = '<div style="padding:10px;font-size:11px;color:var(--red)">HTTP ' + r.status + ': ' + hEsc((await r.text()).substring(0, 100)) + '</div>';
+      var errText = await r.text();
+      el.innerHTML = '<div style="padding:10px;font-size:11px;color:var(--red)">Erro ' + r.status + ': ' + hEsc(errText.substring(0, 200)) + '</div>';
       return;
     }
     treeData = await r.json();
@@ -1856,7 +1857,8 @@ async function doSave() {
       setStatus('Salvo', 'ok');
       setTimeout(function() { setStatus('Pronto', 'ok'); }, 2000);
     } else {
-      toast('Erro ao salvar: ' + await r.text(), 'err');
+      var errText = await r.text();
+      toast('Erro ao salvar: ' + errText, 'err');
       setStatus('Erro', 'err');
     }
   } catch (e) {
@@ -1877,7 +1879,8 @@ async function doDel() {
     closeTab(curFile);
     loadTree();
   } else {
-    toast('Erro: ' + await r.text(), 'err');
+    var errText = await r.text();
+    toast('Erro: ' + errText, 'err');
   }
 }
 
@@ -1892,7 +1895,8 @@ async function delFolder(p) {
     toast('Pasta excluida', 'ok');
     loadTree();
   } else {
-    toast('Erro: ' + await r.text(), 'err');
+    var errText = await r.text();
+    toast('Erro: ' + errText, 'err');
   }
 }
 
@@ -1933,7 +1937,8 @@ async function renFile(from, to) {
     if (curFile === to) openFile(to);
     toast('Renomeado', 'ok');
   } else {
-    toast('Erro: ' + await r.text(), 'err');
+    var errText = await r.text();
+    toast('Erro: ' + errText, 'err');
   }
 }
 
@@ -1945,16 +1950,18 @@ async function dupFile(p) {
   var np = parts.slice(0, -1).concat(nn).join('/');
   var rr = await fetch(au('/read', 'path=' + encodeURIComponent(p)));
   if (!rr.ok) return;
+  var content = await rr.text();
   var rw = await fetch(au('/write'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: np, content: await rr.text() })
+    body: JSON.stringify({ path: np, content: content })
   });
   if (rw.ok) {
     await loadTree();
     toast('Duplicado', 'ok');
   } else {
-    toast('Erro', 'err');
+    var errText = await rw.text();
+    toast('Erro: ' + errText, 'err');
   }
 }
 
@@ -1970,36 +1977,57 @@ function dlFile(p) {
 function doNewFile() {
   var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
   openModal('Novo arquivo', 'nome.js', async function(fn) {
+    if (!fn) return;
+    if (!/^[a-zA-Z0-9_\\-\\.]+$/.test(fn)) {
+      toast('Use apenas letras, números, _, - e .', 'err');
+      return;
+    }
     var fp = folder ? folder + '/' + fn : fn;
-    var r = await fetch(au('/write'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fp, content: getTpl(fn) })
-    });
-    if (r.ok) {
-      await loadTree();
-      openFile(fp);
-      toast('Criado', 'ok');
-    } else {
-      toast('Erro: ' + await r.text(), 'err');
+    try {
+      var r = await fetch(au('/write'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: fp, content: getTpl(fn) })
+      });
+      if (r.ok) {
+        await loadTree();
+        toast('Arquivo criado', 'ok');
+        setTimeout(function() { openFile(fp); }, 100);
+      } else {
+        var errText = await r.text();
+        toast('Erro: ' + errText, 'err');
+      }
+    } catch (e) {
+      toast('Erro: ' + e.message, 'err');
     }
   });
 }
 
 function doNewFileIn(folder) {
+  if (!folder) return;
   openModal('Novo arquivo em /' + folder, 'nome.js', async function(fn) {
+    if (!fn) return;
+    if (!/^[a-zA-Z0-9_\\-\\.]+$/.test(fn)) {
+      toast('Use apenas letras, números, _, - e .', 'err');
+      return;
+    }
     var fp = folder + '/' + fn;
-    var r = await fetch(au('/write'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fp, content: getTpl(fn) })
-    });
-    if (r.ok) {
-      await loadTree();
-      openFile(fp);
-      toast('Criado', 'ok');
-    } else {
-      toast('Erro: ' + await r.text(), 'err');
+    try {
+      var r = await fetch(au('/write'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: fp, content: getTpl(fn) })
+      });
+      if (r.ok) {
+        await loadTree();
+        toast('Arquivo criado', 'ok');
+        setTimeout(function() { openFile(fp); }, 100);
+      } else {
+        var errText = await r.text();
+        toast('Erro: ' + errText, 'err');
+      }
+    } catch (e) {
+      toast('Erro: ' + e.message, 'err');
     }
   });
 }
@@ -2007,32 +2035,43 @@ function doNewFileIn(folder) {
 function doNewFolder() {
   var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
   openModal('Nova pasta', 'minha-pasta', async function(fn) {
+    if (!fn) return;
+    if (!/^[a-zA-Z0-9_\\-]+$/.test(fn)) {
+      toast('Use apenas letras, números, _ e -', 'err');
+      return;
+    }
     var fp = folder ? folder + '/' + fn : fn;
-    var r = await fetch(au('/mkdir'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fp })
-    });
-    if (r.ok) {
-      await loadTree();
-      openDirs.add(fp);
-      renderTree();
-      toast('Pasta criada', 'ok');
-    } else {
-      toast('Erro: ' + await r.text(), 'err');
+    try {
+      var r = await fetch(au('/mkdir'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: fp })
+      });
+      if (r.ok) {
+        await loadTree();
+        openDirs.add(fp);
+        renderTree();
+        toast('Pasta criada', 'ok');
+      } else {
+        var errText = await r.text();
+        toast('Erro: ' + errText, 'err');
+      }
+    } catch (e) {
+      toast('Erro: ' + e.message, 'err');
     }
   });
 }
 
 function getTpl(n) {
   var e = xExt(n);
-  if (e === 'js') return '// ' + n + '\\n\\n';
-  if (e === 'json') return '{\\n  \\n}\\n';
-  if (e === 'html') return '<!DOCTYPE html>\\n<html>\\n<head>\\n  <meta charset="UTF-8">\\n  <title></title>\\n</head>\\n<body>\\n  \\n</body>\\n</html>';
-  if (e === 'md') return '# ' + n.replace('.md', '') + '\\n\\n';
-  if (e === 'py') return '# ' + n + '\\n\\n';
-  if (e === 'css') return '/* ' + n + ' */\\n\\n';
-  if (e === 'env') return '# Environment variables\\n\\n';
+  if (e === 'js') return '// ' + n + '\n\n';
+  if (e === 'json') return '{\n  \n}\n';
+  if (e === 'html') return '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <title></title>\n</head>\n<body>\n  \n</body>\n</html>';
+  if (e === 'md') return '# ' + n.replace('.md', '') + '\n\n';
+  if (e === 'py') return '# ' + n + '\n\n';
+  if (e === 'css') return '/* ' + n + ' */\n\n';
+  if (e === 'env') return '# Environment variables\n\n';
+  if (e === 'txt') return '';
   return '';
 }
 
@@ -2052,17 +2091,17 @@ async function uploadFiles(files) {
     prog.textContent = 'Enviando ' + f.name + '...';
     var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
     var fp = folder ? folder + '/' + f.name : f.name;
-    var content = await f.text().catch(function() { return null; });
-    if (content === null) {
-      prog.textContent = 'Erro: ' + f.name + ' (binario)';
-      continue;
+    try {
+      var content = await f.text();
+      var r = await fetch(au('/write'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: fp, content: content })
+      });
+      if (r.ok) ok++;
+    } catch (e) {
+      prog.textContent = 'Erro: ' + f.name;
     }
-    var r = await fetch(au('/write'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fp, content: content })
-    });
-    if (r.ok) ok++;
   }
   prog.textContent = ok + '/' + files.length + ' enviado(s)';
   await loadTree();
@@ -2113,7 +2152,7 @@ async function runNpm(args, label) {
   var term = document.getElementById('pkg-term');
   var out = document.getElementById('pkg-out');
   term.classList.add('on');
-  out.textContent = label + '\\n';
+  out.textContent = label + '\n';
   setStatus(label, 'loading');
   try {
     var r = await fetch(au('/npm-run'), {
@@ -2122,7 +2161,8 @@ async function runNpm(args, label) {
       body: JSON.stringify({ args: args })
     });
     if (!r.ok) {
-      out.textContent += '\\nErro: ' + await r.text();
+      var errText = await r.text();
+      out.textContent += '\nErro: ' + errText;
       setStatus('Erro', 'err');
       return;
     }
@@ -2134,12 +2174,12 @@ async function runNpm(args, label) {
       out.textContent += dec.decode(x.value);
       term.scrollTop = term.scrollHeight;
     }
-    out.textContent += '\\nConcluido!';
+    out.textContent += '\nConcluido!';
     term.scrollTop = term.scrollHeight;
     setStatus('Pronto', 'ok');
     toast(label, 'ok');
   } catch (e) {
-    out.textContent += '\\nErro: ' + e.message;
+    out.textContent += '\nErro: ' + e.message;
     setStatus('Erro', 'err');
     toast('Erro: ' + e.message, 'err');
   }
@@ -2205,7 +2245,10 @@ function closeModal() {
 
 function confirmModal() {
   var v = document.getElementById('modal-in').value.trim();
-  if (!v) return;
+  if (!v) {
+    toast('Nome não pode estar vazio', 'err');
+    return;
+  }
   closeModal();
   if (modalCb) modalCb(v);
 }
@@ -2387,7 +2430,6 @@ document.addEventListener('DOMContentLoaded', function() {
 </html>`;
 }
 
-
 app.use("/files-api", authBot, (req, res, next) => {
   const rawUrl = req.originalUrl.split("?")[0]
   const m = rawUrl.match(/^\/files-api\/([^/]+)(\/[^?/]*)/)
@@ -2433,11 +2475,16 @@ app.use("/files-api", authBot, (req, res, next) => {
     const fp = safe(req.body && req.body.path)
     if (!fp) return res.status(400).send("Caminho inválido. Recebido: " + JSON.stringify(req.body))
     try {
-      fs.mkdirSync(path.dirname(fp), { recursive: true, mode: 0o755 })
-      fs.writeFileSync(fp, (req.body && req.body.content) || "")
+      const dir = path.dirname(fp)
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
+      }
+      fs.writeFileSync(fp, (req.body && req.body.content) || "", "utf8")
       saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
-    } catch (err) { return res.status(500).send("Erro ao escrever: " + err.message) }
+    } catch (err) { 
+      return res.status(500).send("Erro ao escrever: " + err.message) 
+    }
   }
 
   if (action === "/delete") {
