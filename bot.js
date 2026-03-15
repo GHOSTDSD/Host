@@ -1597,7 +1597,7 @@ var dirty = {};
 var modalCb = null;
 
 function au(a, e) {
-  return API + a + '?s=' + encodeURIComponent(TOK) + (e ? '&' + e : '');
+  return API + a + '?s=' + TOK + (e ? '&' + e : '');
 }
 
 function setStatus(t, c) {
