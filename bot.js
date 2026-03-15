@@ -1399,7 +1399,6 @@ function walkDir(dir, base) {
   })
 }
 
-
 app.get("/files/:botId", authBot, (req, res) => {
   const botId = req.params.botId
   const sessionToken = req.query.s
@@ -1510,7 +1509,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   <span id="unsaved" style="display:none;font-size:10px;color:var(--orange);margin:0 4px">&#9679;</span>
   <button class="tbtn" id="btn-ren" style="display:none" onclick="doRename()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg><span>Renomear</span></button>
   <button class="tbtn r" id="btn-del" style="display:none" onclick="doDel()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg><span>Excluir</span></button>
-  <button class="tbtn g" id="btn-save" style="display:none" onclick="doSave()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Salvar</button>
+  <button class="tbtn g" id="btn-save" style="display:none" onclick="doSave()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2 2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Salvar</button>
 </div>
 <div id="layout">
   <div id="side-ov" onclick="closeSide()"></div>
@@ -1596,7 +1595,7 @@ var dirty = {};
 var modalCb = null;
 
 function au(a, e) {
-  return API + a + '?s=' + TOK + (e ? '&' + e : '');
+  return API + a + '?s=' + encodeURIComponent(TOK) + (e ? '&' + e : '');
 }
 
 function setStatus(t, c) {
@@ -2026,13 +2025,13 @@ function doNewFolder() {
 
 function getTpl(n) {
   var e = xExt(n);
-  if (e === 'js') return '// ' + n + '\\n\\n';
+  if (e === 'js') return '\\n\\n';
   if (e === 'json') return '{\\n  \\n}\\n';
   if (e === 'html') return '<!DOCTYPE html>\\n<html>\\n<head>\\n  <meta charset="UTF-8">\\n  <title></title>\\n</head>\\n<body>\\n  \\n</body>\\n</html>';
   if (e === 'md') return '# ' + n.replace('.md', '') + '\\n\\n';
-  if (e === 'py') return '# ' + n + '\\n\\n';
-  if (e === 'css') return '/* ' + n + ' */\\n\\n';
-  if (e === 'env') return '# Environment variables\\n\\n';
+  if (e === 'py') return '\\n\\n';
+  if (e === 'css') return '\\n\\n';
+  if (e === 'env') return '\\n\\n';
   return '';
 }
 
@@ -2391,7 +2390,7 @@ app.use("/files-api", authBot, (req, res, next) => {
   const rawUrl = req.originalUrl.split("?")[0]
   const m = rawUrl.match(/^\/files-api\/([^/]+)(\/[^?/]*)/)
   if (!m) return next()
-  const botId = m[1]
+  const botId = req.botId || m[1]
   const action = m[2]
   const botPath = path.join(BASE_PATH, botId)
 
@@ -2429,23 +2428,25 @@ app.use("/files-api", authBot, (req, res, next) => {
   }
 
   if (action === "/write") {
-    const fp = safe(req.body && req.body.path)
-    if (!fp) return res.status(400).send("Caminho inválido. Recebido: " + JSON.stringify(req.body))
+    const body = req.body || {}
+    const fp = safe(body.path)
+    if (!fp) return res.status(400).send("Caminho inválido. Recebido: " + JSON.stringify(body))
     try {
       const dir = path.dirname(fp)
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
       }
-      fs.writeFileSync(fp, (req.body && req.body.content) || "", "utf8")
+      fs.writeFileSync(fp, body.content !== undefined ? body.content : "", "utf8")
       saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
-    } catch (err) { 
-      return res.status(500).send("Erro ao escrever: " + err.message) 
+    } catch (err) {
+      return res.status(500).send("Erro ao escrever: " + err.message)
     }
   }
 
   if (action === "/delete") {
-    const fp = safe(req.body && req.body.path)
+    const body = req.body || {}
+    const fp = safe(body.path)
     if (!fp) return res.status(400).send("Caminho inválido")
     if (!fs.existsSync(fp)) return res.status(404).send("Não encontrado")
     try {
@@ -2456,7 +2457,8 @@ app.use("/files-api", authBot, (req, res, next) => {
   }
 
   if (action === "/mkdir") {
-    const dp = safe(req.body && req.body.path)
+    const body = req.body || {}
+    const dp = safe(body.path)
     if (!dp) return res.status(400).send("Caminho inválido")
     try {
       fs.mkdirSync(dp, { recursive: true, mode: 0o755 })
@@ -2466,8 +2468,9 @@ app.use("/files-api", authBot, (req, res, next) => {
   }
 
   if (action === "/rename") {
-    const from = safe(req.body && req.body.from)
-    const to = safe(req.body && req.body.to)
+    const body = req.body || {}
+    const from = safe(body.from)
+    const to = safe(body.to)
     if (!from || !to) return res.status(400).send("Caminhos inválidos")
     if (!fs.existsSync(from)) return res.status(404).send("Arquivo origem não encontrado")
     try {
@@ -2488,7 +2491,8 @@ app.use("/files-api", authBot, (req, res, next) => {
   }
 
   if (action === "/npm-run") {
-    const { args } = req.body || {}
+    const body = req.body || {}
+    const { args } = body
     if (!args || !Array.isArray(args)) return res.status(400).send("Args inválidos")
     const allowedCommands = ["install", "uninstall", "update", "outdated", "list", "audit"]
     if (!allowedCommands.includes(args[0])) return res.status(403).send("Comando npm não permitido")
@@ -2632,4 +2636,4 @@ server.listen(PORT, async () => {
       })
     }
   }
-}) 
+})
