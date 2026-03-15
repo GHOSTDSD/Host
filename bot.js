@@ -2750,7 +2750,11 @@ server.listen(PORT, async () => {
   const diskPctInit = getDiskPercent()
   console.log(`💿 DISCO NO STARTUP: ${diskPctInit}%`)
   aresBanner()
-  bot.startPolling({ restart: true }).catch(() => {})
+  bot.startPolling({ restart: true, interval: 2000 }).catch(() => {})
+  bot.on("polling_error", (err) => {
+    if (err.code === "ETELEGRAM" && err.message.includes("409")) return
+    console.error("polling_error:", err.message)
+  })
   await restoreAllBotsFromBucket()
   if (fs.existsSync(BASE_PATH)) {
     const bots = fs.readdirSync(BASE_PATH).filter(f => {
