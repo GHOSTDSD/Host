@@ -1542,13 +1542,19 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .ptitle{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
 .pbtns{display:flex;gap:2px}
 .ib{background:none;border:none;color:var(--tx2);cursor:pointer;padding:5px;border-radius:5px;line-height:1;transition:all .15s;display:flex;align-items:center}.ib:hover{background:var(--bg3);color:var(--tx)}
-#tree{flex:1;overflow-y:auto;padding:4px 0;user-select:none}#tree::-webkit-scrollbar{width:3px}#tree::-webkit-scrollbar-thumb{background:var(--bd)}
-.row{display:flex;align-items:center;padding:5px 8px;cursor:pointer;border-radius:4px;margin:1px 4px;min-height:30px;gap:4px;position:relative}
-.row:hover{background:var(--bg3)}.row.sel{background:rgba(34,211,165,.08);border-left:2px solid var(--green)}
-.row .lbl{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-family:"JetBrains Mono",monospace}.row .lbl.d{color:var(--blue)}
-.row .arr{font-size:8px;color:var(--tx3);width:10px;transition:transform .15s;flex-shrink:0}.row .arr.o{transform:rotate(90deg)}.row .arr.h{opacity:0}
-.rctx{display:none;position:absolute;right:4px;top:50%;transform:translateY(-50%);gap:2px}.row:hover .rctx{display:flex}
-.cx{background:var(--bg2);border:1px solid var(--bd);border-radius:3px;padding:2px 4px;cursor:pointer;color:var(--tx2);line-height:1;display:flex;align-items:center}.cx:hover{color:var(--tx);background:var(--bg4)}
+#tree{flex:1;overflow-y:auto;padding:6px 0 12px;user-select:none}#tree::-webkit-scrollbar{width:3px}#tree::-webkit-scrollbar-thumb{background:var(--bd)}
+.tree-section{margin-bottom:2px}
+.tree-section-label{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--tx3);padding:8px 12px 3px;display:flex;align-items:center;gap:5px}
+.tree-section-label::after{content:"";flex:1;height:1px;background:var(--bd);opacity:.5}
+.row{display:flex;align-items:center;padding:4px 6px 4px 0;cursor:pointer;border-radius:5px;margin:1px 4px;min-height:28px;gap:0;position:relative;transition:background .1s}
+.row:hover{background:var(--bg3)}.row.sel{background:rgba(34,211,165,.07)}.row.sel::before{content:"";position:absolute;left:0;top:3px;bottom:3px;width:2px;background:var(--green);border-radius:2px}
+.row-indent{display:flex;align-items:stretch;flex-shrink:0}
+.row-guide{width:14px;flex-shrink:0;display:flex;justify-content:center;position:relative}.row-guide::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--bd);opacity:.4}
+.row .arr{width:16px;height:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--tx3);transition:transform .15s}.row .arr svg{transition:transform .15s}.row .arr.o svg{transform:rotate(90deg)}.row .arr.h{opacity:0}
+.row .lbl{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-family:"JetBrains Mono",monospace;color:var(--tx)}.row .lbl.d{color:#93c5fd;font-weight:500}
+.row .ext-badge{font-size:9px;font-weight:700;letter-spacing:.03em;padding:1px 4px;border-radius:3px;flex-shrink:0;opacity:.75;margin-right:2px;font-family:"JetBrains Mono",monospace}
+.rctx{display:none;position:absolute;right:4px;top:50%;transform:translateY(-50%);gap:2px;background:var(--bg3);border:1px solid var(--bd);border-radius:5px;padding:2px}.row:hover .rctx{display:flex}
+.cx{background:none;border:none;border-radius:3px;padding:3px 5px;cursor:pointer;color:var(--tx3);line-height:1;display:flex;align-items:center;transition:all .1s}.cx:hover{color:var(--tx);background:var(--bg4)}
 #side-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:4}
 .pinput{width:100%;background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:7px 10px;color:var(--tx);font-size:12px;outline:none;font-family:"Inter",sans-serif}.pinput:focus{border-color:var(--green)}
 #pib{flex:1;padding:7px;border-radius:6px;background:var(--green2);border:1px solid var(--green);color:#000;font-weight:700;font-size:12px;cursor:pointer}#pib:hover{background:var(--green)}
@@ -1621,10 +1627,10 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
       <div class="ph">
         <span class="ptitle">Explorer</span>
         <div class="pbtns">
-          <button class="ib" title="Upload" onclick="openUploadModal()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></button>
-          <button class="ib" title="Novo arquivo" onclick="doNewFile()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></button>
-          <button class="ib" title="Nova pasta" onclick="doNewFolder()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>
-          <button class="ib" title="Atualizar" onclick="loadTree()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+          <button class="ib" title="Upload de arquivo" onclick="openUploadModal()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><polyline points="10 10 7 7 4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="7" y1="7" x2="7" y2="13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2 10A5 5 0 1 1 12 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg></button>
+          <button class="ib" title="Novo arquivo" onclick="doNewFile()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8 2H3.5A1.5 1.5 0 0 0 2 3.5v7A1.5 1.5 0 0 0 3.5 12h7A1.5 1.5 0 0 0 12 10.5V6L8 2Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 2v4h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="7" y1="9" x2="7" y2="6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="5.5" y1="7.5" x2="8.5" y2="7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+          <button class="ib" title="Nova pasta" onclick="doNewFolder()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1.5 3C1.5 2.17 2.17 1.5 3 1.5H5.8l1 1.5H11C11.83 3 12.5 3.67 12.5 4.5v6C12.5 11.33 11.83 12 11 12H3C2.17 12 1.5 11.33 1.5 10.5V3Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><line x1="7" y1="6" x2="7" y2="9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="5.2" y1="7.75" x2="8.8" y2="7.75" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+          <button class="ib" title="Atualizar árvore" onclick="loadTree()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M13 2.5v4h-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 11.5v-4h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.34 5.5A5 5 0 0 1 11.66 8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/><path d="M11.66 8.5A5 5 0 0 1 2.34 5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/></svg></button>
         </div>
       </div>
       <div id="tree"><div style="padding:12px;font-size:12px;color:var(--tx3)">Carregando...</div></div>
@@ -1634,7 +1640,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
       <div class="ph"><span class="ptitle">Pacotes npm</span></div>
       <div style="padding:8px;border-bottom:1px solid var(--bd)"><input class="pinput" id="pkg-in" type="text" placeholder="axios, lodash, dotenv..." spellcheck="false"></div>
       <div style="display:flex;gap:6px;padding:8px">
-        <button id="pib" onclick="installPkg()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline;vertical-align:middle;margin-right:4px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Instalar</button>
+        <button id="pib" onclick="installPkg()"><svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="display:inline;vertical-align:middle;margin-right:4px"><path d="M6.5 1.5v7M4 6l2.5 2.5L9 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.5 10.5h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>Instalar</button>
         <button class="tbtn" style="font-size:11px;padding:5px 8px" onclick="installPkg('dev')">Dev</button>
       </div>
       <div id="pkg-list"><div class="pe">Carregando...</div></div>
@@ -1670,7 +1676,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 <div class="ov" id="modal-upload">
   <div class="mbox">
     <h3>Upload de Arquivos</h3>
-    <div class="dz" id="dz"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto 8px;display:block;opacity:.5"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Arraste arquivos ou clique para selecionar<input type="file" id="upl2" multiple style="display:none"></div>
+    <div class="dz" id="dz"><svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5" style="display:block;margin:0 auto 8px;opacity:.4"><polyline points="18 18 14 14 10 18" stroke-linecap="round" stroke-linejoin="round"/><line x1="14" y1="14" x2="14" y2="23" stroke-linecap="round"/><path d="M23.5 22A5.5 5.5 0 1 0 8 18" stroke-linecap="round" fill="none"/></svg>Arraste arquivos ou clique para selecionar<input type="file" id="upl2" multiple style="display:none"></div>
     <div id="upl-prog" style="font-size:12px;color:var(--tx3);min-height:18px"></div>
     <div class="mbts" style="margin-top:12px"><button class="mcancel" onclick="closeUploadModal()">Fechar</button></div>
   </div>
@@ -1760,57 +1766,94 @@ function toast(m, t) {
 
 function fileIcon(n) {
   var e = xExt(n);
-  var icons = {
-    js: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#f7df1e"/><text x="3" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#000">JS</text></svg>',
-    ts: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#3178c6"/><text x="2" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#fff">TS</text></svg>',
-    jsx: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#61dafb"/><text x="2" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#000">JSX</text></svg>',
-    tsx: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#3178c6"/><text x="2" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">TSX</text></svg>',
-    json: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
-    py: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#306998"/><text x="2" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#ffd43b">PY</text></svg>',
-    html: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#e44d26" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
-    css: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#2965f1"/><text x="1" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">CSS</text></svg>',
-    md: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
-    env: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22d3a5" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
-    sh: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
-    yml: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
+  var ico = {
+    js:  '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#f7df1e"/><text x="2.5" y="11.5" font-size="8" font-family="monospace" font-weight="bold" fill="#000">JS</text></svg>',
+    mjs: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#f7df1e"/><text x="2.5" y="11.5" font-size="8" font-family="monospace" font-weight="bold" fill="#000">JS</text></svg>',
+    cjs: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#f7df1e"/><text x="2.5" y="11.5" font-size="8" font-family="monospace" font-weight="bold" fill="#000">JS</text></svg>',
+    ts:  '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#3178c6"/><text x="1.5" y="11.5" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">TS</text></svg>',
+    tsx: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#3178c6"/><text x="0.5" y="11.5" font-size="7.5" font-family="monospace" font-weight="bold" fill="#fff">TSX</text></svg>',
+    jsx: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#61dafb"/><text x="0.5" y="11.5" font-size="7.5" font-family="monospace" font-weight="bold" fill="#000">JSX</text></svg>',
+    json:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a2234" stroke="#f59e0b" stroke-width=".8"/><text x="1" y="9.5" font-size="6.5" font-family="monospace" font-weight="bold" fill="#f59e0b">{}</text></svg>',
+    py:  '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#306998"/><text x="2" y="11.5" font-size="8" font-family="monospace" font-weight="bold" fill="#ffd43b">PY</text></svg>',
+    html:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a0a00" stroke="#e44d26" stroke-width=".8"/><text x=".5" y="9.5" font-size="6" font-family="monospace" font-weight="bold" fill="#e44d26">HTML</text></svg>',
+    htm: '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a0a00" stroke="#e44d26" stroke-width=".8"/><text x=".5" y="9.5" font-size="6" font-family="monospace" font-weight="bold" fill="#e44d26">HTML</text></svg>',
+    css: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#2965f1"/><text x="1" y="11.5" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">CSS</text></svg>',
+    scss:'<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#c6538c"/><text x=".5" y="11.5" font-size="7.5" font-family="monospace" font-weight="bold" fill="#fff">SCS</text></svg>',
+    md:  '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a2234" stroke="#94a3b8" stroke-width=".8"/><text x="1" y="9.5" font-size="7" font-family="monospace" font-weight="bold" fill="#94a3b8">MD</text></svg>',
+    env: '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#0a1a0a" stroke="#22d3a5" stroke-width=".8"/><path d="M3 5h7M3 8h5" stroke="#22d3a5" stroke-width="1.2" stroke-linecap="round"/></svg>',
+    sh:  '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a1230" stroke="#a78bfa" stroke-width=".8"/><text x="1.5" y="9.5" font-size="7" font-family="monospace" font-weight="bold" fill="#a78bfa">SH</text></svg>',
+    bash:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a1230" stroke="#a78bfa" stroke-width=".8"/><text x="1.5" y="9.5" font-size="7" font-family="monospace" font-weight="bold" fill="#a78bfa">SH</text></svg>',
+    yml: '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#0d1525" stroke="#60a5fa" stroke-width=".8"/><text x="1" y="9.5" font-size="7" font-family="monospace" font-weight="bold" fill="#60a5fa">YML</text></svg>',
+    yaml:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#0d1525" stroke="#60a5fa" stroke-width=".8"/><text x="1" y="9.5" font-size="7" font-family="monospace" font-weight="bold" fill="#60a5fa">YML</text></svg>',
+    sql: '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#0d1a1a" stroke="#2dd4bf" stroke-width=".8"/><text x=".5" y="9.5" font-size="7" font-family="monospace" font-weight="bold" fill="#2dd4bf">SQL</text></svg>',
+    txt: '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a2234" stroke="#64748b" stroke-width=".8"/><path d="M3 4.5h7M3 6.5h7M3 8.5h4.5" stroke="#64748b" stroke-width="1" stroke-linecap="round"/></svg>',
+    xml: '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a0e0a" stroke="#fb923c" stroke-width=".8"/><text x=".5" y="9.5" font-size="6.5" font-family="monospace" font-weight="bold" fill="#fb923c">XML</text></svg>',
+    go:  '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#00add8"/><text x="2" y="11.5" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">GO</text></svg>',
+    rs:  '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a0800" stroke="#f97316" stroke-width=".8"/><text x="1.5" y="9.5" font-size="7" font-family="monospace" font-weight="bold" fill="#f97316">RS</text></svg>',
+    php: '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a1230" stroke="#8b5cf6" stroke-width=".8"/><text x=".5" y="9.5" font-size="7" font-family="monospace" font-weight="bold" fill="#8b5cf6">PHP</text></svg>',
+    rb:  '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a0008" stroke="#ef4444" stroke-width=".8"/><text x="1.5" y="9.5" font-size="7" font-family="monospace" font-weight="bold" fill="#ef4444">RB</text></svg>',
+    java:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#0d0e1a" stroke="#f59e0b" stroke-width=".8"/><text x=".5" y="9.5" font-size="6.5" font-family="monospace" font-weight="bold" fill="#f59e0b">JAV</text></svg>',
   };
-  return icons[e] || '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+  return ico[e] || '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect width="13" height="13" rx="2.5" fill="#1a2234" stroke="#334155" stroke-width=".8"/><path d="M4 3.5h3.5L9.5 5.5V9.5H4V3.5Z" stroke="#64748b" stroke-width=".8" fill="none"/><path d="M7.5 3.5V5.5H9.5" stroke="#64748b" stroke-width=".8" fill="none"/></svg>';
 }
 
 function folderIcon(o) {
   return o
-    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="3" y1="10" x2="21" y2="10"/></svg>'
-    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+    ? '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3.5C1 2.67 1.67 2 2.5 2H5.3l1 1.5H11.5C12.33 3.5 13 4.17 13 5v5.5C13 11.33 12.33 12 11.5 12h-9C1.67 12 1 11.33 1 10.5V3.5Z" fill="#1e3a5f" stroke="#3b82f6" stroke-width=".7"/><path d="M1 6h12" stroke="#3b82f6" stroke-width=".6" opacity=".5"/></svg>'
+    : '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3.5C1 2.67 1.67 2 2.5 2H5.3l1 1.5H11.5C12.33 3.5 13 4.17 13 5v5.5C13 11.33 12.33 12 11.5 12h-9C1.67 12 1 11.33 1 10.5V3.5Z" fill="#152233" stroke="#4b6a8a" stroke-width=".7"/></svg>';
 }
 
-function buildRows(items, depth) {
+function arrowIcon() {
+  return '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 2l4 3-4 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
+
+function iconAdd() { return '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><line x1="5.5" y1="1" x2="5.5" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="1" y1="5.5" x2="10" y2="5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'; }
+function iconTrash() { return '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M1.5 3h8M4 3V2h3v1M2.5 3l.5 6h5l.5-6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
+function iconDownload() { return '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M5.5 1v6M3 5l2.5 2.5L8 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.5 9h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'; }
+function iconCopy() { return '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><rect x="3.5" y="3.5" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 7.5H2a.5.5 0 0 1-.5-.5V2A.5.5 0 0 1 2 1.5h5a.5.5 0 0 1 .5.5v1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>'; }
+function iconEdit() { return '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M7.5 1.5l2 2L4 9H2V7L7.5 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
+
+function buildRows(items, depth, parentGuides) {
   var h = '';
   for (var i = 0; i < items.length; i++) {
     var it = items[i];
-    var pad = 6 + depth * 14;
+    var isLast = i === items.length - 1;
     var hp = hEsc(it.path);
     var hn = hEsc(it.name);
+
+    var indentHtml = '';
+    for (var g = 0; g < depth; g++) {
+      var showGuide = parentGuides[g];
+      indentHtml += '<span class="row-guide"' + (showGuide ? '' : ' style="opacity:0"') + '></span>';
+    }
+
     if (it.type === 'dir') {
       var o = openDirs.has(it.path);
-      h += '<div class="row" data-act="dir" data-p="' + hp + '" style="padding-left:' + pad + 'px">';
-      h += '<span class="arr ' + (o ? 'o' : '') + '">▶</span>';
+      h += '<div class="row" data-act="dir" data-p="' + hp + '">';
+      h += '<div class="row-indent">' + indentHtml + '</div>';
+      h += '<span class="arr ' + (o ? 'o' : '') + '">' + arrowIcon() + '</span>';
       h += folderIcon(o);
-      h += '<span class="lbl d">' + hn + '</span>';
+      h += '<span class="lbl d" style="margin-left:5px">' + hn + '</span>';
       h += '<div class="rctx">';
-      h += '<button class="cx" data-act="nfi" data-p="' + hp + '" title="Novo arquivo">➕</button>';
-      h += '<button class="cx" data-act="delf" data-p="' + hp + '" title="Excluir pasta">🗑️</button>';
+      h += '<button class="cx" data-act="nfi" data-p="' + hp + '" title="Novo arquivo">' + iconAdd() + '</button>';
+      h += '<button class="cx" data-act="delf" data-p="' + hp + '" title="Excluir pasta">' + iconTrash() + '</button>';
       h += '</div></div>';
-      if (o && it.children) h += buildRows(it.children, depth + 1);
+      if (o && it.children && it.children.length) {
+        var childGuides = parentGuides.concat(!isLast);
+        h += buildRows(it.children, depth + 1, childGuides);
+      }
     } else {
       var sel = curFile === it.path ? ' sel' : '';
-      h += '<div class="row' + sel + '" data-act="open" data-p="' + hp + '" style="padding-left:' + (pad + 12) + 'px">';
-      h += '<span class="arr h">▶</span>';
-      h += fileIcon(it.name);
-      h += '<span class="lbl">' + hn + '</span>';
+      h += '<div class="row' + sel + '" data-act="open" data-p="' + hp + '">';
+      h += '<div class="row-indent">' + indentHtml + '</div>';
+      h += '<span class="arr h">' + arrowIcon() + '</span>';
+      h += '<span style="flex-shrink:0;display:flex;align-items:center">' + fileIcon(it.name) + '</span>';
+      h += '<span class="lbl" style="margin-left:5px">' + hn + '</span>';
       h += '<div class="rctx">';
-      h += '<button class="cx" data-act="dl" data-p="' + hp + '" title="Download">📥</button>';
-      h += '<button class="cx" data-act="dup" data-p="' + hp + '" title="Duplicar">📄</button>';
-      h += '<button class="cx" data-act="qren" data-p="' + hp + '" title="Renomear">✏️</button>';
+      h += '<button class="cx" data-act="dl"   data-p="' + hp + '" title="Download">' + iconDownload() + '</button>';
+      h += '<button class="cx" data-act="dup"  data-p="' + hp + '" title="Duplicar">' + iconCopy() + '</button>';
+      h += '<button class="cx" data-act="qren" data-p="' + hp + '" title="Renomear">' + iconEdit() + '</button>';
+      h += '<button class="cx" data-act="del1" data-p="' + hp + '" title="Excluir">' + iconTrash() + '</button>';
       h += '</div></div>';
     }
   }
@@ -1819,7 +1862,21 @@ function buildRows(items, depth) {
 
 function renderTree() {
   var el = document.getElementById('tree');
-  el.innerHTML = treeData.length ? buildRows(treeData, 0) : '<div style="padding:12px;font-size:12px;color:var(--tx3)">Pasta vazia</div>';
+  if (!treeData.length) {
+    el.innerHTML = '<div style="padding:14px 12px;font-size:11px;color:var(--tx3);text-align:center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="display:block;margin:0 auto 6px;opacity:.3"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Pasta vazia</div>';
+    return;
+  }
+  var dirs = treeData.filter(function(x) { return x.type === 'dir'; });
+  var files = treeData.filter(function(x) { return x.type === 'file'; });
+  var html = '';
+  if (dirs.length) {
+    html += buildRows(dirs, 0, []);
+  }
+  if (files.length) {
+    if (dirs.length) html += '<div style="height:1px;background:var(--bd);margin:4px 8px;opacity:.4"></div>';
+    html += buildRows(files, 0, []);
+  }
+  el.innerHTML = html;
 }
 
 function toggleDir(p) {
@@ -2386,6 +2443,11 @@ document.addEventListener('DOMContentLoaded', function() {
     else if (a === 'qren') qRename(p);
     else if (a === 'nfi') doNewFileIn(p);
     else if (a === 'delf') delFolder(p);
+    else if (a === 'del1') {
+      if (!confirm('Excluir "' + p + '"?')) return;
+      fetch(au('/delete'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) })
+        .then(function(r) { if (r.ok) { toast('Excluído', 'ok'); if (curFile === p) closeTab(p); loadTree(); } else r.text().then(function(t) { toast('Erro: ' + t, 'err'); }); });
+    }
   });
 
   document.getElementById('tabs-bar').addEventListener('click', function(e) {
