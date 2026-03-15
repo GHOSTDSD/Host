@@ -1419,7 +1419,7 @@ function buildEditorHtml(botId, sessionToken, API) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ARES \u2014 ${botId}</title>
+<title>ARES — ${botId}</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1507,7 +1507,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   <div class="bot-chip" title="${botId}">${botId}</div>
   <div class="sp"></div>
   <div id="status-wrap"><div id="si"></div><span id="st"></span></div>
-  <span id="unsaved" style="display:none;font-size:10px;color:var(--orange);margin:0 4px">&#9679;</span>
+  <span id="unsaved" style="display:none;font-size:10px;color:var(--orange);margin:0 4px">●</span>
   <button class="tbtn" id="btn-ren" style="display:none" onclick="doRename()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg><span>Renomear</span></button>
   <button class="tbtn r" id="btn-del" style="display:none" onclick="doDel()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg><span>Excluir</span></button>
   <button class="tbtn g" id="btn-save" style="display:none" onclick="doSave()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Salvar</button>
@@ -1558,7 +1558,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
       <button class="fbtn" onclick="findReplace()">Replace</button>
       <button id="find-close" onclick="closeFindBar()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
-    <div id="infobar" style="display:none"><div id="ib-lang">&mdash;</div><div class="ssep"></div><div id="ib-size">&mdash;</div><div class="ssep"></div><div>UTF-8</div><div id="cur-pos">Ln 1, Col 1</div></div>
+    <div id="infobar" style="display:none"><div id="ib-lang">—</div><div class="ssep"></div><div id="ib-size">—</div><div class="ssep"></div><div>UTF-8</div><div id="cur-pos">Ln 1, Col 1</div></div>
     <div id="editor-wrap" style="display:none"></div>
     <div id="welcome">
       <svg class="wlogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
