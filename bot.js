@@ -721,7 +721,8 @@ bot.onText(/\/start/, async msg => {
         inline_keyboard: [
           [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
           [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-          [{ text: "📊 Estatisticas", callback_data: "menu_stats" }]
+          [{ text: "📊 Estatisticas", callback_data: "menu_stats" }],
+          [{ text: "🛒 Marketplace", callback_data: "menu_market" }]
         ]
       }
     }
@@ -944,7 +945,8 @@ bot.on("callback_query", async query => {
           inline_keyboard: [
             [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
             [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-            [{ text: "📊 Estatisticas", callback_data: "menu_stats" }]
+            [{ text: "📊 Estatisticas", callback_data: "menu_stats" }],
+          [{ text: "🛒 Marketplace", callback_data: "menu_market" }]
           ]
         }
       }
@@ -962,7 +964,8 @@ bot.on("callback_query", async query => {
           inline_keyboard: [
             [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
             [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-            [{ text: "📊 Estatisticas", callback_data: "menu_stats" }]
+            [{ text: "📊 Estatisticas", callback_data: "menu_stats" }],
+          [{ text: "🛒 Marketplace", callback_data: "menu_market" }]
           ]
         }
       }
@@ -1124,6 +1127,26 @@ process.on('uncaughtException', (err) => {
         reply_markup: {
           inline_keyboard: [
             [{ text: "🔄 Atualizar", callback_data: "menu_stats" }],
+            [{ text: "⬅️ Voltar", callback_data: "menu_home" }]
+          ]
+        }
+      }
+    )
+  }
+  if (action === "menu_market") {
+    const sessionToken = genWebSession(chatId)
+    const url = `${DOMAIN}/marketplace?s=${sessionToken}`
+    return bot.editMessageText(
+      `🛒 *Marketplace de Bases*\n\n` +
+      `Explore bases de bots de WhatsApp prontas criadas pela comunidade ARES!\n\n` +
+      `✅ Gratuito e open source\n` +
+      `📦 Instale com 1 clique\n` +
+      `🤝 Contribua publicando a sua base`,
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🛒 Abrir Marketplace", url }],
             [{ text: "⬅️ Voltar", callback_data: "menu_home" }]
           ]
         }
@@ -3204,11 +3227,840 @@ app.use("/files-api", authBot, (req, res, next) => {
   next()
 })
 
-function getDiskPercent() {
+// ─────────────────────────────────────────────
+//  MARKETPLACE DE BASES DE BOTS — COMUNIDADE
+// ─────────────────────────────────────────────
+
+const MARKET_KEY = "marketplace_bases.json"
+
+async function getMarketData() {
   try {
-    const df = execSync("df / | tail -1").toString()
-    const parts = df.split(/\s+/)
-    return parseInt(parts[4].replace("%", ""))
+    const { client, bucketName } = s3Clients[0]
+    const res = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: MARKET_KEY }))
+    const chunks = []
+    for await (const chunk of res.Body) chunks.push(chunk)
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+  } catch { return { bases: [] } }
+}
+
+async function saveMarketData(data) {
+  try {
+    const { client, bucketName } = s3Clients[0]
+    await client.send(new PutObjectCommand({
+      Bucket: bucketName, Key: MARKET_KEY,
+      Body: JSON.stringify(data),
+      ContentType: "application/json"
+    }))
+    return true
+  } catch { return false }
+}
+
+// Página pública do marketplace
+app.get("/marketplace", (req, res) => {
+  const sessionToken = req.query.s || ""
+  res.send(buildMarketplaceHtml(sessionToken))
+})
+
+// API: listar bases
+app.get("/marketplace-api/list", async (req, res) => {
+  const data = await getMarketData()
+  res.json(data.bases || [])
+})
+
+// API: publicar base (requer sessão)
+app.post("/marketplace-api/publish", async (req, res) => {
+  const tok = req.query.s
+  const chatId = checkSession({ query: { s: tok } })
+  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
+
+  const { name, description, category, tags, zipUrl, preview, author } = req.body
+  if (!name || !description || !zipUrl) return res.status(400).json({ error: "Campos obrigatórios: name, description, zipUrl" })
+
+  const data = await getMarketData()
+  const id = "base_" + Date.now() + "_" + Math.floor(Math.random() * 9999)
+  const base = {
+    id, name, description, category: category || "geral",
+    tags: Array.isArray(tags) ? tags.slice(0, 5) : [],
+    zipUrl, preview: preview || "",
+    author: author || "Anônimo",
+    authorId: chatId,
+    createdAt: Date.now(),
+    downloads: 0,
+    likes: [],
+    approved: true
+  }
+  data.bases.unshift(base)
+  if (data.bases.length > 200) data.bases = data.bases.slice(0, 200)
+  await saveMarketData(data)
+  res.json({ ok: true, id })
+})
+
+// API: curtir base
+app.post("/marketplace-api/like/:id", async (req, res) => {
+  const tok = req.query.s
+  const chatId = checkSession({ query: { s: tok } })
+  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
+
+  const data = await getMarketData()
+  const base = data.bases.find(b => b.id === req.params.id)
+  if (!base) return res.status(404).json({ error: "Base não encontrada" })
+  if (!Array.isArray(base.likes)) base.likes = []
+  const idx = base.likes.indexOf(chatId)
+  if (idx > -1) base.likes.splice(idx, 1)
+  else base.likes.push(chatId)
+  await saveMarketData(data)
+  res.json({ ok: true, likes: base.likes.length, liked: idx === -1 })
+})
+
+// API: incrementar download
+app.post("/marketplace-api/download/:id", async (req, res) => {
+  const data = await getMarketData()
+  const base = data.bases.find(b => b.id === req.params.id)
+  if (base) { base.downloads = (base.downloads || 0) + 1; await saveMarketData(data) }
+  res.json({ ok: true })
+})
+
+// API: deletar (só o dono ou OWNER_ID)
+app.delete("/marketplace-api/delete/:id", async (req, res) => {
+  const tok = req.query.s
+  const chatId = checkSession({ query: { s: tok } })
+  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
+  const data = await getMarketData()
+  const idx = data.bases.findIndex(b => b.id === req.params.id)
+  if (idx === -1) return res.status(404).json({ error: "Não encontrada" })
+  const base = data.bases[idx]
+  if (base.authorId !== chatId && String(chatId) !== String(OWNER_ID)) return res.status(403).json({ error: "Sem permissão" })
+  data.bases.splice(idx, 1)
+  await saveMarketData(data)
+  res.json({ ok: true })
+})
+
+// Callback do Telegram para abrir marketplace
+bot.onText(/^\/marketplace$/, msg => {
+  const chatId = msg.chat.id
+  const sessionToken = genWebSession(chatId)
+  const url = `${DOMAIN}/marketplace?s=${sessionToken}`
+  bot.sendMessage(chatId,
+    `🛒 *Marketplace de Bases*\n\nExplore e compartilhe bases de bots de WhatsApp da comunidade ARES!\n\n✅ Gratuito\n📦 Instale direto no seu bot\n🤝 Contribua com a comunidade`,
+    {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "🛒 Abrir Marketplace", url }]] }
+    }
+  )
+})
+
+function buildMarketplaceHtml(sessionToken) {
+  const T = JSON.stringify(sessionToken)
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0e17">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>ARES Marketplace</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#08090f;--bg2:#0f1420;--bg3:#151c2e;--bg4:#1a2338;--bg5:#1f2a42;
+  --bd:#1e2d46;--bd2:#2a3d5a;
+  --tx:#e8edf5;--tx2:#8fa3c0;--tx3:#4e647e;
+  --green:#1fd4a4;--green2:#14a87e;--green3:rgba(31,212,164,.12);
+  --blue:#4da6ff;--blue2:rgba(77,166,255,.12);
+  --orange:#f5a623;--red:#f0586a;--purple:#9b72ff;--purple2:rgba(155,114,255,.12);
+  --pink:#ff6eb4;
+  --r:14px;--r2:10px;--top:60px;--bot:0px
+}
+html,body{min-height:100%;background:var(--bg);color:var(--tx);font-family:"Inter",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+
+/* ── TOPBAR ── */
+#topbar{
+  position:sticky;top:0;z-index:100;
+  height:var(--top);
+  background:rgba(8,9,15,.92);
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border-bottom:1px solid var(--bd);
+  display:flex;align-items:center;padding:0 16px;gap:10px;
+  padding-top:env(safe-area-inset-top,0)
+}
+.logo{display:flex;align-items:center;gap:8px;text-decoration:none}
+.logo-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--green),var(--blue));border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.logo-text{font-size:15px;font-weight:800;color:var(--tx);letter-spacing:-.4px}
+.logo-sub{font-size:10px;color:var(--tx3);font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-top:1px}
+.top-sp{flex:1}
+#search-wrap{position:relative;flex:1;max-width:340px}
+#search-input{
+  width:100%;background:var(--bg3);border:1px solid var(--bd);border-radius:10px;
+  padding:8px 12px 8px 36px;color:var(--tx);font-size:13px;outline:none;
+  font-family:"Inter",sans-serif;-webkit-appearance:none;transition:border .15s
+}
+#search-input:focus{border-color:var(--green);background:var(--bg4)}
+#search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--tx3);pointer-events:none}
+#btn-publish{
+  display:flex;align-items:center;gap:6px;padding:8px 14px;
+  background:linear-gradient(135deg,var(--green2),#0d8a68);
+  border:none;border-radius:10px;color:#000;font-weight:700;font-size:13px;
+  cursor:pointer;touch-action:manipulation;white-space:nowrap;flex-shrink:0
+}
+#btn-publish:active{opacity:.85}
+#btn-publish svg{flex-shrink:0}
+
+/* ── HERO ── */
+#hero{
+  padding:40px 16px 32px;text-align:center;
+  background:radial-gradient(ellipse 80% 300px at 50% 0%,rgba(31,212,164,.07) 0%,transparent 70%);
+}
+.hero-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--green3);border:1px solid rgba(31,212,164,.25);
+  border-radius:99px;padding:5px 12px;font-size:11px;font-weight:700;
+  color:var(--green);text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px
+}
+.hero-title{font-size:clamp(22px,5vw,36px);font-weight:800;color:var(--tx);letter-spacing:-.6px;line-height:1.2;margin-bottom:10px}
+.hero-title span{background:linear-gradient(135deg,var(--green),var(--blue));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero-sub{font-size:14px;color:var(--tx2);max-width:480px;margin:0 auto 24px;line-height:1.6}
+.hero-stats{display:flex;align-items:center;justify-content:center;gap:24px;flex-wrap:wrap}
+.hstat{text-align:center}
+.hstat-num{font-size:22px;font-weight:800;color:var(--tx);letter-spacing:-.5px}
+.hstat-lbl{font-size:11px;color:var(--tx3);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
+
+/* ── FILTERS ── */
+#filters{
+  display:flex;gap:8px;padding:16px 16px 12px;
+  overflow-x:auto;scrollbar-width:none;flex-shrink:0;
+  border-bottom:1px solid var(--bd)
+}
+#filters::-webkit-scrollbar{display:none}
+.cat-btn{
+  display:flex;align-items:center;gap:6px;padding:7px 14px;
+  border-radius:99px;border:1px solid var(--bd);background:var(--bg3);
+  color:var(--tx2);font-size:12px;font-weight:600;cursor:pointer;
+  white-space:nowrap;touch-action:manipulation;transition:all .15s;flex-shrink:0
+}
+.cat-btn:active,.cat-btn.on{background:var(--green3);border-color:var(--green);color:var(--green)}
+.cat-icon{font-size:13px}
+
+/* ── SORT ── */
+#sort-bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--bd)}
+.sort-label{font-size:11px;color:var(--tx3);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.sort-btn{padding:5px 12px;border-radius:8px;border:1px solid var(--bd);background:none;color:var(--tx3);font-size:12px;font-weight:600;cursor:pointer;touch-action:manipulation;transition:all .15s}
+.sort-btn.on{background:var(--blue2);border-color:var(--blue);color:var(--blue)}
+.sort-btn:active{background:var(--bg3)}
+.count-badge{margin-left:auto;font-size:12px;color:var(--tx3)}
+.count-badge span{color:var(--tx2);font-weight:600}
+
+/* ── GRID ── */
+#grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr));
+  gap:16px;padding:16px;
+}
+#empty{display:none;padding:60px 24px;text-align:center;color:var(--tx3)}
+#empty svg{opacity:.2;margin:0 auto 16px;display:block}
+#empty h3{font-size:17px;color:var(--tx2);margin-bottom:6px}
+#empty p{font-size:13px;line-height:1.6}
+#loading{display:none;padding:60px;text-align:center;color:var(--tx3);font-size:13px}
+#loading.on{display:block}
+
+/* ── CARD ── */
+.card{
+  background:var(--bg2);border:1px solid var(--bd);border-radius:var(--r);
+  overflow:hidden;display:flex;flex-direction:column;
+  transition:border-color .2s,transform .15s;
+  cursor:pointer;touch-action:manipulation
+}
+.card:active{transform:scale(.99);border-color:var(--bd2)}
+.card-banner{
+  height:90px;position:relative;overflow:hidden;
+  background:linear-gradient(135deg,var(--bg3),var(--bg4));
+  display:flex;align-items:center;justify-content:center;flex-shrink:0
+}
+.card-banner-icon{font-size:36px;opacity:.6}
+.card-banner img{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+.card-cat-badge{
+  position:absolute;top:8px;left:8px;
+  background:rgba(8,9,15,.8);backdrop-filter:blur(8px);
+  border:1px solid var(--bd2);border-radius:99px;
+  padding:3px 9px;font-size:10px;font-weight:700;color:var(--tx2);
+  text-transform:uppercase;letter-spacing:.05em
+}
+.card-body{padding:14px;flex:1;display:flex;flex-direction:column;gap:8px}
+.card-title{font-size:15px;font-weight:700;color:var(--tx);letter-spacing:-.2px;line-height:1.3}
+.card-desc{font-size:12px;color:var(--tx2);line-height:1.6;flex:1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card-tags{display:flex;flex-wrap:wrap;gap:5px}
+.tag{background:var(--bg4);border:1px solid var(--bd);border-radius:6px;padding:2px 8px;font-size:10px;font-weight:600;color:var(--tx3)}
+.card-footer{padding:10px 14px;border-top:1px solid var(--bd);display:flex;align-items:center;gap:10px}
+.card-author{display:flex;align-items:center;gap:6px;flex:1;min-width:0}
+.card-avatar{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,var(--purple),var(--blue));display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0}
+.card-author-name{font-size:11px;color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-stats{display:flex;align-items:center;gap:10px}
+.cstat{display:flex;align-items:center;gap:3px;font-size:11px;color:var(--tx3);font-weight:600}
+.cstat svg{opacity:.7}
+.like-btn{background:none;border:none;cursor:pointer;display:flex;align-items:center;gap:3px;font-size:11px;color:var(--tx3);font-weight:600;padding:3px 6px;border-radius:6px;touch-action:manipulation;transition:all .1s}
+.like-btn:active{background:rgba(240,88,106,.15);color:var(--red)}
+.like-btn.liked{color:var(--red)}
+.card-dl-btn{
+  background:var(--green3);border:1px solid rgba(31,212,164,.25);
+  border-radius:8px;padding:6px 12px;
+  font-size:12px;font-weight:700;color:var(--green);
+  cursor:pointer;touch-action:manipulation;transition:all .15s;
+  text-decoration:none;display:flex;align-items:center;gap:5px;flex-shrink:0
+}
+.card-dl-btn:active{background:var(--green2);color:#000}
+
+/* ── PUBLISH MODAL ── */
+#publish-modal{display:none;position:fixed;inset:0;z-index:999;background:rgba(0,0,0,.8);backdrop-filter:blur(8px);align-items:flex-end;justify-content:center}
+#publish-modal.on{display:flex}
+@media(min-width:600px){#publish-modal{align-items:center}}
+.pmodal{
+  background:var(--bg2);border:1px solid var(--bd2);
+  border-radius:20px 20px 0 0;width:100%;max-width:520px;
+  padding:0 0 calc(16px + env(safe-area-inset-bottom,0));
+  max-height:92vh;overflow-y:auto;display:flex;flex-direction:column;
+  -webkit-overflow-scrolling:touch
+}
+@media(min-width:600px){.pmodal{border-radius:18px;padding-bottom:16px;max-height:85vh}}
+.pmodal-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px 14px;border-bottom:1px solid var(--bd);flex-shrink:0;
+  position:sticky;top:0;background:var(--bg2);z-index:2
+}
+.pmodal-handle{width:36px;height:4px;background:var(--bd2);border-radius:2px;margin:12px auto 0;flex-shrink:0}
+.pmodal-title{font-size:17px;font-weight:800;color:var(--tx)}
+.pmodal-close{background:none;border:none;color:var(--tx3);cursor:pointer;padding:6px;border-radius:8px;display:flex;align-items:center;touch-action:manipulation}
+.pmodal-close:active{background:var(--bg4);color:var(--tx)}
+.pmodal-body{padding:16px 20px;display:flex;flex-direction:column;gap:14px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:12px;font-weight:700;color:var(--tx2);text-transform:uppercase;letter-spacing:.06em}
+.field input,.field textarea,.field select{
+  background:var(--bg3);border:1.5px solid var(--bd);color:var(--tx);
+  border-radius:10px;padding:11px 14px;font-size:15px;outline:none;
+  font-family:"Inter",sans-serif;-webkit-appearance:none;transition:border .15s;width:100%
+}
+.field textarea{resize:vertical;min-height:80px;line-height:1.5}
+.field input:focus,.field textarea:focus,.field select:focus{border-color:var(--green);background:var(--bg4)}
+.field select option{background:var(--bg3)}
+.field-hint{font-size:11px;color:var(--tx3);line-height:1.5}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pmodal-footer{padding:12px 20px 0;display:flex;gap:10px;flex-shrink:0}
+.btn-submit{
+  flex:1;padding:14px;background:linear-gradient(135deg,var(--green2),#0d8a68);
+  border:none;border-radius:11px;color:#000;font-weight:800;font-size:15px;
+  cursor:pointer;touch-action:manipulation
+}
+.btn-submit:active{opacity:.85}
+.btn-cancel{
+  padding:14px 20px;background:var(--bg3);border:1px solid var(--bd);
+  border-radius:11px;color:var(--tx2);font-weight:600;font-size:14px;
+  cursor:pointer;touch-action:manipulation
+}
+.btn-cancel:active{background:var(--bg4)}
+
+/* ── DETAIL MODAL ── */
+#detail-modal{display:none;position:fixed;inset:0;z-index:998;background:rgba(0,0,0,.8);backdrop-filter:blur(8px);align-items:flex-end;justify-content:center}
+#detail-modal.on{display:flex}
+@media(min-width:600px){#detail-modal{align-items:center}}
+.dmodal{
+  background:var(--bg2);border:1px solid var(--bd2);
+  border-radius:20px 20px 0 0;width:100%;max-width:520px;
+  max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;
+  padding-bottom:calc(16px + env(safe-area-inset-bottom,0));
+  -webkit-overflow-scrolling:touch
+}
+@media(min-width:600px){.dmodal{border-radius:18px;padding-bottom:16px}}
+.dmodal-banner{height:130px;position:relative;background:linear-gradient(135deg,var(--bg3),var(--bg4));display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.dmodal-banner-icon{font-size:52px;opacity:.5}
+.dmodal-banner img{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+.dmodal-close{position:absolute;top:10px;right:10px;background:rgba(8,9,15,.7);border:none;color:var(--tx);cursor:pointer;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;touch-action:manipulation;backdrop-filter:blur(4px)}
+.dmodal-body{padding:18px 20px;display:flex;flex-direction:column;gap:14px}
+.dmodal-title{font-size:20px;font-weight:800;color:var(--tx);letter-spacing:-.4px}
+.dmodal-meta{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.dmodal-author{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--tx2)}
+.dmodal-date{font-size:12px;color:var(--tx3)}
+.dmodal-desc{font-size:14px;color:var(--tx2);line-height:1.7}
+.dmodal-tags{display:flex;flex-wrap:wrap;gap:6px}
+.dmodal-stats{display:flex;gap:16px;padding:12px 16px;background:var(--bg3);border-radius:10px;border:1px solid var(--bd)}
+.dstat{display:flex;flex-direction:column;align-items:center;gap:3px;flex:1}
+.dstat-num{font-size:18px;font-weight:800;color:var(--tx)}
+.dstat-lbl{font-size:10px;color:var(--tx3);font-weight:600;text-transform:uppercase}
+.dmodal-actions{display:flex;gap:10px}
+.dmodal-dl{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;padding:14px;background:linear-gradient(135deg,var(--green2),#0d8a68);border:none;border-radius:11px;color:#000;font-weight:800;font-size:15px;cursor:pointer;touch-action:manipulation;text-decoration:none}
+.dmodal-dl:active{opacity:.85}
+.dmodal-like{padding:14px 18px;background:var(--bg3);border:1px solid var(--bd);border-radius:11px;cursor:pointer;touch-action:manipulation;display:flex;align-items:center;gap:6px;font-size:14px;font-weight:700;color:var(--tx2)}
+.dmodal-like:active{background:rgba(240,88,106,.15)}
+.dmodal-like.liked{color:var(--red);border-color:var(--red);background:rgba(240,88,106,.08)}
+.dmodal-del{padding:14px 16px;background:rgba(240,88,106,.08);border:1px solid rgba(240,88,106,.3);border-radius:11px;cursor:pointer;touch-action:manipulation;display:flex;align-items:center;color:var(--red)}
+.dmodal-del:active{background:rgba(240,88,106,.2)}
+.install-box{background:var(--bg3);border:1px solid var(--bd);border-radius:10px;padding:14px}
+.install-title{font-size:11px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+.install-step{display:flex;align-items:flex-start;gap:10px;padding:6px 0;font-size:13px;color:var(--tx2);line-height:1.5}
+.install-num{width:20px;height:20px;border-radius:50%;background:var(--green3);border:1px solid rgba(31,212,164,.3);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:var(--green);flex-shrink:0}
+
+/* ── TOAST ── */
+.toast{position:fixed;bottom:calc(var(--bot)+16px);left:50%;transform:translateX(-50%) translateY(10px);background:var(--bg2);border:1px solid var(--bd2);padding:10px 18px;border-radius:11px;font-size:13px;font-weight:600;z-index:9999;opacity:0;transition:.25s;pointer-events:none;white-space:nowrap;max-width:90vw;text-align:center}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.toast.ok{border-color:var(--green);color:var(--green)}
+.toast.err{border-color:var(--red);color:var(--red)}
+
+@media(max-width:480px){
+  #search-wrap{display:none}
+  .hero-stats{gap:16px}
+  #filters{padding:12px 12px 10px}
+  #grid{grid-template-columns:1fr;padding:12px}
+}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <a href="/marketplace" class="logo">
+    <div class="logo-icon">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+    </div>
+    <div><div class="logo-text">ARES</div><div class="logo-sub">Marketplace</div></div>
+  </a>
+  <div id="search-wrap">
+    <svg id="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input id="search-input" type="search" placeholder="Buscar bots..." autocomplete="off" autocorrect="off" spellcheck="false">
+  </div>
+  <div class="top-sp"></div>
+  <button id="btn-publish" onclick="openPublish()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    Publicar
+  </button>
+</div>
+
+<div id="hero">
+  <div class="hero-badge"><svg width="10" height="10" viewBox="0 0 24 24" fill="var(--green)"><circle cx="12" cy="12" r="10"/></svg> Comunidade ARES</div>
+  <h1 class="hero-title">Bases de Bots de<br><span>WhatsApp</span></h1>
+  <p class="hero-sub">Explore, baixe e compartilhe bases prontas criadas pela comunidade. Instale com 1 clique no seu ARES HOST.</p>
+  <div class="hero-stats">
+    <div class="hstat"><div class="hstat-num" id="stat-total">—</div><div class="hstat-lbl">Bases</div></div>
+    <div class="hstat"><div class="hstat-num" id="stat-downloads">—</div><div class="hstat-lbl">Downloads</div></div>
+    <div class="hstat"><div class="hstat-num" id="stat-authors">—</div><div class="hstat-lbl">Autores</div></div>
+  </div>
+</div>
+
+<div id="filters">
+  <button class="cat-btn on" data-cat="all"><span class="cat-icon">🌐</span> Todos</button>
+  <button class="cat-btn" data-cat="atendimento"><span class="cat-icon">💬</span> Atendimento</button>
+  <button class="cat-btn" data-cat="vendas"><span class="cat-icon">💰</span> Vendas</button>
+  <button class="cat-btn" data-cat="delivery"><span class="cat-icon">🛵</span> Delivery</button>
+  <button class="cat-btn" data-cat="agendamento"><span class="cat-icon">📅</span> Agendamento</button>
+  <button class="cat-btn" data-cat="suporte"><span class="cat-icon">🛠</span> Suporte</button>
+  <button class="cat-btn" data-cat="financeiro"><span class="cat-icon">📊</span> Financeiro</button>
+  <button class="cat-btn" data-cat="geral"><span class="cat-icon">📦</span> Geral</button>
+</div>
+
+<div id="sort-bar">
+  <span class="sort-label">Ordenar:</span>
+  <button class="sort-btn on" data-sort="recente">Recente</button>
+  <button class="sort-btn" data-sort="popular">Popular</button>
+  <button class="sort-btn" data-sort="downloads">+ Baixados</button>
+  <span class="count-badge"><span id="count">0</span> bases</span>
+</div>
+
+<div id="loading" class="on">Carregando bases...</div>
+<div id="empty">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+  <h3>Nenhuma base encontrada</h3>
+  <p>Tente outro filtro ou seja o primeiro a publicar nesta categoria!</p>
+</div>
+<div id="grid"></div>
+
+<!-- Publish Modal -->
+<div id="publish-modal">
+  <div class="pmodal">
+    <div class="pmodal-handle"></div>
+    <div class="pmodal-header">
+      <span class="pmodal-title">Publicar Base</span>
+      <button class="pmodal-close" onclick="closePublish()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="pmodal-body">
+      <div class="field">
+        <label>Nome do Bot *</label>
+        <input id="p-name" type="text" placeholder="Ex: Bot de Vendas Pro" maxlength="60" autocorrect="off">
+      </div>
+      <div class="field">
+        <label>Descrição *</label>
+        <textarea id="p-desc" placeholder="Descreva o que seu bot faz, funcionalidades principais..." maxlength="400"></textarea>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Categoria *</label>
+          <select id="p-cat">
+            <option value="geral">📦 Geral</option>
+            <option value="atendimento">💬 Atendimento</option>
+            <option value="vendas">💰 Vendas</option>
+            <option value="delivery">🛵 Delivery</option>
+            <option value="agendamento">📅 Agendamento</option>
+            <option value="suporte">🛠 Suporte</option>
+            <option value="financeiro">📊 Financeiro</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Seu Nome</label>
+          <input id="p-author" type="text" placeholder="Seu apelido" maxlength="30" autocorrect="off" autocapitalize="off">
+        </div>
+      </div>
+      <div class="field">
+        <label>Link do ZIP *</label>
+        <input id="p-zip" type="url" placeholder="https://..." autocorrect="off" autocapitalize="off">
+        <span class="field-hint">Link público direto para o arquivo .zip com o código do bot (GitHub, Drive, etc.)</span>
+      </div>
+      <div class="field">
+        <label>Tags (separadas por vírgula)</label>
+        <input id="p-tags" type="text" placeholder="nodejs, menu, api, pagamento..." maxlength="100" autocorrect="off">
+      </div>
+    </div>
+    <div class="pmodal-footer">
+      <button class="btn-cancel" onclick="closePublish()">Cancelar</button>
+      <button class="btn-submit" onclick="submitPublish()">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline;vertical-align:middle;margin-right:5px"><polyline points="20 6 9 17 4 12"/></svg>
+        Publicar Base
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Detail Modal -->
+<div id="detail-modal">
+  <div class="dmodal">
+    <div class="dmodal-banner" id="dm-banner">
+      <div class="dmodal-banner-icon" id="dm-icon">📦</div>
+      <button class="dmodal-close" onclick="closeDetail()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="dmodal-body">
+      <div>
+        <div class="dmodal-title" id="dm-title"></div>
+        <div class="dmodal-meta" style="margin-top:8px">
+          <div class="dmodal-author">
+            <div class="card-avatar" id="dm-avatar"></div>
+            <span id="dm-author"></span>
+          </div>
+          <span class="dmodal-date" id="dm-date"></span>
+        </div>
+      </div>
+      <div class="dmodal-stats">
+        <div class="dstat"><div class="dstat-num" id="dm-likes">0</div><div class="dstat-lbl">Curtidas</div></div>
+        <div class="dstat"><div class="dstat-num" id="dm-downloads">0</div><div class="dstat-lbl">Downloads</div></div>
+        <div class="dstat"><div class="dstat-num" id="dm-age">—</div><div class="dstat-lbl">Dias</div></div>
+      </div>
+      <div class="dmodal-desc" id="dm-desc"></div>
+      <div class="dmodal-tags" id="dm-tags"></div>
+      <div class="dmodal-actions" id="dm-actions">
+        <a class="dmodal-dl" id="dm-dl" href="#" target="_blank" rel="noopener" onclick="trackDownload()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Baixar ZIP
+        </a>
+        <button class="dmodal-like" id="dm-like-btn" onclick="toggleLike()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          <span id="dm-like-count">0</span>
+        </button>
+        <button class="dmodal-del" id="dm-del-btn" style="display:none" onclick="deleteBase()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+        </button>
+      </div>
+      <div class="install-box">
+        <div class="install-title">Como instalar no ARES HOST</div>
+        <div class="install-step"><div class="install-num">1</div><span>Copie o link do ZIP acima</span></div>
+        <div class="install-step"><div class="install-num">2</div><span>Abra o ARES HOST no Telegram e vá em <b>Novo Bot → Enviar link</b></span></div>
+        <div class="install-step"><div class="install-num">3</div><span>Cole o link e dê um nome ao bot</span></div>
+        <div class="install-step"><div class="install-num">4</div><span>O ARES instala automaticamente as dependências e inicia!</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var TOK = ${T};
+var allBases = [];
+var curCat = 'all';
+var curSort = 'recente';
+var searchQ = '';
+var curDetail = null;
+var myChatId = null;
+
+function toast(msg, type) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast on ' + (type || '');
+  clearTimeout(el._t);
+  el._t = setTimeout(function(){ el.className = 'toast'; }, 3000);
+}
+
+function catEmoji(cat) {
+  var m = {atendimento:'💬',vendas:'💰',delivery:'🛵',agendamento:'📅',suporte:'🛠',financeiro:'📊',geral:'📦'};
+  return m[cat] || '📦';
+}
+
+function fmtDate(ts) {
+  var d = new Date(ts);
+  return d.toLocaleDateString('pt-BR', {day:'2-digit',month:'short',year:'numeric'});
+}
+
+function fmtNum(n) {
+  if (n >= 1000) return (n/1000).toFixed(1) + 'k';
+  return String(n);
+}
+
+function daysAgo(ts) {
+  return Math.floor((Date.now() - ts) / 86400000);
+}
+
+function avatarLetter(name) {
+  return (name || 'A').charAt(0).toUpperCase();
+}
+
+function buildCard(b) {
+  var liked = Array.isArray(b.likes) && myChatId && b.likes.includes(myChatId);
+  var html = '<div class="card" onclick="openDetail(\'' + b.id + '\')">';
+  html += '<div class="card-banner">';
+  html += '<div class="card-banner-icon">' + catEmoji(b.category) + '</div>';
+  html += '<div class="card-cat-badge">' + (b.category || 'geral') + '</div>';
+  html += '</div>';
+  html += '<div class="card-body">';
+  html += '<div class="card-title">' + esc(b.name) + '</div>';
+  html += '<div class="card-desc">' + esc(b.description) + '</div>';
+  if (b.tags && b.tags.length) {
+    html += '<div class="card-tags">' + b.tags.map(function(t){ return '<span class="tag">' + esc(t) + '</span>'; }).join('') + '</div>';
+  }
+  html += '</div>';
+  html += '<div class="card-footer">';
+  html += '<div class="card-author"><div class="card-avatar">' + esc(avatarLetter(b.author)) + '</div><span class="card-author-name">' + esc(b.author || 'Anônimo') + '</span></div>';
+  html += '<div class="card-stats">';
+  html += '<span class="cstat"><svg width="12" height="12" viewBox="0 0 24 24" fill="' + (liked ? 'var(--red)' : 'none') + '" stroke="' + (liked ? 'var(--red)' : 'currentColor') + '" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>' + fmtNum((b.likes||[]).length) + '</span>';
+  html += '<span class="cstat"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' + fmtNum(b.downloads||0) + '</span>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function getFiltered() {
+  var list = allBases.slice();
+  if (curCat !== 'all') list = list.filter(function(b){ return b.category === curCat; });
+  if (searchQ) {
+    var q = searchQ.toLowerCase();
+    list = list.filter(function(b){
+      return (b.name||'').toLowerCase().includes(q) ||
+             (b.description||'').toLowerCase().includes(q) ||
+             (b.author||'').toLowerCase().includes(q) ||
+             (b.tags||[]).some(function(t){ return t.toLowerCase().includes(q); });
+    });
+  }
+  if (curSort === 'popular') list.sort(function(a,b){ return (b.likes||[]).length - (a.likes||[]).length; });
+  else if (curSort === 'downloads') list.sort(function(a,b){ return (b.downloads||0) - (a.downloads||0); });
+  else list.sort(function(a,b){ return (b.createdAt||0) - (a.createdAt||0); });
+  return list;
+}
+
+function render() {
+  var list = getFiltered();
+  document.getElementById('count').textContent = list.length;
+  var grid = document.getElementById('grid');
+  var empty = document.getElementById('empty');
+  if (!list.length) {
+    grid.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  grid.innerHTML = list.map(buildCard).join('');
+}
+
+function updateStats() {
+  var total = allBases.length;
+  var downloads = allBases.reduce(function(s,b){ return s + (b.downloads||0); }, 0);
+  var authors = new Set(allBases.map(function(b){ return b.authorId; })).size;
+  document.getElementById('stat-total').textContent = fmtNum(total);
+  document.getElementById('stat-downloads').textContent = fmtNum(downloads);
+  document.getElementById('stat-authors').textContent = fmtNum(authors);
+}
+
+async function loadBases() {
+  try {
+    var r = await fetch('/marketplace-api/list');
+    allBases = await r.json();
+    document.getElementById('loading').classList.remove('on');
+    updateStats();
+    render();
+  } catch(e) {
+    document.getElementById('loading').textContent = 'Erro ao carregar. Tente novamente.';
+  }
+}
+
+function openPublish() {
+  if (!TOK) { toast('Acesse pelo link do Telegram para publicar', 'err'); return; }
+  document.getElementById('publish-modal').classList.add('on');
+}
+function closePublish() { document.getElementById('publish-modal').classList.remove('on'); }
+
+async function submitPublish() {
+  var name = document.getElementById('p-name').value.trim();
+  var desc = document.getElementById('p-desc').value.trim();
+  var zip = document.getElementById('p-zip').value.trim();
+  var cat = document.getElementById('p-cat').value;
+  var author = document.getElementById('p-author').value.trim() || 'Anônimo';
+  var tagsRaw = document.getElementById('p-tags').value.trim();
+  var tags = tagsRaw ? tagsRaw.split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,5) : [];
+
+  if (!name || !desc || !zip) { toast('Preencha nome, descrição e link do ZIP', 'err'); return; }
+  if (!zip.startsWith('http')) { toast('Link do ZIP inválido', 'err'); return; }
+
+  var btn = document.querySelector('.btn-submit');
+  btn.textContent = 'Publicando...';
+  btn.disabled = true;
+
+  try {
+    var r = await fetch('/marketplace-api/publish?s=' + TOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description: desc, category: cat, tags, zipUrl: zip, author })
+    });
+    var data = await r.json();
+    if (data.ok) {
+      toast('Base publicada com sucesso!', 'ok');
+      closePublish();
+      document.getElementById('p-name').value = '';
+      document.getElementById('p-desc').value = '';
+      document.getElementById('p-zip').value = '';
+      document.getElementById('p-tags').value = '';
+      await loadBases();
+    } else {
+      toast(data.error || 'Erro ao publicar', 'err');
+    }
+  } catch(e) { toast('Erro de conexão', 'err'); }
+  btn.textContent = 'Publicar Base';
+  btn.disabled = false;
+}
+
+function openDetail(id) {
+  var b = allBases.find(function(x){ return x.id === id; });
+  if (!b) return;
+  curDetail = b;
+
+  var liked = Array.isArray(b.likes) && myChatId && b.likes.includes(myChatId);
+
+  document.getElementById('dm-title').textContent = b.name;
+  document.getElementById('dm-desc').textContent = b.description;
+  document.getElementById('dm-author').textContent = b.author || 'Anônimo';
+  document.getElementById('dm-avatar').textContent = avatarLetter(b.author);
+  document.getElementById('dm-date').textContent = fmtDate(b.createdAt);
+  document.getElementById('dm-likes').textContent = (b.likes||[]).length;
+  document.getElementById('dm-downloads').textContent = b.downloads || 0;
+  document.getElementById('dm-age').textContent = daysAgo(b.createdAt);
+  document.getElementById('dm-icon').textContent = catEmoji(b.category);
+  document.getElementById('dm-dl').href = b.zipUrl;
+
+  var likeBtn = document.getElementById('dm-like-btn');
+  likeBtn.className = 'dmodal-like' + (liked ? ' liked' : '');
+  document.getElementById('dm-like-count').textContent = (b.likes||[]).length;
+
+  var delBtn = document.getElementById('dm-del-btn');
+  delBtn.style.display = (myChatId && (b.authorId === myChatId)) ? 'flex' : 'none';
+
+  var tagsEl = document.getElementById('dm-tags');
+  tagsEl.innerHTML = (b.tags||[]).map(function(t){ return '<span class="tag">' + esc(t) + '</span>'; }).join('');
+
+  document.getElementById('detail-modal').classList.add('on');
+}
+
+function closeDetail() {
+  document.getElementById('detail-modal').classList.remove('on');
+  curDetail = null;
+}
+
+function trackDownload() {
+  if (!curDetail) return;
+  fetch('/marketplace-api/download/' + curDetail.id, { method: 'POST' }).then(function(){ curDetail.downloads = (curDetail.downloads||0) + 1; render(); });
+}
+
+async function toggleLike() {
+  if (!TOK) { toast('Acesse pelo Telegram para curtir', 'err'); return; }
+  if (!curDetail) return;
+  try {
+    var r = await fetch('/marketplace-api/like/' + curDetail.id + '?s=' + TOK, { method: 'POST' });
+    var data = await r.json();
+    if (data.ok) {
+      curDetail.likes = curDetail.likes || [];
+      var idx = curDetail.likes.indexOf(myChatId);
+      if (idx > -1) curDetail.likes.splice(idx, 1);
+      else curDetail.likes.push(myChatId || 'x');
+      document.getElementById('dm-likes').textContent = data.likes;
+      document.getElementById('dm-like-count').textContent = data.likes;
+      var likeBtn = document.getElementById('dm-like-btn');
+      likeBtn.className = 'dmodal-like' + (data.liked ? ' liked' : '');
+      var b = allBases.find(function(x){ return x.id === curDetail.id; });
+      if (b) b.likes = curDetail.likes;
+      render();
+    }
+  } catch(e) { toast('Erro', 'err'); }
+}
+
+async function deleteBase() {
+  if (!curDetail || !confirm('Excluir esta base?')) return;
+  try {
+    var r = await fetch('/marketplace-api/delete/' + curDetail.id + '?s=' + TOK, { method: 'DELETE' });
+    var data = await r.json();
+    if (data.ok) {
+      toast('Base removida', 'ok');
+      closeDetail();
+      allBases = allBases.filter(function(b){ return b.id !== curDetail.id; });
+      curDetail = null;
+      updateStats(); render();
+    } else toast(data.error || 'Erro', 'err');
+  } catch(e) { toast('Erro', 'err'); }
+}
+
+document.querySelectorAll('.cat-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.cat-btn').forEach(function(b){ b.classList.remove('on'); });
+    btn.classList.add('on');
+    curCat = btn.dataset.cat;
+    render();
+  });
+});
+
+document.querySelectorAll('.sort-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.sort-btn').forEach(function(b){ b.classList.remove('on'); });
+    btn.classList.add('on');
+    curSort = btn.dataset.sort;
+    render();
+  });
+});
+
+var sT;
+document.getElementById('search-input').addEventListener('input', function() {
+  clearTimeout(sT);
+  var q = this.value.trim();
+  sT = setTimeout(function(){ searchQ = q; render(); }, 250);
+});
+
+document.getElementById('publish-modal').addEventListener('click', function(e){ if (e.target === this) closePublish(); });
+document.getElementById('detail-modal').addEventListener('click', function(e){ if (e.target === this) closeDetail(); });
+document.addEventListener('keydown', function(e){ if (e.key === 'Escape') { closePublish(); closeDetail(); } });
+
+loadBases();
+</script>
+</body>
+</html>`
+}
+
+function getDiskPercent() {
+
+try {
+  const df = execSync("df / | tail -1").toString()
+  const parts = df.split(/\s+/)
+  return parseInt(parts[4].replace("%", ""))
   } catch { return 0 }
 }
 
