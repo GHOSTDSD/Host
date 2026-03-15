@@ -1507,16 +1507,12 @@ app.get("/files/:botId", authBot, (req, res) => {
 })
 
 function buildEditorHtml(botId, sessionToken, API) {
-  const B = JSON.stringify(botId)
-  const T = JSON.stringify(sessionToken)
-  const A = JSON.stringify(API)
-
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ARES \u2014 ${botId}</title>
+<title>ARES - ${botId}</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1682,9 +1678,9 @@ var socket = io();
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
 <script>
-var BOT_ID = ${JSON.stringify(botId)};
-var TOK = ${JSON.stringify(sessionToken)};
-var API = ${JSON.stringify(API)};
+var BOT_ID = "${botId}";
+var TOK = "${sessionToken}";
+var API = "${API}";
 var ed = null;
 var curFile = null;
 var openDirs = new Set();
@@ -1718,26 +1714,42 @@ function closeSide() {
 }
 
 function showPanel(n) {
-  ['files', 'packages', 'search'].forEach(function(p) {
+  var panels = ['files', 'packages', 'search'];
+  for(var i = 0; i < panels.length; i++) {
+    var p = panels[i];
     document.getElementById('panel-' + p).classList.toggle('on', p === n);
     document.getElementById('stab-' + p).classList.toggle('on', p === n);
-  });
+  }
   if (n === 'packages') loadPkgs();
 }
 
 function xExt(n) {
-  return n.includes('.') ? n.split('.').pop().toLowerCase() : '';
+  if (!n || !n.includes('.')) return '';
+  return n.split('.').pop().toLowerCase();
 }
 
 function getLang(n) {
-  var m = {
-    js: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
-    json: 'json', py: 'python', md: 'markdown', sh: 'shell', bash: 'shell', html: 'html', htm: 'html',
-    css: 'css', scss: 'scss', yml: 'yaml', yaml: 'yaml', txt: 'plaintext', xml: 'xml', sql: 'sql',
-    php: 'php', rb: 'ruby', go: 'go', rs: 'rust', cpp: 'cpp', c: 'c', h: 'c', java: 'java',
-    dockerfile: 'dockerfile', env: 'plaintext', gitignore: 'plaintext'
-  };
-  return m[xExt(n)] || 'plaintext';
+  var ext = xExt(n);
+  if (ext === 'js' || ext === 'mjs' || ext === 'cjs' || ext === 'jsx') return 'javascript';
+  if (ext === 'ts' || ext === 'tsx') return 'typescript';
+  if (ext === 'json') return 'json';
+  if (ext === 'py') return 'python';
+  if (ext === 'md') return 'markdown';
+  if (ext === 'sh' || ext === 'bash') return 'shell';
+  if (ext === 'html' || ext === 'htm') return 'html';
+  if (ext === 'css' || ext === 'scss') return 'css';
+  if (ext === 'yml' || ext === 'yaml') return 'yaml';
+  if (ext === 'txt' || ext === 'env' || ext === 'gitignore') return 'plaintext';
+  if (ext === 'xml') return 'xml';
+  if (ext === 'sql') return 'sql';
+  if (ext === 'php') return 'php';
+  if (ext === 'rb') return 'ruby';
+  if (ext === 'go') return 'go';
+  if (ext === 'rs') return 'rust';
+  if (ext === 'cpp' || ext === 'c' || ext === 'h') return 'cpp';
+  if (ext === 'java') return 'java';
+  if (ext === 'dockerfile') return 'dockerfile';
+  return 'plaintext';
 }
 
 function fmtSz(b) {
@@ -1760,27 +1772,27 @@ function toast(m, t) {
 
 function fileIcon(n) {
   var e = xExt(n);
-  var icons = {
-    js: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#f7df1e"/><text x="3" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#000">JS</text></svg>',
-    ts: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#3178c6"/><text x="2" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#fff">TS</text></svg>',
-    jsx: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#61dafb"/><text x="2" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#000">JSX</text></svg>',
-    tsx: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#3178c6"/><text x="2" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">TSX</text></svg>',
-    json: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
-    py: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#306998"/><text x="2" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#ffd43b">PY</text></svg>',
-    html: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#e44d26" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
-    css: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#2965f1"/><text x="1" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">CSS</text></svg>',
-    md: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
-    env: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22d3a5" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
-    sh: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
-    yml: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
-  };
-  return icons[e] || '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+  if (e === 'js') return '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#f7df1e"/><text x="3" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#000">JS</text></svg>';
+  if (e === 'ts') return '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#3178c6"/><text x="2" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#fff">TS</text></svg>';
+  if (e === 'jsx') return '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#61dafb"/><text x="2" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#000">JSX</text></svg>';
+  if (e === 'tsx') return '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#3178c6"/><text x="2" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">TSX</text></svg>';
+  if (e === 'json') return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+  if (e === 'py') return '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#306998"/><text x="2" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#ffd43b">PY</text></svg>';
+  if (e === 'html') return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#e44d26" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
+  if (e === 'css') return '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#2965f1"/><text x="1" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">CSS</text></svg>';
+  if (e === 'md') return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+  if (e === 'env') return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22d3a5" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+  if (e === 'sh') return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
+  if (e === 'yml') return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+  return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
 }
 
 function folderIcon(o) {
-  return o
-    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="3" y1="10" x2="21" y2="10"/></svg>'
-    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+  if (o) {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="3" y1="10" x2="21" y2="10"/></svg>';
+  } else {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+  }
 }
 
 function buildRows(items, depth) {
@@ -1823,7 +1835,11 @@ function renderTree() {
 }
 
 function toggleDir(p) {
-  openDirs.has(p) ? openDirs.delete(p) : openDirs.add(p);
+  if (openDirs.has(p)) {
+    openDirs.delete(p);
+  } else {
+    openDirs.add(p);
+  }
   renderTree();
 }
 
@@ -1833,7 +1849,8 @@ async function loadTree() {
   try {
     var r = await fetch(au('/tree'));
     if (!r.ok) {
-      el.innerHTML = '<div style="padding:10px;font-size:11px;color:var(--red)">HTTP ' + r.status + ': ' + hEsc((await r.text()).substring(0, 100)) + '</div>';
+      var errText = await r.text();
+      el.innerHTML = '<div style="padding:10px;font-size:11px;color:var(--red)">HTTP ' + r.status + ': ' + hEsc(errText.substring(0, 100)) + '</div>';
       return;
     }
     treeData = await r.json();
@@ -1845,12 +1862,15 @@ async function loadTree() {
 
 function renderTabs() {
   var el = document.getElementById('tabs-bar');
-  el.innerHTML = tabs.map(function(t) {
+  var html = '';
+  for (var i = 0; i < tabs.length; i++) {
+    var t = tabs[i];
     var name = t.split('/').pop();
     var on = t === curFile ? ' on' : '';
     var right = dirty[t] ? '<span class="tdot"></span>' : '<span class="tx" data-tc="' + hEsc(t) + '">✕</span>';
-    return '<div class="tab' + on + '" data-to="' + hEsc(t) + '" title="' + hEsc(t) + '">' + fileIcon(name) + hEsc(name) + right + '</div>';
-  }).join('');
+    html += '<div class="tab' + on + '" data-to="' + hEsc(t) + '" title="' + hEsc(t) + '">' + fileIcon(name) + hEsc(name) + right + '</div>';
+  }
+  el.innerHTML = html;
 }
 
 function switchTo(p) {
@@ -1859,14 +1879,22 @@ function switchTo(p) {
 
 function closeTab(p) {
   if (dirty[p] && !confirm('Fechar sem salvar?')) return;
-  tabs = tabs.filter(function(x) { return x !== p; });
+  var newTabs = [];
+  for (var i = 0; i < tabs.length; i++) {
+    if (tabs[i] !== p) newTabs.push(tabs[i]);
+  }
+  tabs = newTabs;
   if (models[p]) {
     models[p].dispose();
     delete models[p];
   }
   delete dirty[p];
   if (curFile === p) {
-    tabs.length ? openFile(tabs[tabs.length - 1]) : clearEditor();
+    if (tabs.length) {
+      openFile(tabs[tabs.length - 1]);
+    } else {
+      clearEditor();
+    }
   }
   renderTabs();
 }
@@ -1878,9 +1906,9 @@ function clearEditor() {
   document.getElementById('welcome').style.display = 'flex';
   document.getElementById('infobar').style.display = 'none';
   document.getElementById('unsaved').style.display = 'none';
-  ['btn-save', 'btn-del', 'btn-ren'].forEach(function(id) {
-    document.getElementById(id).style.display = 'none';
-  });
+  document.getElementById('btn-save').style.display = 'none';
+  document.getElementById('btn-del').style.display = 'none';
+  document.getElementById('btn-ren').style.display = 'none';
   renderTree();
 }
 
@@ -1919,9 +1947,9 @@ async function openFile(p) {
   document.getElementById('welcome').style.display = 'none';
   document.getElementById('infobar').style.display = 'flex';
   updateInfo();
-  ['btn-save', 'btn-del', 'btn-ren'].forEach(function(id) {
-    document.getElementById(id).style.display = 'inline-flex';
-  });
+  document.getElementById('btn-save').style.display = 'inline-flex';
+  document.getElementById('btn-del').style.display = 'inline-flex';
+  document.getElementById('btn-ren').style.display = 'inline-flex';
   document.getElementById('unsaved').style.display = dirty[p] ? 'inline' : 'none';
   renderTree();
   renderTabs();
@@ -1955,7 +1983,8 @@ async function doSave() {
       setStatus('Salvo', 'ok');
       setTimeout(function() { setStatus('Pronto', 'ok'); }, 2000);
     } else {
-      toast('Erro ao salvar: ' + await r.text(), 'err');
+      var errText = await r.text();
+      toast('Erro ao salvar: ' + errText, 'err');
       setStatus('Erro', 'err');
     }
   } catch (e) {
@@ -1976,7 +2005,8 @@ async function doDel() {
     closeTab(curFile);
     loadTree();
   } else {
-    toast('Erro: ' + await r.text(), 'err');
+    var errText = await r.text();
+    toast('Erro: ' + errText, 'err');
   }
 }
 
@@ -1991,7 +2021,8 @@ async function delFolder(p) {
     toast('Pasta excluida', 'ok');
     loadTree();
   } else {
-    toast('Erro: ' + await r.text(), 'err');
+    var errText = await r.text();
+    toast('Erro: ' + errText, 'err');
   }
 }
 
@@ -2032,7 +2063,8 @@ async function renFile(from, to) {
     if (curFile === to) openFile(to);
     toast('Renomeado', 'ok');
   } else {
-    toast('Erro: ' + await r.text(), 'err');
+    var errText = await r.text();
+    toast('Erro: ' + errText, 'err');
   }
 }
 
@@ -2044,10 +2076,11 @@ async function dupFile(p) {
   var np = parts.slice(0, -1).concat(nn).join('/');
   var rr = await fetch(au('/read', 'path=' + encodeURIComponent(p)));
   if (!rr.ok) return;
+  var content = await rr.text();
   var rw = await fetch(au('/write'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: np, content: await rr.text() })
+    body: JSON.stringify({ path: np, content: content })
   });
   if (rw.ok) {
     await loadTree();
@@ -2172,7 +2205,7 @@ async function uploadFiles(files) {
     prog.textContent = 'Enviando ' + f.name + '...';
     var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
     var fp = folder ? folder + '/' + f.name : f.name;
-    var content = await f.text().catch(function() { return null; });
+    var content = await f.text();
     if (content === null) {
       prog.textContent = 'Erro: ' + f.name + ' (binario)';
       continue;
@@ -2198,17 +2231,35 @@ async function loadPkgs() {
       return;
     }
     var pkg = await r.json();
-    var deps = Object.assign({}, pkg.dependencies || {}, pkg.devDependencies || {});
-    var devs = new Set(Object.keys(pkg.devDependencies || {}));
+    var deps = {};
+    if (pkg.dependencies) {
+      for (var key in pkg.dependencies) {
+        deps[key] = pkg.dependencies[key];
+      }
+    }
+    if (pkg.devDependencies) {
+      for (var key in pkg.devDependencies) {
+        deps[key] = pkg.devDependencies[key];
+      }
+    }
+    var devs = new Set();
+    if (pkg.devDependencies) {
+      for (var key in pkg.devDependencies) {
+        devs.add(key);
+      }
+    }
     var keys = Object.keys(deps);
     if (!keys.length) {
       el.innerHTML = '<div class="pe">Sem dependencias</div>';
       return;
     }
-    el.innerHTML = keys.map(function(name) {
+    var html = '';
+    for (var i = 0; i < keys.length; i++) {
+      var name = keys[i];
       var db = devs.has(name) ? '<span style="color:var(--purple);font-size:9px;margin-left:4px">dev</span>' : '';
-      return '<div class="pr"><span class="pn">' + hEsc(name) + db + '</span><span class="pv">' + hEsc(deps[name]) + '</span><button class="pd" data-del="' + hEsc(name) + '" title="Desinstalar">✕</button></div>';
-    }).join('');
+      html += '<div class="pr"><span class="pn">' + hEsc(name) + db + '</span><span class="pv">' + hEsc(deps[name]) + '</span><button class="pd" data-del="' + hEsc(name) + '" title="Desinstalar">✕</button></div>';
+    }
+    el.innerHTML = html;
   } catch (e) {
     el.innerHTML = '<div class="pe">Erro: ' + hEsc(e.message) + '</div>';
   }
@@ -2278,9 +2329,12 @@ async function doSearch(q) {
       el.innerHTML = '<div class="pe">Nenhum resultado</div>';
       return;
     }
-    el.innerHTML = res.slice(0, 50).map(function(it) {
-      return '<div class="sr-item" data-sr="' + hEsc(it.file) + '"><div class="sr-f">' + hEsc(it.file) + ':' + it.line + '</div><div class="sr-l">' + hEsc(it.preview) + '</div></div>';
-    }).join('');
+    var html = '';
+    for (var i = 0; i < Math.min(res.length, 50); i++) {
+      var it = res[i];
+      html += '<div class="sr-item" data-sr="' + hEsc(it.file) + '"><div class="sr-f">' + hEsc(it.file) + ':' + it.line + '</div><div class="sr-l">' + hEsc(it.preview) + '</div></div>';
+    }
+    el.innerHTML = html;
   } catch (e) {
     el.innerHTML = '<div class="pe">Erro: ' + hEsc(e.message) + '</div>';
   }
@@ -2431,7 +2485,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
   document.getElementById('find-in').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') {
-      e.shiftKey ? findPrev() : findNext();
+      if (e.shiftKey) {
+        findPrev();
+      } else {
+        findNext();
+      }
     }
     if (e.key === 'Escape') closeFindBar();
   });
