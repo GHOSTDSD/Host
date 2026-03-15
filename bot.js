@@ -1419,7 +1419,7 @@ function buildEditorHtml(botId, sessionToken, API) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ARES \u2014 ${botId}</title>
+<title>ARES — ${botId}</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1970,36 +1970,66 @@ function dlFile(p) {
 function doNewFile() {
   var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
   openModal('Novo arquivo', 'nome.js', async function(fn) {
+    if (!fn) {
+      toast('Nome inválido', 'err');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_\\-\\.]+$/.test(fn)) {
+      toast('Use apenas letras, números, _, - e .', 'err');
+      return;
+    }
     var fp = folder ? folder + '/' + fn : fn;
-    var r = await fetch(au('/write'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fp, content: getTpl(fn) })
-    });
-    if (r.ok) {
-      await loadTree();
-      openFile(fp);
-      toast('Criado', 'ok');
-    } else {
-      toast('Erro: ' + await r.text(), 'err');
+    try {
+      var r = await fetch(au('/write'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: fp, content: getTpl(fn) })
+      });
+      if (r.ok) {
+        await loadTree();
+        toast('Arquivo criado', 'ok');
+        setTimeout(function() { openFile(fp); }, 100);
+      } else {
+        var errText = await r.text();
+        toast('Erro: ' + errText, 'err');
+      }
+    } catch (e) {
+      toast('Erro: ' + e.message, 'err');
     }
   });
 }
 
 function doNewFileIn(folder) {
+  if (!folder) {
+    toast('Pasta inválida', 'err');
+    return;
+  }
   openModal('Novo arquivo em /' + folder, 'nome.js', async function(fn) {
+    if (!fn) {
+      toast('Nome inválido', 'err');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_\\-\\.]+$/.test(fn)) {
+      toast('Use apenas letras, números, _, - e .', 'err');
+      return;
+    }
     var fp = folder + '/' + fn;
-    var r = await fetch(au('/write'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fp, content: getTpl(fn) })
-    });
-    if (r.ok) {
-      await loadTree();
-      openFile(fp);
-      toast('Criado', 'ok');
-    } else {
-      toast('Erro: ' + await r.text(), 'err');
+    try {
+      var r = await fetch(au('/write'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: fp, content: getTpl(fn) })
+      });
+      if (r.ok) {
+        await loadTree();
+        toast('Arquivo criado', 'ok');
+        setTimeout(function() { openFile(fp); }, 100);
+      } else {
+        var errText = await r.text();
+        toast('Erro: ' + errText, 'err');
+      }
+    } catch (e) {
+      toast('Erro: ' + e.message, 'err');
     }
   });
 }
@@ -2007,32 +2037,45 @@ function doNewFileIn(folder) {
 function doNewFolder() {
   var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
   openModal('Nova pasta', 'minha-pasta', async function(fn) {
+    if (!fn) {
+      toast('Nome inválido', 'err');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_\\-]+$/.test(fn)) {
+      toast('Use apenas letras, números, _ e -', 'err');
+      return;
+    }
     var fp = folder ? folder + '/' + fn : fn;
-    var r = await fetch(au('/mkdir'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fp })
-    });
-    if (r.ok) {
-      await loadTree();
-      openDirs.add(fp);
-      renderTree();
-      toast('Pasta criada', 'ok');
-    } else {
-      toast('Erro: ' + await r.text(), 'err');
+    try {
+      var r = await fetch(au('/mkdir'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: fp })
+      });
+      if (r.ok) {
+        await loadTree();
+        openDirs.add(fp);
+        renderTree();
+        toast('Pasta criada', 'ok');
+      } else {
+        var errText = await r.text();
+        toast('Erro: ' + errText, 'err');
+      }
+    } catch (e) {
+      toast('Erro: ' + e.message, 'err');
     }
   });
 }
 
 function getTpl(n) {
   var e = xExt(n);
-  if (e === 'js') return '// ' + n + '\\n\\n';
-  if (e === 'json') return '{\\n  \\n}\\n';
-  if (e === 'html') return '<!DOCTYPE html>\\n<html>\\n<head>\\n  <meta charset="UTF-8">\\n  <title></title>\\n</head>\\n<body>\\n  \\n</body>\\n</html>';
-  if (e === 'md') return '# ' + n.replace('.md', '') + '\\n\\n';
-  if (e === 'py') return '# ' + n + '\\n\\n';
-  if (e === 'css') return '/* ' + n + ' */\\n\\n';
-  if (e === 'env') return '# Environment variables\\n\\n';
+  if (e === 'js') return '// ' + n + '\n\n';
+  if (e === 'json') return '{\n  \n}\n';
+  if (e === 'html') return '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <title></title>\n</head>\n<body>\n  \n</body>\n</html>';
+  if (e === 'md') return '# ' + n.replace('.md', '') + '\n\n';
+  if (e === 'py') return '# ' + n + '\n\n';
+  if (e === 'css') return '/* ' + n + ' */\n\n';
+  if (e === 'env') return '# Environment variables\n\n';
   return '';
 }
 
@@ -2113,7 +2156,7 @@ async function runNpm(args, label) {
   var term = document.getElementById('pkg-term');
   var out = document.getElementById('pkg-out');
   term.classList.add('on');
-  out.textContent = label + '\\n';
+  out.textContent = label + '\n';
   setStatus(label, 'loading');
   try {
     var r = await fetch(au('/npm-run'), {
@@ -2122,7 +2165,7 @@ async function runNpm(args, label) {
       body: JSON.stringify({ args: args })
     });
     if (!r.ok) {
-      out.textContent += '\\nErro: ' + await r.text();
+      out.textContent += '\nErro: ' + await r.text();
       setStatus('Erro', 'err');
       return;
     }
@@ -2134,12 +2177,12 @@ async function runNpm(args, label) {
       out.textContent += dec.decode(x.value);
       term.scrollTop = term.scrollHeight;
     }
-    out.textContent += '\\nConcluido!';
+    out.textContent += '\nConcluido!';
     term.scrollTop = term.scrollHeight;
     setStatus('Pronto', 'ok');
     toast(label, 'ok');
   } catch (e) {
-    out.textContent += '\\nErro: ' + e.message;
+    out.textContent += '\nErro: ' + e.message;
     setStatus('Erro', 'err');
     toast('Erro: ' + e.message, 'err');
   }
@@ -2205,7 +2248,10 @@ function closeModal() {
 
 function confirmModal() {
   var v = document.getElementById('modal-in').value.trim();
-  if (!v) return;
+  if (!v) {
+    toast('Nome não pode estar vazio', 'err');
+    return;
+  }
   closeModal();
   if (modalCb) modalCb(v);
 }
