@@ -35,44 +35,22 @@ app.use(express.json({ limit: "50mb" }))
 app.use(express.urlencoded({ extended: true, limit: "50mb" }))
 app.use(express.static("public"))
 
-const BUCKETS = [
-  {
-    bucketName: "assembled-pannier-fd6o1qb",
-    endpoint: "https://t3.storageapi.dev",
-    region: "auto",
-    credentials: {
-      accessKeyId: "tid_fJEjO_LbZVrFtJEwWHkcSqT_IxIwYsahKIyqSlegejHUTbNNHB",
-      secretAccessKey: "tsec_IjNC_oqgdq7-F9o067zq0C+h2INzkP8Ns-WbaU3vnu+gfUM49IbVMJHgaAeSG3GHNBml-L",
-    }
-  },
-  {
-    bucketName: "arranged-folder-su125mhv0",
-    endpoint: "https://t3.storageapi.dev",
-    region: "auto",
-    credentials: {
-      accessKeyId: "tid_dEBpaNfQwNQwXKIMrDhMkPyYMIFNdjyiwUczkkEsVWHuenafsu",
-      secretAccessKey: "tsec_BzBVUGlcoPVfCI3_KqmRYQJR071fx2RY9Nzepvdz8mHxCzlOpvZb26gfrVhdurAeJDSi_Q",
-    }
-  },
-  {
-    bucketName: "practical-lunchbox-q6wejg",
-    endpoint: "https://t3.storageapi.dev",
-    region: "auto",
-    credentials: {
-      accessKeyId: "tid_g_lyTcQlTTXwyPBLXrrvOaVTVTUJzwxaOzNrVvaesOBlfttSEO",
-      secretAccessKey: "tsec_VC92A93_brFk+9gUOPmEg8Q3e6bG2AWiY_vMfEqBJl84jee-l_2RMboQXTzqj2E5EYDuqN",
-    }
-  },
-  {
-    bucketName: "reserved-pail-1dm-clece3t",
-    endpoint: "https://t3.storageapi.dev",
-    region: "auto",
-    credentials: {
-      accessKeyId: "tid_huPrSUpYYNCWKTGaLxdPQWCrvxPbnudxZEDDWpnmspUXRvEonP",
-      secretAccessKey: "tsec_2ra4rKw72iBQ+PIewNBnzZmyhUoFWAu7nSG-ataRyuzmAkkm6xTKClyCWERD0+W1vuz+xR",
-    }
+const BUCKET_ENDPOINT = process.env.BUCKET_ENDPOINT || "https://t3.storageapi.dev"
+
+const BUCKETS = [1, 2, 3].map(i => ({
+  bucketName: process.env[`BUCKET_${i}_NAME`],
+  endpoint: BUCKET_ENDPOINT,
+  region: "auto",
+  credentials: {
+    accessKeyId: process.env[`BUCKET_${i}_KEY`],
+    secretAccessKey: process.env[`BUCKET_${i}_SECRET`],
   }
-]
+})).filter(b => b.bucketName && b.credentials.accessKeyId && b.credentials.secretAccessKey)
+
+if (BUCKETS.length === 0) {
+  console.error("❌ Nenhum bucket configurado! Defina BUCKET_1_NAME, BUCKET_1_KEY, BUCKET_1_SECRET no Railway.")
+  process.exit(1)
+}
 
 const s3Clients = BUCKETS.map(b => ({
   ...b,
