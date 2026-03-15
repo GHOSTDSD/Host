@@ -1506,7 +1506,7 @@ app.get("/files/:botId", authBot, (req, res) => {
   res.send(buildEditorHtml(botId, sessionToken, "/files-api/" + botId))
 })
 
-function buildEditorHtml(botId, sessionToken, API) {
+function function buildEditorHtml(botId, sessionToken, API) {
   const B = JSON.stringify(botId)
   const T = JSON.stringify(sessionToken)
   const A = JSON.stringify(API)
@@ -1682,9 +1682,9 @@ var socket = io();
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
 <script>
-var BOT_ID = ${B};
-var TOK = ${T};
-var API = ${A};
+var BOT_ID = ${JSON.stringify(botId)};
+var TOK = ${JSON.stringify(sessionToken)};
+var API = ${JSON.stringify(API)};
 var ed = null;
 var curFile = null;
 var openDirs = new Set();
@@ -2499,7 +2499,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 </body>
-</html>`;
+</html>`
 }
 
 app.use("/files-api", authBot, (req, res, next) => {
