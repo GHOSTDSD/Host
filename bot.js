@@ -1419,7 +1419,7 @@ function buildEditorHtml(botId, sessionToken, API) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ARES — ${botId}</title>
+<title>ARES \u2014 ${botId}</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1582,849 +1582,393 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <script>
-var BOT_ID = ${B};
-var TOK = ${T};
-var API = ${A};
-var socket = null;
-var ed = null;
-var curFile = null;
-var openDirs = new Set();
-var treeData = [];
-var tabs = [];
-var models = {};
-var dirty = {};
-var modalCb = null;
+var BOT_ID=${B}, TOK=${T}, API=${A}, socket=null;
+var ed=null, curFile=null, openDirs=new Set(), treeData=[];
+var tabs=[], models={}, dirty={}, modalCb=null;
 
-function au(a, e) {
-  return API + a + '?s=' + TOK + (e ? '&' + e : '');
-}
+function au(a,e){return API+a+'?s='+TOK+(e?'&'+e:'');}
+function setStatus(t,c){var si=document.getElementById('si'),st=document.getElementById('st'),sb=document.getElementById('sb-text');si.className=c||'';st.textContent=t;if(sb)sb.textContent=t;}
+function toggleSide(){document.getElementById('side').classList.toggle('open');document.getElementById('side-ov').classList.toggle('on');}
+function closeSide(){document.getElementById('side').classList.remove('open');document.getElementById('side-ov').classList.remove('on');}
+function showPanel(n){['files','packages','search'].forEach(function(p){document.getElementById('panel-'+p).classList.toggle('on',p===n);document.getElementById('stab-'+p).classList.toggle('on',p===n);});if(n==='packages')loadPkgs();}
+function xExt(n){return n.includes('.')?n.split('.').pop().toLowerCase():'';}
+function getLang(n){var m={js:'javascript',mjs:'javascript',cjs:'javascript',ts:'typescript',tsx:'typescript',jsx:'javascript',json:'json',py:'python',md:'markdown',sh:'shell',bash:'shell',html:'html',htm:'html',css:'css',scss:'scss',yml:'yaml',yaml:'yaml',txt:'plaintext',xml:'xml',sql:'sql',php:'php',rb:'ruby',go:'go',rs:'rust',cpp:'cpp',c:'c',h:'c',java:'java',dockerfile:'dockerfile',env:'plaintext',gitignore:'plaintext'};return m[xExt(n)]||'plaintext';}
+function fmtSz(b){if(b>1048576)return(b/1048576).toFixed(2)+'MB';if(b>1024)return(b/1024).toFixed(1)+'KB';return b+'B';}
+function hEsc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function toast(m,t){var el=document.getElementById('toast');el.textContent=m;el.className='toast on '+(t||'');clearTimeout(el._t);el._t=setTimeout(function(){el.className='toast';},t==='err'?6000:3000);}
 
-function setStatus(t, c) {
-  var si = document.getElementById('si');
-  var st = document.getElementById('st');
-  var sb = document.getElementById('sb-text');
-  si.className = c || '';
-  st.textContent = t;
-  if (sb) sb.textContent = t;
-}
+var CLOSE_ICO='<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+var PLUS_ICO='<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+var TRASH_ICO='<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+var DL_ICO='<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+var DUP_ICO='<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+var REN_ICO='<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
 
-function toggleSide() {
-  document.getElementById('side').classList.toggle('open');
-  document.getElementById('side-ov').classList.toggle('on');
-}
-
-function closeSide() {
-  document.getElementById('side').classList.remove('open');
-  document.getElementById('side-ov').classList.remove('on');
-}
-
-function showPanel(n) {
-  ['files', 'packages', 'search'].forEach(function(p) {
-    document.getElementById('panel-' + p).classList.toggle('on', p === n);
-    document.getElementById('stab-' + p).classList.toggle('on', p === n);
-  });
-  if (n === 'packages') loadPkgs();
-}
-
-function xExt(n) {
-  return n.includes('.') ? n.split('.').pop().toLowerCase() : '';
-}
-
-function getLang(n) {
-  var m = {
-    js: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
-    json: 'json', py: 'python', md: 'markdown', sh: 'shell', bash: 'shell', html: 'html', htm: 'html',
-    css: 'css', scss: 'scss', yml: 'yaml', yaml: 'yaml', txt: 'plaintext', xml: 'xml', sql: 'sql',
-    php: 'php', rb: 'ruby', go: 'go', rs: 'rust', cpp: 'cpp', c: 'c', h: 'c', java: 'java',
-    dockerfile: 'dockerfile', env: 'plaintext', gitignore: 'plaintext'
+function fileIcon(n){
+  var e=xExt(n),icons={
+    js:'<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#f7df1e"/><text x="3" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#000">JS</text></svg>',
+    ts:'<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#3178c6"/><text x="2" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#fff">TS</text></svg>',
+    jsx:'<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#61dafb"/><text x="2" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#000">JSX</text></svg>',
+    tsx:'<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#3178c6"/><text x="2" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">TSX</text></svg>',
+    json:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+    py:'<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#306998"/><text x="2" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#ffd43b">PY</text></svg>',
+    html:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#e44d26" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+    css:'<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#2965f1"/><text x="1" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">CSS</text></svg>',
+    md:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+    env:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22d3a5" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+    sh:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+    yml:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
   };
-  return m[xExt(n)] || 'plaintext';
+  return icons[e]||'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
 }
-
-function fmtSz(b) {
-  if (b > 1048576) return (b / 1048576).toFixed(2) + 'MB';
-  if (b > 1024) return (b / 1024).toFixed(1) + 'KB';
-  return b + 'B';
-}
-
-function hEsc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function toast(m, t) {
-  var el = document.getElementById('toast');
-  el.textContent = m;
-  el.className = 'toast on ' + (t || '');
-  clearTimeout(el._t);
-  el._t = setTimeout(function() { el.className = 'toast'; }, 3000);
-}
-
-function fileIcon(n) {
-  var e = xExt(n);
-  var icons = {
-    js: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#f7df1e"/><text x="3" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#000">JS</text></svg>',
-    ts: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#3178c6"/><text x="2" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#fff">TS</text></svg>',
-    jsx: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#61dafb"/><text x="2" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#000">JSX</text></svg>',
-    tsx: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#3178c6"/><text x="2" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">TSX</text></svg>',
-    json: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
-    py: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#306998"/><text x="2" y="12" font-size="9" font-family="monospace" font-weight="bold" fill="#ffd43b">PY</text></svg>',
-    html: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#e44d26" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
-    css: '<svg width="13" height="13" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#2965f1"/><text x="1" y="12" font-size="8" font-family="monospace" font-weight="bold" fill="#fff">CSS</text></svg>',
-    md: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
-    env: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22d3a5" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
-    sh: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
-    yml: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
-  };
-  return icons[e] || '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
-}
-
-function folderIcon(o) {
+function folderIcon(o){
   return o
-    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="3" y1="10" x2="21" y2="10"/></svg>'
-    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+    ?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="3" y1="10" x2="21" y2="10"/></svg>'
+    :'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
 }
 
-function buildRows(items, depth) {
-  var h = '';
-  for (var i = 0; i < items.length; i++) {
-    var it = items[i];
-    var pad = 6 + depth * 14;
-    var hp = hEsc(it.path);
-    var hn = hEsc(it.name);
-    if (it.type === 'dir') {
-      var o = openDirs.has(it.path);
-      h += '<div class="row" data-act="dir" data-p="' + hp + '" style="padding-left:' + pad + 'px">';
-      h += '<span class="arr ' + (o ? 'o' : '') + '">▶</span>';
-      h += folderIcon(o);
-      h += '<span class="lbl d">' + hn + '</span>';
-      h += '<div class="rctx">';
-      h += '<button class="cx" data-act="nfi" data-p="' + hp + '" title="Novo arquivo">➕</button>';
-      h += '<button class="cx" data-act="delf" data-p="' + hp + '" title="Excluir pasta">🗑️</button>';
-      h += '</div></div>';
-      if (o && it.children) h += buildRows(it.children, depth + 1);
-    } else {
-      var sel = curFile === it.path ? ' sel' : '';
-      h += '<div class="row' + sel + '" data-act="open" data-p="' + hp + '" style="padding-left:' + (pad + 12) + 'px">';
-      h += '<span class="arr h">▶</span>';
-      h += fileIcon(it.name);
-      h += '<span class="lbl">' + hn + '</span>';
-      h += '<div class="rctx">';
-      h += '<button class="cx" data-act="dl" data-p="' + hp + '" title="Download">📥</button>';
-      h += '<button class="cx" data-act="dup" data-p="' + hp + '" title="Duplicar">📄</button>';
-      h += '<button class="cx" data-act="qren" data-p="' + hp + '" title="Renomear">✏️</button>';
-      h += '</div></div>';
+/* TREE — usa data-* attrs, zero inline onclick com paths */
+function buildRows(items,depth){
+  var h='';
+  for(var i=0;i<items.length;i++){
+    var it=items[i],pad=6+depth*14,hp=hEsc(it.path),hn=hEsc(it.name);
+    if(it.type==='dir'){
+      var o=openDirs.has(it.path);
+      h+='<div class="row" data-act="dir" data-p="'+hp+'" style="padding-left:'+pad+'px">';
+      h+='<span class="arr '+(o?'o':'')+'">&#9654;</span>'+folderIcon(o)+'<span class="lbl d">'+hn+'</span>';
+      h+='<div class="rctx"><button class="cx" data-act="nfi" data-p="'+hp+'" title="Novo arquivo">'+PLUS_ICO+'</button><button class="cx" data-act="delf" data-p="'+hp+'" title="Excluir pasta">'+TRASH_ICO+'</button></div></div>';
+      if(o&&it.children)h+=buildRows(it.children,depth+1);
+    }else{
+      var sel=curFile===it.path?' sel':'';
+      h+='<div class="row'+sel+'" data-act="open" data-p="'+hp+'" style="padding-left:'+(pad+12)+'px">';
+      h+='<span class="arr h">&#9654;</span>'+fileIcon(it.name)+'<span class="lbl">'+hn+'</span>';
+      h+='<div class="rctx"><button class="cx" data-act="dl" data-p="'+hp+'" title="Download">'+DL_ICO+'</button><button class="cx" data-act="dup" data-p="'+hp+'" title="Duplicar">'+DUP_ICO+'</button><button class="cx" data-act="qren" data-p="'+hp+'" title="Renomear">'+REN_ICO+'</button></div></div>';
     }
   }
   return h;
 }
-
-function renderTree() {
-  var el = document.getElementById('tree');
-  el.innerHTML = treeData.length ? buildRows(treeData, 0) : '<div style="padding:12px;font-size:12px;color:var(--tx3)">Pasta vazia</div>';
-}
-
-function toggleDir(p) {
-  openDirs.has(p) ? openDirs.delete(p) : openDirs.add(p);
-  renderTree();
-}
-
-async function loadTree() {
-  var el = document.getElementById('tree');
-  el.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--tx3)">Carregando...</div>';
-  try {
-    var r = await fetch(au('/tree'));
-    if (!r.ok) {
-      el.innerHTML = '<div style="padding:10px;font-size:11px;color:var(--red)">HTTP ' + r.status + ': ' + hEsc((await r.text()).substring(0, 100)) + '</div>';
+function renderTree(){var el=document.getElementById('tree');el.innerHTML=treeData.length?buildRows(treeData,0):'<div style="padding:12px;font-size:12px;color:var(--tx3)">Pasta vazia</div>';}
+function toggleDir(p){openDirs.has(p)?openDirs.delete(p):openDirs.add(p);renderTree();}
+async function loadTree(){
+  var el=document.getElementById('tree');
+  el.innerHTML='<div style="padding:12px;font-size:12px;color:var(--tx3)">Carregando...</div>';
+  try{
+    var r=await fetch(au('/tree'));
+    if(!r.ok){
+      var msg=await r.text();
+      console.error('loadTree HTTP '+r.status,msg);
+      el.innerHTML='<div style="padding:10px;font-size:11px;color:var(--red)">HTTP '+r.status+'<br>'+hEsc(msg.substring(0,200))+'<br><small>Abra o editor novamente pelo Telegram</small></div>';
       return;
     }
-    treeData = await r.json();
-    renderTree();
-  } catch (e) {
-    el.innerHTML = '<div style="padding:10px;font-size:11px;color:var(--red)">' + hEsc(e.message) + '</div>';
+    treeData=await r.json();renderTree();
+  }catch(e){
+    console.error('loadTree error:',e);
+    el.innerHTML='<div style="padding:10px;font-size:11px;color:var(--red)">'+hEsc(e.message)+'</div>';
   }
 }
 
-function renderTabs() {
-  var el = document.getElementById('tabs-bar');
-  el.innerHTML = tabs.map(function(t) {
-    var name = t.split('/').pop();
-    var on = t === curFile ? ' on' : '';
-    var right = dirty[t] ? '<span class="tdot"></span>' : '<span class="tx" data-tc="' + hEsc(t) + '">✕</span>';
-    return '<div class="tab' + on + '" data-to="' + hEsc(t) + '" title="' + hEsc(t) + '">' + fileIcon(name) + hEsc(name) + right + '</div>';
+/* TABS */
+function renderTabs(){
+  var el=document.getElementById('tabs-bar');
+  el.innerHTML=tabs.map(function(t){
+    var name=t.split('/').pop(),on=t===curFile?' on':'';
+    var right=dirty[t]?'<span class="tdot"></span>':'<span class="tx" data-tc="'+hEsc(t)+'">'+CLOSE_ICO+'</span>';
+    return '<div class="tab'+on+'" data-to="'+hEsc(t)+'" title="'+hEsc(t)+'">'+fileIcon(name)+hEsc(name)+right+'</div>';
   }).join('');
 }
-
-function switchTo(p) {
-  if (p !== curFile) openFile(p);
-}
-
-function closeTab(p) {
-  if (dirty[p] && !confirm('Fechar sem salvar?')) return;
-  tabs = tabs.filter(function(x) { return x !== p; });
-  if (models[p]) {
-    models[p].dispose();
-    delete models[p];
-  }
-  delete dirty[p];
-  if (curFile === p) {
-    tabs.length ? openFile(tabs[tabs.length - 1]) : clearEditor();
-  }
+function switchTo(p){if(p!==curFile)openFile(p);}
+function closeTab(p){
+  if(dirty[p]&&!confirm('Fechar sem salvar?'))return;
+  tabs=tabs.filter(function(x){return x!==p;});
+  if(models[p]){models[p].dispose();delete models[p];}delete dirty[p];
+  if(curFile===p){tabs.length?openFile(tabs[tabs.length-1]):clearEditor();}
   renderTabs();
 }
-
-function clearEditor() {
-  curFile = null;
-  if (ed) ed.setValue('');
-  document.getElementById('editor-wrap').style.display = 'none';
-  document.getElementById('welcome').style.display = 'flex';
-  document.getElementById('infobar').style.display = 'none';
-  document.getElementById('unsaved').style.display = 'none';
-  ['btn-save', 'btn-del', 'btn-ren'].forEach(function(id) {
-    document.getElementById(id).style.display = 'none';
-  });
+function clearEditor(){
+  curFile=null;if(ed)ed.setValue('');
+  document.getElementById('editor-wrap').style.display='none';
+  document.getElementById('welcome').style.display='flex';
+  document.getElementById('infobar').style.display='none';
+  document.getElementById('unsaved').style.display='none';
+  ['btn-save','btn-del','btn-ren'].forEach(function(id){document.getElementById(id).style.display='none';});
   renderTree();
 }
 
-async function openFile(p) {
-  if (!ed) {
-    setTimeout(function() { openFile(p); }, 150);
-    return;
+/* OPEN FILE */
+async function openFile(p){
+  if(!ed){setTimeout(function(){openFile(p);},150);return;}
+  if(!models[p]){
+    try{
+      setStatus('Abrindo...','loading');
+      var r=await fetch(au('/read','path='+encodeURIComponent(p)));
+      if(!r.ok){toast('Erro ao abrir ('+r.status+')','err');setStatus('Erro','err');return;}
+      var content=await r.text();
+      models[p]=monaco.editor.createModel(content,getLang(p));dirty[p]=false;
+      if(tabs.indexOf(p)===-1)tabs.push(p);
+      models[p].onDidChangeContent(function(){dirty[p]=true;if(curFile===p)document.getElementById('unsaved').style.display='inline';renderTabs();});
+    }catch(e){toast('Erro: '+e.message,'err');setStatus('Erro','err');return;}
   }
-  if (!models[p]) {
-    try {
-      setStatus('Abrindo...', 'loading');
-      var r = await fetch(au('/read', 'path=' + encodeURIComponent(p)));
-      if (!r.ok) {
-        toast('Erro ao abrir (' + r.status + ')', 'err');
-        setStatus('Erro', 'err');
-        return;
-      }
-      var content = await r.text();
-      models[p] = monaco.editor.createModel(content, getLang(p));
-      dirty[p] = false;
-      if (tabs.indexOf(p) === -1) tabs.push(p);
-      models[p].onDidChangeContent(function() {
-        dirty[p] = true;
-        if (curFile === p) document.getElementById('unsaved').style.display = 'inline';
-        renderTabs();
-      });
-    } catch (e) {
-      toast('Erro: ' + e.message, 'err');
-      setStatus('Erro', 'err');
-      return;
-    }
-  }
-  curFile = p;
-  ed.setModel(models[p]);
-  document.getElementById('editor-wrap').style.display = 'block';
-  document.getElementById('welcome').style.display = 'none';
-  document.getElementById('infobar').style.display = 'flex';
+  curFile=p;ed.setModel(models[p]);
+  document.getElementById('editor-wrap').style.display='block';
+  document.getElementById('welcome').style.display='none';
+  document.getElementById('infobar').style.display='flex';
   updateInfo();
-  ['btn-save', 'btn-del', 'btn-ren'].forEach(function(id) {
-    document.getElementById(id).style.display = 'inline-flex';
+  ['btn-save','btn-del','btn-ren'].forEach(function(id){document.getElementById(id).style.display='inline-flex';});
+  document.getElementById('unsaved').style.display=dirty[p]?'inline':'none';
+  renderTree();renderTabs();closeSide();ed.focus();setStatus('Pronto','ok');
+}
+function updateInfo(){
+  if(!curFile||!ed)return;
+  document.getElementById('ib-lang').textContent=getLang(curFile.split('/').pop());
+  document.getElementById('ib-size').textContent=fmtSz(new Blob([ed.getValue()]).size);
+  var pos=ed.getPosition();if(pos)document.getElementById('cur-pos').textContent='Ln '+pos.lineNumber+', Col '+pos.column;
+}
+async function doSave(){
+  if(!curFile||!ed)return;setStatus('Salvando...','loading');
+  try{
+    var r=await fetch(au('/write'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:curFile,content:ed.getValue()})});
+    if(r.ok){dirty[curFile]=false;document.getElementById('unsaved').style.display='none';renderTabs();toast('Salvo!','ok');setStatus('Salvo','ok');setTimeout(function(){setStatus('Pronto','ok');},2000);}
+    else{toast('Erro ao salvar: '+await r.text(),'err');setStatus('Erro','err');}
+  }catch(e){toast('Erro: '+e.message,'err');setStatus('Erro','err');}
+}
+async function doDel(){
+  if(!curFile||!confirm('Excluir "'+curFile+'"?'))return;
+  var r=await fetch(au('/delete'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:curFile})});
+  if(r.ok){toast('Excluido','ok');closeTab(curFile);loadTree();}else toast('Erro: '+await r.text(),'err');
+}
+async function delFolder(p){
+  if(!confirm('Excluir pasta "'+p+'" e todo o conteudo?'))return;
+  var r=await fetch(au('/delete'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})});
+  if(r.ok){toast('Pasta excluida','ok');loadTree();}else toast('Erro: '+await r.text(),'err');
+}
+async function doRename(){
+  if(!curFile)return;var parts=curFile.split('/');
+  var nn=prompt('Novo nome:',parts[parts.length-1]);if(!nn||nn===parts[parts.length-1])return;
+  await renFile(curFile,parts.slice(0,-1).concat(nn).join('/'));
+}
+async function qRename(p){
+  var parts=p.split('/');var nn=prompt('Novo nome:',parts[parts.length-1]);
+  if(!nn||nn===parts[parts.length-1])return;await renFile(p,parts.slice(0,-1).concat(nn).join('/'));
+}
+async function renFile(from,to){
+  var r=await fetch(au('/rename'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from:from,to:to})});
+  if(r.ok){
+    var ti=tabs.indexOf(from);if(ti>-1)tabs[ti]=to;
+    if(models[from]){models[to]=models[from];delete models[from];}
+    if(dirty[from]!==undefined){dirty[to]=dirty[from];delete dirty[from];}
+    if(curFile===from)curFile=to;
+    await loadTree();if(curFile===to)openFile(to);toast('Renomeado','ok');
+  }else toast('Erro: '+await r.text(),'err');
+}
+async function dupFile(p){
+  var parts=p.split('/'),name=parts[parts.length-1],di=name.lastIndexOf('.');
+  var nn=di>0?name.slice(0,di)+'_copy'+name.slice(di):name+'_copy';
+  var np=parts.slice(0,-1).concat(nn).join('/');
+  var rr=await fetch(au('/read','path='+encodeURIComponent(p)));if(!rr.ok)return;
+  var rw=await fetch(au('/write'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:np,content:await rr.text()})});
+  if(rw.ok){await loadTree();toast('Duplicado','ok');}else toast('Erro','err');
+}
+function dlFile(p){var a=document.createElement('a');a.href=au('/download','path='+encodeURIComponent(p));a.download=p.split('/').pop();document.body.appendChild(a);a.click();document.body.removeChild(a);}
+
+/* NEW FILE/FOLDER */
+function doNewFile(){
+  var folder=curFile?curFile.split('/').slice(0,-1).join('/'):'';
+  openModal('Novo arquivo','nome.js',async function(fn){
+    var fp=folder?folder+'/'+fn:fn;
+    try{
+      var r=await fetch(au('/write'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp,content:getTpl(fn)})});
+      if(r.ok){await loadTree();openFile(fp);toast('Criado!','ok');}
+      else{var msg=await r.text();toast('Erro '+r.status+': '+msg,'err');console.error('/write failed:',r.status,msg);}
+    }catch(ex){toast('Erro de rede: '+ex.message,'err');console.error('doNewFile error:',ex);}
   });
-  document.getElementById('unsaved').style.display = dirty[p] ? 'inline' : 'none';
-  renderTree();
-  renderTabs();
-  closeSide();
-  ed.focus();
-  setStatus('Pronto', 'ok');
 }
-
-function updateInfo() {
-  if (!curFile || !ed) return;
-  document.getElementById('ib-lang').textContent = getLang(curFile.split('/').pop());
-  document.getElementById('ib-size').textContent = fmtSz(new Blob([ed.getValue()]).size);
-  var pos = ed.getPosition();
-  if (pos) document.getElementById('cur-pos').textContent = 'Ln ' + pos.lineNumber + ', Col ' + pos.column;
+function doNewFileIn(folder){
+  openModal('Novo arquivo em /'+folder,'nome.js',async function(fn){
+    var fp=folder+'/'+fn;
+    try{
+      var r=await fetch(au('/write'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp,content:getTpl(fn)})});
+      if(r.ok){await loadTree();openFile(fp);toast('Criado!','ok');}
+      else{var msg=await r.text();toast('Erro '+r.status+': '+msg,'err');console.error('/write failed:',r.status,msg);}
+    }catch(ex){toast('Erro de rede: '+ex.message,'err');console.error('doNewFileIn error:',ex);}
+  });
 }
+function doNewFolder(){
+  var folder=curFile?curFile.split('/').slice(0,-1).join('/'):'';
+  openModal('Nova pasta','minha-pasta',async function(fn){
+    var fp=folder?folder+'/'+fn:fn;
+    try{
+      var r=await fetch(au('/mkdir'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp})});
+      if(r.ok){await loadTree();openDirs.add(fp);renderTree();toast('Pasta criada!','ok');}
+      else{var msg=await r.text();toast('Erro '+r.status+': '+msg,'err');console.error('/mkdir failed:',r.status,msg);}
+    }catch(ex){toast('Erro de rede: '+ex.message,'err');console.error('doNewFolder error:',ex);}
+  });
+}
+function getTpl(n){var e=xExt(n);if(e==='js')return '// '+n+'\n\n';if(e==='json')return '{\n  \n}\n';if(e==='html')return '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <title></title>\n</head>\n<body>\n  \n</body>\n</html>';if(e==='md')return '# '+n.replace('.md','')+'\n\n';if(e==='py')return '# '+n+'\n\n';if(e==='css')return '/* '+n+' */\n\n';if(e==='env')return '# Environment variables\n\n';return '';}
 
-async function doSave() {
-  if (!curFile || !ed) return;
-  setStatus('Salvando...', 'loading');
-  try {
-    var r = await fetch(au('/write'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: curFile, content: ed.getValue() })
-    });
-    if (r.ok) {
-      dirty[curFile] = false;
-      document.getElementById('unsaved').style.display = 'none';
-      renderTabs();
-      toast('Salvo!', 'ok');
-      setStatus('Salvo', 'ok');
-      setTimeout(function() { setStatus('Pronto', 'ok'); }, 2000);
-    } else {
-      toast('Erro ao salvar: ' + await r.text(), 'err');
-      setStatus('Erro', 'err');
-    }
-  } catch (e) {
-    toast('Erro: ' + e.message, 'err');
-    setStatus('Erro', 'err');
+/* UPLOAD */
+function openUploadModal(){document.getElementById('modal-upload').classList.add('on');}
+function closeUploadModal(){document.getElementById('modal-upload').classList.remove('on');}
+async function uploadFiles(files){
+  var prog=document.getElementById('upl-prog'),ok=0;
+  for(var i=0;i<files.length;i++){
+    var f=files[i];prog.textContent='Enviando '+f.name+'...';
+    var folder=curFile?curFile.split('/').slice(0,-1).join('/'):'';
+    var fp=folder?folder+'/'+f.name:f.name;
+    var content=await f.text().catch(function(){return null;});
+    if(content===null){prog.textContent='Erro: '+f.name+' (binario)';continue;}
+    var r=await fetch(au('/write'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp,content:content})});
+    if(r.ok)ok++;
   }
+  prog.textContent=ok+'/'+files.length+' enviado(s)';await loadTree();
 }
 
-async function doDel() {
-  if (!curFile || !confirm('Excluir "' + curFile + '"?')) return;
-  var r = await fetch(au('/delete'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: curFile })
-  });
-  if (r.ok) {
-    toast('Excluido', 'ok');
-    closeTab(curFile);
-    loadTree();
-  } else {
-    toast('Erro: ' + await r.text(), 'err');
-  }
-}
-
-async function delFolder(p) {
-  if (!confirm('Excluir pasta "' + p + '" e todo o conteudo?')) return;
-  var r = await fetch(au('/delete'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: p })
-  });
-  if (r.ok) {
-    toast('Pasta excluida', 'ok');
-    loadTree();
-  } else {
-    toast('Erro: ' + await r.text(), 'err');
-  }
-}
-
-async function doRename() {
-  if (!curFile) return;
-  var parts = curFile.split('/');
-  var nn = prompt('Novo nome:', parts[parts.length - 1]);
-  if (!nn || nn === parts[parts.length - 1]) return;
-  await renFile(curFile, parts.slice(0, -1).concat(nn).join('/'));
-}
-
-async function qRename(p) {
-  var parts = p.split('/');
-  var nn = prompt('Novo nome:', parts[parts.length - 1]);
-  if (!nn || nn === parts[parts.length - 1]) return;
-  await renFile(p, parts.slice(0, -1).concat(nn).join('/'));
-}
-
-async function renFile(from, to) {
-  var r = await fetch(au('/rename'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: from, to: to })
-  });
-  if (r.ok) {
-    var ti = tabs.indexOf(from);
-    if (ti > -1) tabs[ti] = to;
-    if (models[from]) {
-      models[to] = models[from];
-      delete models[from];
-    }
-    if (dirty[from] !== undefined) {
-      dirty[to] = dirty[from];
-      delete dirty[from];
-    }
-    if (curFile === from) curFile = to;
-    await loadTree();
-    if (curFile === to) openFile(to);
-    toast('Renomeado', 'ok');
-  } else {
-    toast('Erro: ' + await r.text(), 'err');
-  }
-}
-
-async function dupFile(p) {
-  var parts = p.split('/');
-  var name = parts[parts.length - 1];
-  var di = name.lastIndexOf('.');
-  var nn = di > 0 ? name.slice(0, di) + '_copy' + name.slice(di) : name + '_copy';
-  var np = parts.slice(0, -1).concat(nn).join('/');
-  var rr = await fetch(au('/read', 'path=' + encodeURIComponent(p)));
-  if (!rr.ok) return;
-  var rw = await fetch(au('/write'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: np, content: await rr.text() })
-  });
-  if (rw.ok) {
-    await loadTree();
-    toast('Duplicado', 'ok');
-  } else {
-    toast('Erro', 'err');
-  }
-}
-
-function dlFile(p) {
-  var a = document.createElement('a');
-  a.href = au('/download', 'path=' + encodeURIComponent(p));
-  a.download = p.split('/').pop();
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-}
-
-function doNewFile() {
-  var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
-  openModal('Novo arquivo', 'nome.js', async function(fn) {
-    if (!fn) {
-      toast('Nome inválido', 'err');
-      return;
-    }
-    if (!/^[a-zA-Z0-9_\\-\\.]+$/.test(fn)) {
-      toast('Use apenas letras, números, _, - e .', 'err');
-      return;
-    }
-    var fp = folder ? folder + '/' + fn : fn;
-    try {
-      var r = await fetch(au('/write'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: fp, content: getTpl(fn) })
-      });
-      if (r.ok) {
-        await loadTree();
-        toast('Arquivo criado', 'ok');
-        setTimeout(function() { openFile(fp); }, 100);
-      } else {
-        var errText = await r.text();
-        toast('Erro: ' + errText, 'err');
-      }
-    } catch (e) {
-      toast('Erro: ' + e.message, 'err');
-    }
-  });
-}
-
-function doNewFileIn(folder) {
-  if (!folder) {
-    toast('Pasta inválida', 'err');
-    return;
-  }
-  openModal('Novo arquivo em /' + folder, 'nome.js', async function(fn) {
-    if (!fn) {
-      toast('Nome inválido', 'err');
-      return;
-    }
-    if (!/^[a-zA-Z0-9_\\-\\.]+$/.test(fn)) {
-      toast('Use apenas letras, números, _, - e .', 'err');
-      return;
-    }
-    var fp = folder + '/' + fn;
-    try {
-      var r = await fetch(au('/write'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: fp, content: getTpl(fn) })
-      });
-      if (r.ok) {
-        await loadTree();
-        toast('Arquivo criado', 'ok');
-        setTimeout(function() { openFile(fp); }, 100);
-      } else {
-        var errText = await r.text();
-        toast('Erro: ' + errText, 'err');
-      }
-    } catch (e) {
-      toast('Erro: ' + e.message, 'err');
-    }
-  });
-}
-
-function doNewFolder() {
-  var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
-  openModal('Nova pasta', 'minha-pasta', async function(fn) {
-    if (!fn) {
-      toast('Nome inválido', 'err');
-      return;
-    }
-    if (!/^[a-zA-Z0-9_\\-]+$/.test(fn)) {
-      toast('Use apenas letras, números, _ e -', 'err');
-      return;
-    }
-    var fp = folder ? folder + '/' + fn : fn;
-    try {
-      var r = await fetch(au('/mkdir'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: fp })
-      });
-      if (r.ok) {
-        await loadTree();
-        openDirs.add(fp);
-        renderTree();
-        toast('Pasta criada', 'ok');
-      } else {
-        var errText = await r.text();
-        toast('Erro: ' + errText, 'err');
-      }
-    } catch (e) {
-      toast('Erro: ' + e.message, 'err');
-    }
-  });
-}
-
-function getTpl(n) {
-  var e = xExt(n);
-  if (e === 'js') return '// ' + n + '\n\n';
-  if (e === 'json') return '{\n  \n}\n';
-  if (e === 'html') return '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <title></title>\n</head>\n<body>\n  \n</body>\n</html>';
-  if (e === 'md') return '# ' + n.replace('.md', '') + '\n\n';
-  if (e === 'py') return '# ' + n + '\n\n';
-  if (e === 'css') return '/* ' + n + ' */\n\n';
-  if (e === 'env') return '# Environment variables\n\n';
-  return '';
-}
-
-function openUploadModal() {
-  document.getElementById('modal-upload').classList.add('on');
-}
-
-function closeUploadModal() {
-  document.getElementById('modal-upload').classList.remove('on');
-}
-
-async function uploadFiles(files) {
-  var prog = document.getElementById('upl-prog');
-  var ok = 0;
-  for (var i = 0; i < files.length; i++) {
-    var f = files[i];
-    prog.textContent = 'Enviando ' + f.name + '...';
-    var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
-    var fp = folder ? folder + '/' + f.name : f.name;
-    var content = await f.text().catch(function() { return null; });
-    if (content === null) {
-      prog.textContent = 'Erro: ' + f.name + ' (binario)';
-      continue;
-    }
-    var r = await fetch(au('/write'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fp, content: content })
-    });
-    if (r.ok) ok++;
-  }
-  prog.textContent = ok + '/' + files.length + ' enviado(s)';
-  await loadTree();
-}
-
-async function loadPkgs() {
-  var el = document.getElementById('pkg-list');
-  el.innerHTML = '<div class="pe">Carregando...</div>';
-  try {
-    var r = await fetch(au('/package-json'));
-    if (!r.ok) {
-      el.innerHTML = '<div class="pe">Sem package.json</div>';
-      return;
-    }
-    var pkg = await r.json();
-    var deps = Object.assign({}, pkg.dependencies || {}, pkg.devDependencies || {});
-    var devs = new Set(Object.keys(pkg.devDependencies || {}));
-    var keys = Object.keys(deps);
-    if (!keys.length) {
-      el.innerHTML = '<div class="pe">Sem dependencias</div>';
-      return;
-    }
-    el.innerHTML = keys.map(function(name) {
-      var db = devs.has(name) ? '<span style="color:var(--purple);font-size:9px;margin-left:4px">dev</span>' : '';
-      return '<div class="pr"><span class="pn">' + hEsc(name) + db + '</span><span class="pv">' + hEsc(deps[name]) + '</span><button class="pd" data-del="' + hEsc(name) + '" title="Desinstalar">✕</button></div>';
+/* NPM */
+async function loadPkgs(){
+  var el=document.getElementById('pkg-list');el.innerHTML='<div class="pe">Carregando...</div>';
+  try{
+    var r=await fetch(au('/package-json'));
+    if(!r.ok){el.innerHTML='<div class="pe">Sem package.json</div>';return;}
+    var pkg=await r.json(),deps=Object.assign({},pkg.dependencies||{},pkg.devDependencies||{});
+    var devs=new Set(Object.keys(pkg.devDependencies||{})),keys=Object.keys(deps);
+    if(!keys.length){el.innerHTML='<div class="pe">Sem dependencias</div>';return;}
+    el.innerHTML=keys.map(function(name){
+      var db=devs.has(name)?'<span style="color:var(--purple);font-size:9px;margin-left:4px">dev</span>':'';
+      return '<div class="pr"><span class="pn">'+hEsc(name)+db+'</span><span class="pv">'+hEsc(deps[name])+'</span><button class="pd" data-del="'+hEsc(name)+'" title="Desinstalar">'+CLOSE_ICO+'</button></div>';
     }).join('');
-  } catch (e) {
-    el.innerHTML = '<div class="pe">Erro: ' + hEsc(e.message) + '</div>';
-  }
+  }catch(e){el.innerHTML='<div class="pe">Erro: '+hEsc(e.message)+'</div>';}
+}
+async function installPkg(type){
+  var ni=document.getElementById('pkg-in'),name=ni.value.trim();
+  if(!name)return toast('Digite o nome do pacote','err');
+  await runNpm(['install','--save'+(type==='dev'?'-dev':''),'--no-audit','--no-fund',name],'Instalando '+name+'...');
+  ni.value='';await loadPkgs();
+}
+async function uninstallPkg(name){
+  if(!confirm('Desinstalar '+name+'?'))return;
+  await runNpm(['uninstall',name],'Removendo '+name+'...');await loadPkgs();
+}
+async function runNpm(args,label){
+  var term=document.getElementById('pkg-term'),out=document.getElementById('pkg-out');
+  term.classList.add('on');out.textContent=label+'\n';setStatus(label,'loading');
+  try{
+    var r=await fetch(au('/npm-run'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({args:args})});
+    if(!r.ok){out.textContent+='\nErro: '+await r.text();setStatus('Erro','err');return;}
+    var reader=r.body.getReader(),dec=new TextDecoder();
+    while(true){var x=await reader.read();if(x.done)break;out.textContent+=dec.decode(x.value);term.scrollTop=term.scrollHeight;}
+    out.textContent+='\nConcluido!';term.scrollTop=term.scrollHeight;setStatus('Pronto','ok');toast(label,'ok');
+  }catch(e){out.textContent+='\nErro: '+e.message;setStatus('Erro','err');toast('Erro: '+e.message,'err');}
 }
 
-async function installPkg(type) {
-  var ni = document.getElementById('pkg-in');
-  var name = ni.value.trim();
-  if (!name) return toast('Digite o nome do pacote', 'err');
-  await runNpm(['install', '--save' + (type === 'dev' ? '-dev' : ''), '--no-audit', '--no-fund', name], 'Instalando ' + name + '...');
-  ni.value = '';
-  await loadPkgs();
+/* SEARCH */
+async function doSearch(q){
+  var el=document.getElementById('sr-list');
+  try{
+    var r=await fetch(au('/search','q='+encodeURIComponent(q)));
+    if(!r.ok){el.innerHTML='<div class="pe">Erro na busca</div>';return;}
+    var res=await r.json();
+    if(!res.length){el.innerHTML='<div class="pe">Nenhum resultado</div>';return;}
+    el.innerHTML=res.slice(0,50).map(function(it){return '<div class="sr-item" data-sr="'+hEsc(it.file)+'"><div class="sr-f">'+hEsc(it.file)+':'+it.line+'</div><div class="sr-l">'+hEsc(it.preview)+'</div></div>';}).join('');
+  }catch(e){el.innerHTML='<div class="pe">Erro: '+hEsc(e.message)+'</div>';}
 }
 
-async function uninstallPkg(name) {
-  if (!confirm('Desinstalar ' + name + '?')) return;
-  await runNpm(['uninstall', name], 'Removendo ' + name + '...');
-  await loadPkgs();
-}
+/* FIND BAR */
+function openFindBar(){document.getElementById('findbar').classList.add('on');document.getElementById('find-in').focus();document.getElementById('find-in').select();}
+function closeFindBar(){document.getElementById('findbar').classList.remove('on');if(ed)ed.focus();}
+function findNext(){if(ed)ed.getAction('editor.action.nextMatchFindAction').run();}
+function findPrev(){if(ed)ed.getAction('editor.action.previousMatchFindAction').run();}
+function findReplace(){if(ed)ed.getAction('editor.action.startFindReplaceAction').run();}
 
-async function runNpm(args, label) {
-  var term = document.getElementById('pkg-term');
-  var out = document.getElementById('pkg-out');
-  term.classList.add('on');
-  out.textContent = label + '\n';
-  setStatus(label, 'loading');
-  try {
-    var r = await fetch(au('/npm-run'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ args: args })
+/* MODAL */
+function openModal(title,ph,cb){modalCb=cb;document.getElementById('modal-title').textContent=title;document.getElementById('modal-in').value='';document.getElementById('modal-in').placeholder=ph;document.getElementById('modal').classList.add('on');setTimeout(function(){document.getElementById('modal-in').focus();},80);}
+function closeModal(){document.getElementById('modal').classList.remove('on');modalCb=null;}
+function confirmModal(){var v=document.getElementById('modal-in').value.trim();if(!v)return;closeModal();if(modalCb)modalCb(v);}
+
+/* MONACO */
+function initMonaco(){
+  require.config({paths:{vs:'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs'}});
+  require(['vs/editor/editor.main'],function(){
+    monaco.editor.defineTheme('ares',{base:'vs-dark',inherit:true,
+      rules:[{token:'comment',foreground:'4a5568',fontStyle:'italic'},{token:'keyword',foreground:'f472b6'},{token:'string',foreground:'86efac'},{token:'number',foreground:'fb923c'},{token:'type',foreground:'60a5fa'},{token:'function',foreground:'a78bfa'}],
+      colors:{'editor.background':'#0a0e17','editor.foreground':'#e2e8f0','editor.lineHighlightBackground':'#111827','editorLineNumber.foreground':'#334155','editorLineNumber.activeForeground':'#94a3b8','editor.selectionBackground':'#1e40af55','editorCursor.foreground':'#22d3a5','editorWidget.background':'#111827','editorWidget.border':'#263046','input.background':'#0a0e17','input.foreground':'#e2e8f0','scrollbarSlider.background':'#26304699'}
     });
-    if (!r.ok) {
-      out.textContent += '\nErro: ' + await r.text();
-      setStatus('Erro', 'err');
-      return;
-    }
-    var reader = r.body.getReader();
-    var dec = new TextDecoder();
-    while (true) {
-      var x = await reader.read();
-      if (x.done) break;
-      out.textContent += dec.decode(x.value);
-      term.scrollTop = term.scrollHeight;
-    }
-    out.textContent += '\nConcluido!';
-    term.scrollTop = term.scrollHeight;
-    setStatus('Pronto', 'ok');
-    toast(label, 'ok');
-  } catch (e) {
-    out.textContent += '\nErro: ' + e.message;
-    setStatus('Erro', 'err');
-    toast('Erro: ' + e.message, 'err');
-  }
-}
-
-async function doSearch(q) {
-  var el = document.getElementById('sr-list');
-  try {
-    var r = await fetch(au('/search', 'q=' + encodeURIComponent(q)));
-    if (!r.ok) {
-      el.innerHTML = '<div class="pe">Erro na busca</div>';
-      return;
-    }
-    var res = await r.json();
-    if (!res.length) {
-      el.innerHTML = '<div class="pe">Nenhum resultado</div>';
-      return;
-    }
-    el.innerHTML = res.slice(0, 50).map(function(it) {
-      return '<div class="sr-item" data-sr="' + hEsc(it.file) + '"><div class="sr-f">' + hEsc(it.file) + ':' + it.line + '</div><div class="sr-l">' + hEsc(it.preview) + '</div></div>';
-    }).join('');
-  } catch (e) {
-    el.innerHTML = '<div class="pe">Erro: ' + hEsc(e.message) + '</div>';
-  }
-}
-
-function openFindBar() {
-  document.getElementById('findbar').classList.add('on');
-  document.getElementById('find-in').focus();
-  document.getElementById('find-in').select();
-}
-
-function closeFindBar() {
-  document.getElementById('findbar').classList.remove('on');
-  if (ed) ed.focus();
-}
-
-function findNext() {
-  if (ed) ed.getAction('editor.action.nextMatchFindAction').run();
-}
-
-function findPrev() {
-  if (ed) ed.getAction('editor.action.previousMatchFindAction').run();
-}
-
-function findReplace() {
-  if (ed) ed.getAction('editor.action.startFindReplaceAction').run();
-}
-
-function openModal(title, ph, cb) {
-  modalCb = cb;
-  document.getElementById('modal-title').textContent = title;
-  document.getElementById('modal-in').value = '';
-  document.getElementById('modal-in').placeholder = ph;
-  document.getElementById('modal').classList.add('on');
-  setTimeout(function() { document.getElementById('modal-in').focus(); }, 80);
-}
-
-function closeModal() {
-  document.getElementById('modal').classList.remove('on');
-  modalCb = null;
-}
-
-function confirmModal() {
-  var v = document.getElementById('modal-in').value.trim();
-  if (!v) {
-    toast('Nome não pode estar vazio', 'err');
-    return;
-  }
-  closeModal();
-  if (modalCb) modalCb(v);
-}
-
-function initMonaco() {
-  require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
-  require(['vs/editor/editor.main'], function() {
-    monaco.editor.defineTheme('ares', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [
-        { token: 'comment', foreground: '4a5568', fontStyle: 'italic' },
-        { token: 'keyword', foreground: 'f472b6' },
-        { token: 'string', foreground: '86efac' },
-        { token: 'number', foreground: 'fb923c' },
-        { token: 'type', foreground: '60a5fa' },
-        { token: 'function', foreground: 'a78bfa' }
-      ],
-      colors: {
-        'editor.background': '#0a0e17',
-        'editor.foreground': '#e2e8f0',
-        'editor.lineHighlightBackground': '#111827',
-        'editorLineNumber.foreground': '#334155',
-        'editorLineNumber.activeForeground': '#94a3b8',
-        'editor.selectionBackground': '#1e40af55',
-        'editorCursor.foreground': '#22d3a5',
-        'editorWidget.background': '#111827',
-        'editorWidget.border': '#263046',
-        'input.background': '#0a0e17',
-        'input.foreground': '#e2e8f0',
-        'scrollbarSlider.background': '#26304699'
-      }
+    ed=monaco.editor.create(document.getElementById('editor-wrap'),{
+      theme:'ares',fontSize:14,automaticLayout:true,fontFamily:"'JetBrains Mono',monospace",fontLigatures:true,
+      minimap:{enabled:true,renderCharacters:false,scale:1},scrollBeyondLastLine:false,wordWrap:'off',padding:{top:12},
+      lineNumbers:'on',renderLineHighlight:'all',smoothScrolling:true,cursorBlinking:'smooth',
+      bracketPairColorization:{enabled:true},guides:{bracketPairs:true,indentation:true},
+      formatOnPaste:true,tabSize:2,scrollbar:{verticalScrollbarSize:6,horizontalScrollbarSize:6},suggest:{showKeywords:true,showSnippets:true}
     });
-    ed = monaco.editor.create(document.getElementById('editor-wrap'), {
-      theme: 'ares',
-      fontSize: 14,
-      automaticLayout: true,
-      fontFamily: "'JetBrains Mono', monospace",
-      fontLigatures: true,
-      minimap: { enabled: true, renderCharacters: false, scale: 1 },
-      scrollBeyondLastLine: false,
-      wordWrap: 'off',
-      padding: { top: 12 },
-      lineNumbers: 'on',
-      renderLineHighlight: 'all',
-      smoothScrolling: true,
-      cursorBlinking: 'smooth',
-      bracketPairColorization: { enabled: true },
-      guides: { bracketPairs: true, indentation: true },
-      formatOnPaste: true,
-      tabSize: 2,
-      scrollbar: { verticalScrollbarSize: 6, horizontalScrollbarSize: 6 },
-      suggest: { showKeywords: true, showSnippets: true }
-    });
-    ed.onDidChangeCursorPosition(function() { updateInfo(); });
-    ed.onDidChangeModelContent(function() { updateInfo(); });
-    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, doSave);
-    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, openFindBar);
-    loadTree();
-    setStatus('Pronto', 'ok');
+    ed.onDidChangeCursorPosition(function(){updateInfo();});
+    ed.onDidChangeModelContent(function(){updateInfo();});
+    ed.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS,doSave);
+    ed.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyF,openFindBar);
+    loadTree();setStatus('Pronto','ok');
   });
 }
 
-document.addEventListener('DOMContentLoaded', function() {
-  try {
-    socket = io();
-    socket.on('connect', function() { setStatus('Conectado', 'ok'); });
-    socket.on('disconnect', function() { setStatus('Desconectado', 'err'); });
-  } catch (e) {
-    console.warn('socket:', e);
-  }
+/* BOOT */
+document.addEventListener('DOMContentLoaded',function(){
+  /* socket */
+  try{socket=io();socket.on('connect',function(){setStatus('Conectado','ok');});socket.on('disconnect',function(){setStatus('Desconectado','err');});}catch(e){console.warn('socket:',e);}
 
-  document.getElementById('tree').addEventListener('click', function(e) {
-    var b = e.target.closest('[data-act]');
-    if (!b) return;
-    e.stopPropagation();
-    var a = b.dataset.act;
-    var p = b.dataset.p;
-    if (a === 'dir') toggleDir(p);
-    else if (a === 'open') openFile(p);
-    else if (a === 'dl') dlFile(p);
-    else if (a === 'dup') dupFile(p);
-    else if (a === 'qren') qRename(p);
-    else if (a === 'nfi') doNewFileIn(p);
-    else if (a === 'delf') delFolder(p);
+  /* event delegation — tree */
+  document.getElementById('tree').addEventListener('click',function(e){
+    var b=e.target.closest('[data-act]');if(!b)return;
+    e.stopPropagation();var a=b.dataset.act,p=b.dataset.p;
+    if(a==='dir')toggleDir(p);
+    else if(a==='open')openFile(p);
+    else if(a==='dl')dlFile(p);
+    else if(a==='dup')dupFile(p);
+    else if(a==='qren')qRename(p);
+    else if(a==='nfi')doNewFileIn(p);
+    else if(a==='delf')delFolder(p);
   });
 
-  document.getElementById('tabs-bar').addEventListener('click', function(e) {
-    var c = e.target.closest('[data-tc]');
-    if (c) {
-      e.stopPropagation();
-      closeTab(c.dataset.tc);
-      return;
-    }
-    var o = e.target.closest('[data-to]');
-    if (o) switchTo(o.dataset.to);
+  /* event delegation — tabs */
+  document.getElementById('tabs-bar').addEventListener('click',function(e){
+    var c=e.target.closest('[data-tc]');if(c){e.stopPropagation();closeTab(c.dataset.tc);return;}
+    var o=e.target.closest('[data-to]');if(o)switchTo(o.dataset.to);
   });
 
-  document.getElementById('pkg-list').addEventListener('click', function(e) {
-    var b = e.target.closest('[data-del]');
-    if (b) uninstallPkg(b.dataset.del);
+  /* event delegation — pkg list */
+  document.getElementById('pkg-list').addEventListener('click',function(e){
+    var b=e.target.closest('[data-del]');if(b)uninstallPkg(b.dataset.del);
   });
 
-  document.getElementById('sr-list').addEventListener('click', function(e) {
-    var b = e.target.closest('[data-sr]');
-    if (b) openFile(b.dataset.sr);
+  /* event delegation — search results */
+  document.getElementById('sr-list').addEventListener('click',function(e){
+    var b=e.target.closest('[data-sr]');if(b)openFile(b.dataset.sr);
   });
 
-  document.getElementById('find-in').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-      e.shiftKey ? findPrev() : findNext();
-    }
-    if (e.key === 'Escape') closeFindBar();
+  /* find bar */
+  document.getElementById('find-in').addEventListener('keydown',function(e){
+    if(e.key==='Enter'){e.shiftKey?findPrev():findNext();}if(e.key==='Escape')closeFindBar();
   });
 
-  document.getElementById('modal-in').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') confirmModal();
-    if (e.key === 'Escape') closeModal();
+  /* modal */
+  document.getElementById('modal-in').addEventListener('keydown',function(e){if(e.key==='Enter')confirmModal();if(e.key==='Escape')closeModal();});
+  document.getElementById('modal').addEventListener('click',function(e){if(e.target===this)closeModal();});
+  document.getElementById('modal-upload').addEventListener('click',function(e){if(e.target===this)closeUploadModal();});
+
+  /* pkg enter */
+  document.getElementById('pkg-in').addEventListener('keydown',function(e){if(e.key==='Enter')installPkg();});
+
+  /* search */
+  var srT=null;
+  document.getElementById('search-in').addEventListener('input',function(){
+    clearTimeout(srT);var q=this.value.trim(),el=document.getElementById('sr-list');
+    if(!q){el.innerHTML='<div class="pe">Digite para buscar...</div>';return;}
+    el.innerHTML='<div class="pe">Buscando...</div>';
+    srT=setTimeout(function(){doSearch(q);},300);
   });
 
-  document.getElementById('modal').addEventListener('click', function(e) {
-    if (e.target === this) closeModal();
-  });
-
-  document.getElementById('modal-upload').addEventListener('click', function(e) {
-    if (e.target === this) closeUploadModal();
-  });
-
-  document.getElementById('pkg-in').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') installPkg();
-  });
-
-  var srT = null;
-  document.getElementById('search-in').addEventListener('input', function() {
-    clearTimeout(srT);
-    var q = this.value.trim();
-    var el = document.getElementById('sr-list');
-    if (!q) {
-      el.innerHTML = '<div class="pe">Digite para buscar...</div>';
-      return;
-    }
-    el.innerHTML = '<div class="pe">Buscando...</div>';
-    srT = setTimeout(function() { doSearch(q); }, 300);
-  });
-
-  document.getElementById('upload-input').addEventListener('change', function(e) {
-    uploadFiles(Array.from(e.target.files));
-    e.target.value = '';
-  });
-
-  document.getElementById('upl2').addEventListener('change', function(e) {
-    uploadFiles(Array.from(e.target.files));
-    e.target.value = '';
-  });
-
-  document.getElementById('dz').addEventListener('click', function(e) {
-    if (e.target === this || e.target.tagName !== 'INPUT') document.getElementById('upl2').click();
-  });
-
-  document.getElementById('dz').addEventListener('dragover', function(e) {
-    e.preventDefault();
-    this.classList.add('over');
-  });
-
-  document.getElementById('dz').addEventListener('dragleave', function() {
-    this.classList.remove('over');
-  });
-
-  document.getElementById('dz').addEventListener('drop', async function(e) {
-    e.preventDefault();
-    this.classList.remove('over');
-    await uploadFiles(Array.from(e.dataTransfer.files));
-  });
+  /* upload */
+  document.getElementById('upload-input').addEventListener('change',function(e){uploadFiles(Array.from(e.target.files));e.target.value='';});
+  document.getElementById('upl2').addEventListener('change',function(e){uploadFiles(Array.from(e.target.files));e.target.value='';});
+  document.getElementById('dz').addEventListener('click',function(e){if(e.target===this||e.target.tagName!=='INPUT')document.getElementById('upl2').click();});
+  document.getElementById('dz').addEventListener('dragover',function(e){e.preventDefault();this.classList.add('over');});
+  document.getElementById('dz').addEventListener('dragleave',function(){this.classList.remove('over');});
+  document.getElementById('dz').addEventListener('drop',async function(e){e.preventDefault();this.classList.remove('over');await uploadFiles(Array.from(e.dataTransfer.files));});
 
   initMonaco();
 });
@@ -2432,6 +1976,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </body>
 </html>`;
 }
+
 
 app.use("/files-api", authBot, (req, res, next) => {
   const rawUrl = req.originalUrl.split("?")[0]
@@ -2478,16 +2023,11 @@ app.use("/files-api", authBot, (req, res, next) => {
     const fp = safe(req.body && req.body.path)
     if (!fp) return res.status(400).send("Caminho inválido. Recebido: " + JSON.stringify(req.body))
     try {
-      const dir = path.dirname(fp)
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
-      }
+      fs.mkdirSync(path.dirname(fp), { recursive: true, mode: 0o755 })
       fs.writeFileSync(fp, (req.body && req.body.content) || "", "utf8")
       saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
-    } catch (err) { 
-      return res.status(500).send("Erro ao escrever: " + err.message) 
-    }
+    } catch (err) { return res.status(500).send("Erro ao escrever: " + err.message) }
   }
 
   if (action === "/delete") {
