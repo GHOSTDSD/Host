@@ -35,24 +35,57 @@ app.use(express.json({ limit: "50mb" }))
 app.use(express.urlencoded({ extended: true, limit: "50mb" }))
 app.use(express.static("public"))
 
-const BUCKET_CONFIG = {
-  endpoint: process.env.BUCKET_ENDPOINT || "https://t3.storageapi.dev",
-  region: process.env.BUCKET_REGION || "auto",
-  credentials: {
-    accessKeyId: process.env.BUCKET_ACCESS_KEY_ID || "tid_fJEjO_LbZVrFtJEwWHkcSqT_IxIwYsahKIyqSlegejHUTbNNHB",
-    secretAccessKey: process.env.BUCKET_SECRET_ACCESS_KEY || "tsec_IjNC_oqgdq7-F9o067zq0C+h2INzkP8Ns-WbaU3vnu+gfUM49IbVMJHgaAeSG3GHNBml-L",
+const BUCKETS = [
+  {
+    bucketName: "assembled-pannier-fd6o1qb",
+    endpoint: "https://t3.storageapi.dev",
+    region: "auto",
+    credentials: {
+      accessKeyId: "tid_fJEjO_LbZVrFtJEwWHkcSqT_IxIwYsahKIyqSlegejHUTbNNHB",
+      secretAccessKey: "tsec_IjNC_oqgdq7-F9o067zq0C+h2INzkP8Ns-WbaU3vnu+gfUM49IbVMJHgaAeSG3GHNBml-L",
+    }
   },
-  bucketName: process.env.BUCKET_NAME || "assembled-pannier-fd6o1qb"
+  {
+    bucketName: "arranged-folder-su125mhv0",
+    endpoint: "https://t3.storageapi.dev",
+    region: "auto",
+    credentials: {
+      accessKeyId: "tid_dEBpaNfQwNQwXKIMrDhMkPyYMIFNdjyiwUczkkEsVWHuenafsu",
+      secretAccessKey: "tsec_BzBVUGlcoPVfCI3_KqmRYQJR071fx2RY9Nzepvdz8mHxCzlOpvZb26gfrVhdurAeJDSi_Q",
+    }
+  },
+  {
+    bucketName: "practical-lunchbox-q6wejg",
+    endpoint: "https://t3.storageapi.dev",
+    region: "auto",
+    credentials: {
+      accessKeyId: "tid_g_lyTcQlTTXwyPBLXrrvOaVTVTUJzwxaOzNrVvaesOBlfttSEO",
+      secretAccessKey: "tsec_VC92A93_brFk+9gUOPmEg8Q3e6bG2AWiY_vMfEqBJl84jee-l_2RMboQXTzqj2E5EYDuqN",
+    }
+  },
+  {
+    bucketName: "reserved-pail-1dm-clece3t",
+    endpoint: "https://t3.storageapi.dev",
+    region: "auto",
+    credentials: {
+      accessKeyId: "tid_huPrSUpYYNCWKTGaLxdPQWCrvxPbnudxZEDDWpnmspUXRvEonP",
+      secretAccessKey: "tsec_2ra4rKw72iBQ+PIewNBnzZmyhUoFWAu7nSG-ataRyuzmAkkm6xTKClyCWERD0+W1vuz+xR",
+    }
+  }
+]
+
+const s3Clients = BUCKETS.map(b => ({
+  ...b,
+  client: new S3Client({ endpoint: b.endpoint, region: b.region, credentials: b.credentials, forcePathStyle: true })
+}))
+
+function getBucketForBot(botId) {
+  let hash = 0
+  for (let i = 0; i < botId.length; i++) hash = (hash * 31 + botId.charCodeAt(i)) >>> 0
+  return s3Clients[hash % s3Clients.length]
 }
 
-console.log("✅ Storage Bucket configurado:", BUCKET_CONFIG.bucketName)
-
-const s3Client = new S3Client({
-  endpoint: BUCKET_CONFIG.endpoint,
-  region: BUCKET_CONFIG.region,
-  credentials: BUCKET_CONFIG.credentials,
-  forcePathStyle: true
-})
+console.log("✅ " + s3Clients.length + " buckets configurados (load balance por bot)")
 
 const BASE_PATH = path.resolve(process.cwd(), "instances")
 console.log("📁 BASE_PATH:", BASE_PATH)
@@ -247,7 +280,7 @@ function aresBanner() {
 💾 RAM: ${s.ram}MB
 ⏱ UPTIME: ${s.uptime}
 💿 DISCO: ${diskUsage}
-☁️  BUCKET: ${BUCKET_CONFIG.bucketName}\n`)
+☁️  BUCKETS: ${s3Clients.map(b => b.bucketName).join(", ")}\n`)
 }
 
 function getPackageHash(packagePath) {
@@ -259,8 +292,9 @@ function getPackageHash(packagePath) {
 
 async function checkNodeModulesInBucket(botId, packageHash) {
   try {
-    await s3Client.send(new HeadObjectCommand({
-      Bucket: BUCKET_CONFIG.bucketName,
+    const { client, bucketName } = getBucketForBot(botId)
+    await client.send(new HeadObjectCommand({
+      Bucket: bucketName,
       Key: `${botId}_${packageHash}.tar.gz`
     }))
     return true
@@ -276,8 +310,9 @@ async function uploadNodeModulesToBucket(botId, nodeModulesPath, packageHash) {
   try {
     if (activeBots[botId]) writeLog(botId, path.dirname(nodeModulesPath), "📦 Compactando node_modules...\r\n")
     await tar.c({ gzip: true, file: tarballPath, cwd: path.dirname(nodeModulesPath) }, [path.basename(nodeModulesPath)])
-    await s3Client.send(new PutObjectCommand({
-      Bucket: BUCKET_CONFIG.bucketName,
+    const { client: nmClient, bucketName: nmBucket } = getBucketForBot(botId)
+    await nmClient.send(new PutObjectCommand({
+      Bucket: nmBucket,
       Key: `${botId}_${packageHash}.tar.gz`,
       Body: fs.createReadStream(tarballPath),
       ContentType: "application/gzip"
@@ -297,8 +332,9 @@ async function downloadNodeModulesFromBucket(botId, targetPath, packageHash) {
   const tarballPath = path.join(os.tmpdir(), `${botId}_${packageHash}.tar.gz`)
   try {
     if (activeBots[botId]) writeLog(botId, targetPath, "📥 Baixando node_modules do bucket...\r\n")
-    const response = await s3Client.send(new GetObjectCommand({
-      Bucket: BUCKET_CONFIG.bucketName,
+    const { client: dlClient, bucketName: dlBucket } = getBucketForBot(botId)
+    const response = await dlClient.send(new GetObjectCommand({
+      Bucket: dlBucket,
       Key: `${botId}_${packageHash}.tar.gz`
     }))
     await new Promise((resolve, reject) => {
@@ -323,8 +359,9 @@ async function saveBotFilesToBucket(botId) {
     const entries = fs.readdirSync(botPath).filter(f => f !== "node_modules" && f !== "terminal.log")
     if (entries.length === 0) return false
     await tar.c({ gzip: true, file: tarballPath, cwd: botPath }, entries)
-    await s3Client.send(new PutObjectCommand({
-      Bucket: BUCKET_CONFIG.bucketName,
+    const { client: saveClient, bucketName: saveBucket } = getBucketForBot(botId)
+    await saveClient.send(new PutObjectCommand({
+      Bucket: saveBucket,
       Key: `files_${botId}.tar.gz`,
       Body: fs.createReadStream(tarballPath),
       ContentType: "application/gzip"
@@ -343,8 +380,9 @@ async function restoreBotFilesFromBucket(botId) {
   const botPath = path.join(BASE_PATH, botId)
   const tarballPath = path.join(os.tmpdir(), `files_${botId}.tar.gz`)
   try {
-    const response = await s3Client.send(new GetObjectCommand({
-      Bucket: BUCKET_CONFIG.bucketName,
+    const { client: restoreClient, bucketName: restoreBucket } = getBucketForBot(botId)
+    const response = await restoreClient.send(new GetObjectCommand({
+      Bucket: restoreBucket,
       Key: `files_${botId}.tar.gz`
     }))
     if (!fs.existsSync(botPath)) fs.mkdirSync(botPath, { recursive: true, mode: 0o755 })
@@ -366,15 +404,21 @@ async function restoreBotFilesFromBucket(botId) {
 
 async function listBotsInBucket() {
   try {
-    const response = await s3Client.send(new ListObjectsV2Command({
-      Bucket: BUCKET_CONFIG.bucketName,
-      Prefix: "files_"
-    }))
-    return (response.Contents || [])
-      .map(o => o.Key.replace("files_", "").replace(".tar.gz", ""))
-      .filter(Boolean)
+    const allBots = []
+    for (const { client, bucketName } of s3Clients) {
+      try {
+        const response = await client.send(new ListObjectsV2Command({ Bucket: bucketName, Prefix: "files_" }))
+        const bots = (response.Contents || [])
+          .map(o => o.Key.replace("files_", "").replace(".tar.gz", ""))
+          .filter(Boolean)
+        allBots.push(...bots)
+      } catch (e) {
+        console.error("Erro ao listar bucket " + bucketName + ":", e.message)
+      }
+    }
+    return [...new Set(allBots)]
   } catch (err) {
-    console.error("Erro ao listar bots no bucket:", err.message)
+    console.error("Erro ao listar bots nos buckets:", err.message)
     return []
   }
 }
