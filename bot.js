@@ -884,8 +884,22 @@ bot.on("callback_query", async query => {
     const confirmChatId = id || chatId
     if (String(chatId) !== String(confirmChatId)) return
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-    bot.editMessageText("🧹 Limpando...", { chat_id: chatId, message_id: msgId })
+
+    bot.editMessageText("🧹 Parando bots e limpando...", { chat_id: chatId, message_id: msgId })
+
     try {
+      // 1. Parar todos os bots ativos
+      const botIds = Object.keys(activeBots)
+      let stopped = 0
+      for (const bid of botIds) {
+        try {
+          activeBots[bid].process.kill()
+          delete activeBots[bid]
+          stopped++
+        } catch (e) {}
+      }
+
+      // 2. Limpar arquivos em disco
       let count = 0, nmCount = 0, logCount = 0, tmpCount = 0
       if (fs.existsSync(BASE_PATH)) {
         const entries = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_users" && f !== ".git")
@@ -896,32 +910,39 @@ bot.on("callback_query", async query => {
             const nmPath = path.join(fullPath, "node_modules")
             const logPath = path.join(fullPath, "terminal.log")
             const botZip = path.join(fullPath, "bot.zip")
-            if (fs.existsSync(nmPath)) {
-              fs.rmSync(nmPath, { recursive: true, force: true })
-              nmCount++
-            }
-            if (fs.existsSync(logPath)) {
-              fs.unlinkSync(logPath)
-              logCount++
-            }
-            if (fs.existsSync(botZip)) {
-              fs.unlinkSync(botZip)
-              tmpCount++
-            }
+            if (fs.existsSync(nmPath)) { fs.rmSync(nmPath, { recursive: true, force: true }); nmCount++ }
+            if (fs.existsSync(logPath)) { fs.unlinkSync(logPath); logCount++ }
+            if (fs.existsSync(botZip)) { fs.unlinkSync(botZip); tmpCount++ }
             count++
           } catch (e) {
             console.error("Erro ao limpar", entry, e.message)
           }
         }
       }
+
+      // 3. Reiniciar os bots que estavam rodando
+      let restarted = 0
+      for (const bid of botIds) {
+        const instancePath = path.join(BASE_PATH, bid)
+        if (fs.existsSync(instancePath)) {
+          setTimeout(() => {
+            spawnBot(bid, instancePath)
+          }, restarted * 2000)
+          restarted++
+        }
+      }
+
       const diskAfter = getDiskPercent()
+      const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
+
       return bot.editMessageText(
         `✅ *Limpeza concluída!*\n\n` +
-        `📁 Instâncias: ${count}\n` +
-        `📦 node\\_modules removidos: ${nmCount}\n` +
-        `📋 Logs removidos: ${logCount}\n` +
-        `🗜️ ZIPs removidos: ${tmpCount}\n\n` +
-        `💿 Disco atual: ${diskAfter}%`,
+        `🛑 Bots parados: *${stopped}*\n` +
+        `📦 node\\_modules: *${nmCount}*\n` +
+        `📋 Logs: *${logCount}*\n` +
+        `🗜️ ZIPs: *${tmpCount}*\n` +
+        `♻️ Reiniciando: *${restarted}* bots\n\n` +
+        `💿 Disco: *${diskAfter}%*  |  💾 RAM: *${ramAfter}MB*`,
         { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
     } catch (err) {
