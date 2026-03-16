@@ -1030,27 +1030,171 @@ bot.on("message", async msg => {
   }
 })
 
+async function buildStartCard(user, stats, act) {
+  const sharp = require("sharp")
+
+  // Card dimensions
+  const W = 800, H = 240
+  const AVATAR_SIZE = 100
+  const AVATAR_X = 52, AVATAR_Y = 70
+  const RADIUS = 24
+
+  // Colors
+  const BG     = "#111318"
+  const BG2    = "#1a1e28"
+  const BORDER = "#2a2f3a"
+  const TX     = "#e4e8f0"
+  const TX2    = "#8a95a8"
+  const TX3    = "#4e5a6e"
+  const BLUE   = "#4d8ef5"
+  const GREEN  = "#34d17a"
+  const ORANGE = "#f5a623"
+  const RED    = "#ef4444"
+
+  // Expiry info
+  let expiryText = ""
+  let expiryColor = TX3
+  if (act && act.expiresAt) {
+    const left = daysLeft(act.expiresAt)
+    if (left <= 0)      { expiryText = "Acesso expirado";              expiryColor = RED }
+    else if (left <= 7) { expiryText = `Expira em ${left} dias`;       expiryColor = ORANGE }
+    else                { expiryText = `Válido até ${fmtExpiry(act.expiresAt)}`; expiryColor = GREEN }
+  }
+
+  // User info
+  const fullName = user ? (((user.first_name||"") + " " + (user.last_name||"")).trim() || "Usuário") : "Usuário"
+  const username  = user ? (user.username ? `@${user.username}` : "") : ""
+
+  // Escape XML special chars for SVG
+  const xe = s => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")
+
+  // Build SVG (no avatar yet — will composite)
+  const svg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="card"><rect x="0" y="0" width="${W}" height="${H}" rx="${RADIUS}" ry="${RADIUS}"/></clipPath>
+    <clipPath id="av"><circle cx="${AVATAR_X + AVATAR_SIZE/2}" cy="${AVATAR_Y + AVATAR_SIZE/2}" r="${AVATAR_SIZE/2}"/></clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="${W}" height="${H}" rx="${RADIUS}" ry="${RADIUS}" fill="${BG}"/>
+
+  <!-- Top accent bar -->
+  <rect x="0" y="0" width="${W}" height="4" rx="0" fill="${BLUE}" clip-path="url(#card)"/>
+
+  <!-- Avatar circle bg -->
+  <circle cx="${AVATAR_X + AVATAR_SIZE/2}" cy="${AVATAR_Y + AVATAR_SIZE/2}" r="${AVATAR_SIZE/2 + 3}" fill="${BG2}"/>
+  <circle cx="${AVATAR_X + AVATAR_SIZE/2}" cy="${AVATAR_Y + AVATAR_SIZE/2}" r="${AVATAR_SIZE/2 + 3}" fill="none" stroke="${BORDER}" stroke-width="1.5"/>
+
+  <!-- ARES label top-right -->
+  <text x="${W - 24}" y="32" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="${TX3}" text-anchor="end" letter-spacing="2">ARES HOST</text>
+
+  <!-- Name -->
+  <text x="${AVATAR_X + AVATAR_SIZE + 24}" y="${AVATAR_Y + 38}" font-family="Inter, sans-serif" font-size="26" font-weight="700" fill="${TX}" letter-spacing="-0.5">${xe(fullName)}</text>
+
+  <!-- Username -->
+  ${username ? `<text x="${AVATAR_X + AVATAR_SIZE + 24}" y="${AVATAR_Y + 62}" font-family="Inter, sans-serif" font-size="15" fill="${TX2}">${xe(username)}</text>` : ""}
+
+  <!-- Expiry -->
+  ${expiryText ? `<text x="${AVATAR_X + AVATAR_SIZE + 24}" y="${AVATAR_Y + 86}" font-family="Inter, sans-serif" font-size="13" fill="${expiryColor}">${xe(expiryText)}</text>` : ""}
+
+  <!-- Divider -->
+  <line x1="24" y1="${H - 68}" x2="${W - 24}" y2="${H - 68}" stroke="${BORDER}" stroke-width="1"/>
+
+  <!-- Stats row -->
+  <text x="32" y="${H - 40}" font-family="Inter, sans-serif" font-size="13" fill="${TX3}">Bots</text>
+  <text x="32" y="${H - 22}" font-family="Inter, sans-serif" font-size="16" font-weight="700" fill="${TX}">${xe(String(stats.total))}</text>
+
+  <text x="110" y="${H - 40}" font-family="Inter, sans-serif" font-size="13" fill="${TX3}">Online</text>
+  <circle cx="108" cy="${H - 43}" r="4" fill="${GREEN}"/>
+  <text x="110" y="${H - 22}" font-family="Inter, sans-serif" font-size="16" font-weight="700" fill="${GREEN}">${xe(String(stats.online))}</text>
+
+  <text x="200" y="${H - 40}" font-family="Inter, sans-serif" font-size="13" fill="${TX3}">Offline</text>
+  <circle cx="198" cy="${H - 43}" r="4" fill="${RED}"/>
+  <text x="200" y="${H - 22}" font-family="Inter, sans-serif" font-size="16" font-weight="700" fill="${RED}">${xe(String(stats.offline))}</text>
+
+  <text x="300" y="${H - 40}" font-family="Inter, sans-serif" font-size="13" fill="${TX3}">RAM</text>
+  <text x="300" y="${H - 22}" font-family="Inter, sans-serif" font-size="16" font-weight="700" fill="${TX}">${xe(stats.ram)}<tspan font-size="11" fill="${TX3}">MB</tspan></text>
+
+  <text x="390" y="${H - 40}" font-family="Inter, sans-serif" font-size="13" fill="${TX3}">Uptime</text>
+  <text x="390" y="${H - 22}" font-family="Inter, sans-serif" font-size="16" font-weight="700" fill="${TX}">${xe(stats.uptime)}</text>
+</svg>`
+
+  const cardBuf = await sharp(Buffer.from(svg)).png().toBuffer()
+
+  // Try to fetch and composite avatar
+  try {
+    const photos = await bot.getUserProfilePhotos(user?.id || 0, { limit: 1 })
+    if (photos && photos.total_count > 0) {
+      const fileId  = photos.photos[0][photos.photos[0].length - 1].file_id
+      const fileObj = await bot.getFile(fileId)
+      const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${fileObj.file_path}`
+
+      // Download avatar
+      const avatarBuf = await new Promise((resolve, reject) => {
+        const https = require("https")
+        const chunks = []
+        https.get(fileUrl, res => {
+          res.on("data", c => chunks.push(c))
+          res.on("end", () => resolve(Buffer.concat(chunks)))
+          res.on("error", reject)
+        }).on("error", reject)
+      })
+
+      // Crop to circle
+      const size = AVATAR_SIZE
+      const circleMask = Buffer.from(
+        `<svg width="${size}" height="${size}"><circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="white"/></svg>`
+      )
+      const avatarCircle = await sharp(avatarBuf)
+        .resize(size, size, { fit: "cover" })
+        .composite([{ input: circleMask, blend: "dest-in" }])
+        .png()
+        .toBuffer()
+
+      return sharp(cardBuf)
+        .composite([{ input: avatarCircle, left: AVATAR_X, top: AVATAR_Y }])
+        .png()
+        .toBuffer()
+    }
+  } catch (e) {
+    console.error("Avatar composite error:", e.message)
+  }
+
+  // No avatar — draw initials circle
+  const initials = (fullName.split(" ").map(w => w[0]).join("").slice(0, 2)).toUpperCase()
+  const initSvg = `<svg width="${AVATAR_SIZE}" height="${AVATAR_SIZE}" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="${AVATAR_SIZE/2}" cy="${AVATAR_SIZE/2}" r="${AVATAR_SIZE/2}" fill="${BG2}"/>
+    <circle cx="${AVATAR_SIZE/2}" cy="${AVATAR_SIZE/2}" r="${AVATAR_SIZE/2}" fill="none" stroke="${BLUE}" stroke-width="2"/>
+    <text x="${AVATAR_SIZE/2}" y="${AVATAR_SIZE/2 + 10}" font-family="Inter,sans-serif" font-size="30" font-weight="700" fill="${TX}" text-anchor="middle">${xe(initials)}</text>
+  </svg>`
+
+  return sharp(cardBuf)
+    .composite([{ input: Buffer.from(initSvg), left: AVATAR_X, top: AVATAR_Y }])
+    .png()
+    .toBuffer()
+}
+
 async function sendStartMessage(chatId, msgId, mode, fromUser) {
-  const s = getStats(chatId)
+  const s   = getStats(chatId)
   const act = await getUserActivation(chatId)
 
   let expiryLine = ""
   if (act && act.expiresAt) {
     const left = daysLeft(act.expiresAt)
-    if (left <= 0) expiryLine = `\n⛔ Acesso expirado`
+    if (left <= 0)      expiryLine = `\n⛔ Acesso expirado`
     else if (left <= 7) expiryLine = `\n⚠️ Expira em *${left} dias* (${fmtExpiry(act.expiresAt)})`
-    else expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
+    else                expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
   }
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-      [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-      [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
+      [{ text: "➕ Novo Bot",      callback_data: "menu_new"   }],
+      [{ text: "📂 Meus Bots",     callback_data: "menu_list"  }],
+      [{ text: "📊 Estatísticas",  callback_data: "menu_stats" }],
     ]
   }
 
-  // mode "edit" = editMessageText (sem foto, vindo de botão)
+  // Botão Voltar apenas edita texto
   if (mode === "edit") {
     return bot.editMessageText(
       `🚀 *ARES HOST*${expiryLine}\n\n` +
@@ -1060,39 +1204,24 @@ async function sendStartMessage(chatId, msgId, mode, fromUser) {
     ).catch(() => {})
   }
 
-  // mode null = envio novo com foto
-  const user = fromUser || null
-  let nameLine = "ARES HOST"
-  let userLine = ""
-  if (user) {
-    const fn = ((user.first_name || "") + " " + (user.last_name || "")).trim()
-    nameLine = fn || "ARES HOST"
-    userLine = user.username ? `@${user.username}` : `ID: ${chatId}`
+  // Gerar card como imagem
+  try {
+    const cardBuf = await buildStartCard(fromUser, s, act)
+    return bot.sendPhoto(chatId, cardBuf, {
+      caption: "",
+      reply_markup: keyboard
+    })
+  } catch (e) {
+    console.error("buildStartCard error:", e.message)
   }
 
-  const caption =
-    (nameLine ? `*${nameLine}*\n` : "") +
-    (userLine ? `${userLine}\n` : "") +
-    expiryLine + (expiryLine ? "\n" : "") +
-    `\n🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`
-
-  // Try send with profile photo
-  try {
-    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
-    if (photos && photos.total_count > 0) {
-      const fileId = photos.photos[0][photos.photos[0].length - 1].file_id
-      return bot.sendPhoto(chatId, fileId, {
-        caption,
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      })
-    }
-  } catch (e) {}
-
-  // Fallback sem foto
+  // Fallback texto
+  const fn = fromUser ? (((fromUser.first_name||"") + " " + (fromUser.last_name||"")).trim()) : ""
+  const un = fromUser?.username ? `@${fromUser.username}` : ""
   return bot.sendMessage(chatId,
-    `🚀 *${nameLine}*\n` + (userLine ? userLine + "\n" : "") +
+    `🚀 *ARES HOST*\n` +
+    (fn ? `*${fn}*\n` : "") +
+    (un ? `${un}\n` : "") +
     expiryLine + (expiryLine ? "\n" : "") +
     `\n🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
     `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
