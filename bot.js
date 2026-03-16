@@ -36,7 +36,6 @@ app.use(express.json({ limit: "50mb" }))
 app.use(express.urlencoded({ extended: true, limit: "50mb" }))
 app.use(express.static("public"))
 
-// Configuração do MongoDB
 const MONGODB_URI = "mongodb+srv://topgamesnetinho50_db_user:FF85CFtb73FsedX@np.v7l8dow.mongodb.net/?retryWrites=true&w=majority&appName=NP"
 
 let db = null
@@ -59,7 +58,6 @@ async function connectMongoDB() {
     dbClient = client
     db = client.db("ares_host")
     
-    // Criar índices para melhor performance
     await db.collection("users").createIndex({ chatId: 1 }, { unique: true })
     await db.collection("keys").createIndex({ key: 1 }, { unique: true })
     await db.collection("keys").createIndex({ usedBy: 1 })
@@ -73,10 +71,8 @@ async function connectMongoDB() {
   }
 }
 
-// Chamar conexão MongoDB
 connectMongoDB()
 
-// Configuração do bucket Backblaze B2 (apenas 1 bucket)
 const BUCKET_CONFIG = {
   bucketName: process.env.BUCKET_NAME,
   endpoint: process.env.BUCKET_ENDPOINT || "https://s3.us-east-005.backblazeb2.com",
@@ -92,7 +88,6 @@ if (!BUCKET_CONFIG.bucketName || !BUCKET_CONFIG.credentials.accessKeyId || !BUCK
   process.exit(1)
 }
 
-// Cliente S3 único
 const s3Client = new S3Client({ 
   endpoint: BUCKET_CONFIG.endpoint, 
   region: BUCKET_CONFIG.region, 
@@ -661,13 +656,9 @@ function saveAccepted(chatId) {
   fs.writeFileSync(f, JSON.stringify({ accepted: true, at: Date.now() }))
 }
 
-// ─── SISTEMA DE ATIVAÇÃO COM MONGODB ─────────────────────────────
-
-// Collections MongoDB
 const KEYS_COLLECTION = "keys"
 const USERS_COLLECTION = "users"
 
-// Carregar todas as chaves ativas do MongoDB
 async function loadActiveKeys() {
   try {
     if (!db) return {}
@@ -681,11 +672,9 @@ async function loadActiveKeys() {
   }
 }
 
-// Salvar chave no MongoDB
 async function saveActiveKeys(data) {
   try {
     if (!db) return
-    // Converter objeto para array e salvar
     const keysArray = Object.entries(data).map(([key, value]) => ({
       key,
       ...value,
@@ -704,7 +693,6 @@ async function saveActiveKeys(data) {
   }
 }
 
-// Carregar usuários ativados do MongoDB
 async function loadActivated() {
   try {
     if (!db) return {}
@@ -718,7 +706,6 @@ async function loadActivated() {
   }
 }
 
-// Salvar usuário no MongoDB
 async function saveActivated(data) {
   try {
     if (!db) return
@@ -740,13 +727,11 @@ async function saveActivated(data) {
   }
 }
 
-// Verificar se usuário está ativado (com cache em memória)
 const activatedCache = new Map()
-const CACHE_TTL = 5 * 60 * 1000 // 5 minutos
+const CACHE_TTL = 5 * 60 * 1000
 
 async function isActivated(chatId) {
   try {
-    // Verificar cache
     if (activatedCache.has(chatId)) {
       const cached = activatedCache.get(chatId)
       if (Date.now() - cached.timestamp < CACHE_TTL) {
@@ -763,7 +748,6 @@ async function isActivated(chatId) {
       return false
     }
     
-    // Verificar expiração
     if (user.expiresAt && user.expiresAt < Date.now()) {
       activatedCache.set(chatId, { activated: false, timestamp: Date.now() })
       return false
@@ -797,12 +781,13 @@ async function activateUser(chatId, key, daysValid) {
       { upsert: true }
     )
     
-    // Atualizar cache
     activatedCache.set(chatId, { activated: true, timestamp: Date.now() })
     
     console.log(`✅ Usuário ${chatId} ativado até ${new Date(expiresAt).toLocaleString()}`)
+    return true
   } catch (error) {
     console.error("Erro ao ativar usuário:", error)
+    return false
   }
 }
 
@@ -825,7 +810,7 @@ function fmtExpiry(ts) {
 function daysLeft(ts) {
   if (!ts) return null
   const diff = Math.ceil((ts - Date.now()) / (1000 * 60 * 60 * 24))
-  return diff
+  return diff > 0 ? diff : 0
 }
 
 function generateKey(prefix) {
@@ -834,7 +819,6 @@ function generateKey(prefix) {
   const block2 = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
   return `${prefix}-${block1}-${block2}`
 }
-// ──────────────────────────────────────────────────────────────────
 
 const TERMOS_TEXTO = `📋 *Termos de Uso — ARES HOST*
 
@@ -1014,6 +998,21 @@ bot.onText(/^\/reiniciar$/, async msg => {
 
 bot.onText(/\/start/, async msg => {
   const chatId = msg.chat.id
+  
+  if (!await isActivated(chatId)) {
+    return bot.sendMessage(chatId,
+      "🔑 *Acesso Restrito*\n\nVocê precisa ativar sua conta para usar o ARES HOST.\n\nUse /active para obter uma chave de ativação.",
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔑 Ativar Conta", callback_data: "active" }]
+          ]
+        }
+      }
+    )
+  }
+  
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
@@ -1023,13 +1022,11 @@ bot.onText(/\/start/, async msg => {
   const act = await getUserActivation(chatId)
   const user = msg.from
 
-  // Build name line
   const firstName = user.first_name || ""
   const lastName = user.last_name || ""
   const fullName = (firstName + " " + lastName).trim()
   const username = user.username ? `@${user.username}` : `ID: ${chatId}`
 
-  // Build expiry line
   let expiryLine = ""
   if (act && act.expiresAt) {
     const left = daysLeft(act.expiresAt)
@@ -1058,7 +1055,6 @@ bot.onText(/\/start/, async msg => {
     ]
   }
 
-  // Try to get user profile photo
   try {
     const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
     if (photos && photos.total_count > 0) {
@@ -1071,7 +1067,6 @@ bot.onText(/\/start/, async msg => {
     }
   } catch (e) {}
 
-  // Fallback sem foto
   bot.sendMessage(chatId,
     `🚀 *ARES HOST*\n\n` + caption,
     { parse_mode: "Markdown", reply_markup: keyboard }
@@ -1154,10 +1149,19 @@ function extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg) {
 
 bot.on("document", async msg => {
   const chatId = msg.chat.id
+  
+  if (!await isActivated(chatId)) {
+    return bot.sendMessage(chatId,
+      "🔑 *Acesso Restrito*\n\nVocê precisa ativar sua conta para usar o ARES HOST.\n\nUse /active para obter uma chave de ativação.",
+      { parse_mode: "Markdown" }
+    )
+  }
+  
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
   }
+  
   if (!msg.document.file_name.toLowerCase().endsWith(".zip")) {
     return bot.sendMessage(chatId, "⚠️ *Arquivo invalido!*\n\nEnvie um arquivo .zip com o codigo do bot.", { parse_mode: "Markdown" })
   }
@@ -1172,10 +1176,16 @@ bot.on("document", async msg => {
 bot.on("message", async msg => {
   if (msg.document || msg.text?.startsWith("/")) return
   const chatId = msg.chat.id
+  
+  if (!await isActivated(chatId)) {
+    return
+  }
+  
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
   }
+  
   const state = userState[chatId]
   if (!state || (!state.fileId && !state.linkUrl)) {
     const text = msg.text?.trim() || ""
@@ -1229,6 +1239,21 @@ bot.on("callback_query", async query => {
   const action = colonIdx === -1 ? data : data.slice(0, colonIdx)
   const id = colonIdx === -1 ? null : data.slice(colonIdx + 1)
   bot.answerCallbackQuery(query.id)
+
+  if (!await isActivated(chatId) && !["active", "termo_check", "termo_confirmar"].includes(action) && !(OWNER_ID && String(chatId) === String(OWNER_ID))) {
+    bot.deleteMessage(chatId, msgId).catch(() => {})
+    return bot.sendMessage(chatId,
+      "🔑 *Acesso Restrito*\n\nSua sessão expirou ou você não está ativado.\n\nUse /active para ativar sua conta.",
+      { parse_mode: "Markdown" }
+    )
+  }
+
+  if (action === "active") {
+    return bot.sendMessage(chatId,
+      "🔑 *Ativação do ARES HOST*\n\nUse /active para obter sua chave de ativação.",
+      { parse_mode: "Markdown" }
+    )
+  }
 
   if (action === "limpar_local" || action === "owner_limpar_confirm") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
@@ -1358,6 +1383,7 @@ bot.on("callback_query", async query => {
     termoCheck[chatId] = nowChecked
     return editTermos(chatId, msgId, nowChecked)
   }
+  
   if (action === "termo_confirmar") {
     if (!termoCheck[chatId]) {
       return bot.answerCallbackQuery(query.id, { text: "⚠️ Marque a caixa de confirmação primeiro!", show_alert: true })
@@ -1383,6 +1409,7 @@ bot.on("callback_query", async query => {
       }
     )
   }
+  
   if (action === "menu_home") {
     const s = getStats(chatId)
     const act = await getUserActivation(chatId)
@@ -1409,6 +1436,7 @@ bot.on("callback_query", async query => {
       }
     )
   }
+  
   if (action === "menu_new") {
     return bot.editMessageText(
       "➕ *Novo Bot*\n\n" +
@@ -1429,6 +1457,7 @@ bot.on("callback_query", async query => {
       }
     )
   }
+  
   if (action === "gen_upload") {
     const token = crypto.randomBytes(16).toString("hex")
     uploadTokens[token] = { chatId, createdAt: Date.now() }
@@ -1449,6 +1478,7 @@ bot.on("callback_query", async query => {
       }
     )
   }
+  
   if (action === "create_from_scratch") {
     try {
       console.log("🆕 Criando bot do zero para:", chatId)
@@ -1521,6 +1551,7 @@ process.on('uncaughtException', (err) => {
       )
     }
   }
+  
   if (action === "menu_list") {
     const folders = getUserBots(chatId)
     const s = getStats(chatId)
@@ -1551,6 +1582,7 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
+  
   if (action === "menu_stats") {
     const s = getStats(chatId)
     return bot.editMessageText(
@@ -1571,31 +1603,13 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
-  if (false && action === "menu_market_disabled") {
-    const sessionToken = genWebSession(chatId)
-    const url = `${DOMAIN}/marketplace?s=${sessionToken}`
-    return bot.editMessageText(
-      `🛒 *Marketplace de Bases*\n\n` +
-      `Explore bases de bots de WhatsApp prontas criadas pela comunidade ARES!\n\n` +
-      `✅ Gratuito e open source\n` +
-      `📦 Instale com 1 clique\n` +
-      `🤝 Contribua publicando a sua base`,
-      {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🛒 Abrir Marketplace", url }],
-            [{ text: "⬅️ Voltar", callback_data: "menu_home" }]
-          ]
-        }
-      }
-    )
-  }
+  
   if (["manage", "stop", "start", "restart"].includes(action) && id) {
     if (getOwner(id) && getOwner(id) !== String(chatId)) {
       return bot.answerCallbackQuery(query.id, { text: "❌ Esse bot não é seu!", show_alert: true })
     }
   }
+  
   if (action === "manage" && id) {
     updateMetaAccess(id)
     const isRunning = !!activeBots[id]
@@ -1625,6 +1639,7 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
+  
   if (action === "stop" && id) {
     if (activeBots[id]) {
       activeBots[id].process.kill()
@@ -1648,6 +1663,7 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
+  
   if (action === "start" && id) {
     spawnBot(id, path.join(BASE_PATH, id))
     const sessionToken = genWebSession(chatId)
@@ -1668,6 +1684,7 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
+  
   if (action === "restart" && id) {
     spawnBot(id, path.join(BASE_PATH, id))
     const sessionToken = genWebSession(chatId)
@@ -1982,7 +1999,7 @@ function buildEditorHtml(botId, sessionToken, API) {
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#111827">
-<title>ARES \u2014 ${botId}</title>
+<title>ARES — ${botId}</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -1995,7 +2012,6 @@ function buildEditorHtml(botId, sessionToken, API) {
   --top:48px;--bot:60px;--r:10px
 }
 html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-family:"Inter",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;touch-action:pan-x pan-y}
-/* Mantido o CSS completo do editor igual ao original */
 </style>
 </head>
 <body>
@@ -2078,7 +2094,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
         </div>
       </div>
     </div>
-    <!-- Floating edit toolbar for mobile -->
     <div id="edit-toolbar">
       <button class="et-btn" onclick="insertSnippet('  ')" title="Tab"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/><line x1="6" y1="12" x2="15" y2="12"/></svg>Tab</button>
       <div class="et-sep"></div>
@@ -2100,7 +2115,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   </div>
 </div>
 
-<!-- Mobile bottom toolbar -->
 <div id="mob-bar">
   <button class="mob-btn" id="mob-files" onclick="mobShowFiles()">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
@@ -2127,7 +2141,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   </button>
 </div>
 
-<!-- Long-press context menu -->
 <div id="ctx-menu">
   <div class="ctx-item" id="ctx-open"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Abrir</div>
   <div class="ctx-item" id="ctx-ren"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Renomear</div>
@@ -3311,7 +3324,6 @@ app.use("/files-api", authBot, (req, res, next) => {
   next()
 })
 
-// Página Web App de ativação
 app.get("/activate", (req, res) => {
   const chatId = req.query.chatId || ""
   res.send(`<!DOCTYPE html>
@@ -3402,7 +3414,6 @@ if (tg) {
 
 var chatId = "${chatId}";
 
-// Check if already activated
 fetch('/activate-api/check?chatId=' + chatId)
   .then(function(r){ return r.json(); })
   .then(function(d){
@@ -3411,7 +3422,6 @@ fetch('/activate-api/check?chatId=' + chatId)
 
 var inp = document.getElementById('key-input');
 inp.addEventListener('input', function(){
-  // auto-format: insert dashes
   var v = this.value.replace(/[^A-Z0-9]/gi,'').toUpperCase();
   if (v.length > 4 && v[4] !== '-') v = v.slice(0,4)+'-'+v.slice(4);
   if (v.length > 9 && v[9] !== '-') v = v.slice(0,9)+'-'+v.slice(9);
@@ -3463,14 +3473,12 @@ function setStatus(msg, type) {
 </html>`)
 })
 
-// API: checar se está ativado (agora assíncrono)
 app.get("/activate-api/check", async (req, res) => {
   const chatId = req.query.chatId
   if (!chatId) return res.json({ activated: false })
   res.json({ activated: await isActivated(chatId) })
 })
 
-// API: ativar com chave (agora com MongoDB)
 app.post("/activate-api/activate", async (req, res) => {
   const { key, chatId } = req.body
   if (!key || !chatId) return res.status(400).json({ error: "Dados inválidos" })
@@ -3483,16 +3491,13 @@ app.post("/activate-api/activate", async (req, res) => {
   if (!keys[inputKey]) return res.json({ ok: false, error: "Chave não encontrada" })
   if (keys[inputKey].usedBy) return res.json({ ok: false, error: "Chave já utilizada" })
   
-  // Marcar chave como usada
   keys[inputKey].usedBy = String(chatId)
   keys[inputKey].usedAt = Date.now()
   await saveActiveKeys(keys)
   
-  // Ativar usuário
   await activateUser(chatId, inputKey, keys[inputKey].daysValid || 30)
   saveAccepted(chatId)
   
-  // Notificar o usuário via bot
   try {
     const s = getStats(chatId)
     bot.sendMessage(chatId,
@@ -3579,13 +3584,11 @@ function checkDiskAlert() {
   }
 }
 
-// Limpeza programada
 setInterval(cleanupOldLogs, 2 * 60 * 60 * 1000)
 setTimeout(cleanupOldLogs, 2 * 60 * 1000)
 setInterval(checkDiskAlert, 30 * 60 * 1000)
 setTimeout(checkDiskAlert, 10 * 60 * 1000)
 
-// Limpeza de cache de ativação (a cada 10 minutos)
 setInterval(() => {
   const now = Date.now()
   for (const [chatId, cached] of activatedCache.entries()) {
@@ -3606,7 +3609,6 @@ process.on("SIGTERM", async () => {
     : []
   for (const botId of bots) await saveBotFilesToBucket(botId)
   
-  // Fechar conexão MongoDB
   if (dbClient) await dbClient.close()
   console.log("✅ Conexões fechadas. Encerrando.")
   process.exit(0)
@@ -3619,7 +3621,6 @@ process.on("SIGINT", async () => {
     : []
   for (const botId of bots) await saveBotFilesToBucket(botId)
   
-  // Fechar conexão MongoDB
   if (dbClient) await dbClient.close()
   process.exit(0)
 })
