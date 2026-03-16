@@ -48,7 +48,7 @@ const BUCKETS = [1, 2, 3].map(i => ({
 })).filter(b => b.bucketName && b.credentials.accessKeyId && b.credentials.secretAccessKey)
 
 if (BUCKETS.length === 0) {
-  console.error("Nenhum bucket configurado! Defina BUCKET_1_NAME, BUCKET_1_KEY, BUCKET_1_SECRET no Railway.")
+  console.error("❌ Nenhum bucket configurado! Defina BUCKET_1_NAME, BUCKET_1_KEY, BUCKET_1_SECRET no Railway.")
   process.exit(1)
 }
 
@@ -71,18 +71,18 @@ console.log("📁 BASE_PATH:", BASE_PATH)
 try {
   if (!fs.existsSync(BASE_PATH)) {
     fs.mkdirSync(BASE_PATH, { recursive: true, mode: 0o755 })
-    console.log("Pasta instances criada")
+    console.log("✅ Pasta instances criada")
   } else {
-    console.log("Pasta instances ja existe")
+    console.log("✅ Pasta instances já existe")
   }
   fs.accessSync(BASE_PATH, fs.constants.W_OK)
-  console.log("Permissao de escrita OK")
+  console.log("✅ Permissão de escrita OK")
   const testFile = path.join(BASE_PATH, "test.txt")
   fs.writeFileSync(testFile, "test")
   fs.unlinkSync(testFile)
-  console.log("Teste de escrita OK")
+  console.log("✅ Teste de escrita OK")
 } catch (err) {
-  console.error("Erro com pasta instances:", err)
+  console.error("❌ Erro com pasta instances:", err)
 }
 
 const activeBots = {}
@@ -112,10 +112,10 @@ function saveMeta(botId, chatId, name) {
       lastAccessed: Date.now(),
       nodeModulesHash: null
     }))
-    console.log(`Meta salva para ${botId}`)
+    console.log(`✅ Meta salva para ${botId}`)
     return true
   } catch (err) {
-    console.error(`Erro ao salvar meta para ${botId}:`, err)
+    console.error(`❌ Erro ao salvar meta para ${botId}:`, err)
     return false
   }
 }
@@ -203,7 +203,7 @@ function authBot(req, res, next) {
   const chatId = checkSession(req)
   if (!chatId) return res.status(401).send("Acesso negado. Abra o link pelo Telegram.")
   const owner = botId ? getOwner(botId) : null
-  if (owner && owner !== chatId) return res.status(403).send("Este bot pertence a outro usuario.")
+  if (owner && owner !== chatId) return res.status(403).send("Este bot pertence a outro usuário.")
   if (botId) updateMetaAccess(botId)
   req.chatId = chatId
   req.botId = botId
@@ -339,7 +339,7 @@ function saveBotFilesToBucketDebounced(botId) {
   _saveDebounce[botId] = setTimeout(() => {
     delete _saveDebounce[botId]
     saveBotFilesToBucketDebounced(botId)
-  }, 10000)
+  }, 10000) // wait 10s of inactivity before saving
 }
 
 async function saveBotFilesToBucket(botId) {
@@ -425,7 +425,7 @@ async function restoreAllBotsFromBucket() {
       console.log(`📥 Restaurando ${botId}...`)
       await restoreBotFilesFromBucket(botId)
     } else {
-      console.log(`✅ ${botId} ja existe localmente`)
+      console.log(`✅ ${botId} já existe localmente`)
     }
   }
 }
@@ -576,7 +576,7 @@ async function spawnBot(botId, instancePath) {
         const downloaded = await downloadNodeModulesFromBucket(botId, instancePath, packageHash)
         if (downloaded && fs.existsSync(nodeModulesPath)) {
           if (checkNativeModules(nodeModulesPath)) {
-            writeLog(botId, instancePath, "🔄 Recompilando modulos nativos...\r\n")
+            writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n")
             await rebuildNativeModules(instancePath)
           }
           runInstance(botId, instancePath, botPort, env, start)
@@ -595,7 +595,7 @@ async function spawnBot(botId, instancePath) {
     install.onExit(async () => {
       if (fs.existsSync(nodeModulesPath)) {
         if (checkNativeModules(nodeModulesPath)) {
-          writeLog(botId, instancePath, "🔄 Recompilando modulos nativos...\r\n")
+          writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n")
           await rebuildNativeModules(instancePath)
         }
         const packageHash = getPackageHash(path.join(instancePath, "package.json"))
@@ -648,6 +648,7 @@ function saveAccepted(chatId) {
   _acceptedCache.add(cid)
 }
 
+// ─── SISTEMA DE ATIVAÇÃO ───────────────────────────────────────────
 const ACTIVE_KEYS_S3  = "system/active_keys.json"
 const ACTIVATED_S3    = "system/activated.json"
 
@@ -691,9 +692,11 @@ async function saveActivated(data) {
   } catch (e) { console.error("saveActivated error:", e.message) }
 }
 
+// Cache em memória para evitar chamadas repetidas ao bucket
 const _keysCache  = { data: null, ts: 0 }
 const _actCache   = { data: null, ts: 0 }
-const CACHE_TTL   = 5 * 60 * 1000
+const CACHE_TTL   = 5 * 60 * 1000 // 5 min
+// Fast in-memory set for activation check (populated on first load)
 const _activatedSet = new Set()
 
 async function getActiveKeys() {
@@ -707,11 +710,13 @@ async function getActivated() {
   if (_actCache.data && Date.now() - _actCache.ts < CACHE_TTL) return _actCache.data
   _actCache.data = await loadActivated()
   _actCache.ts = Date.now()
+  // populate fast set
   _activatedSet.clear()
   for (const k of Object.keys(_actCache.data)) _activatedSet.add(k)
   return _actCache.data
 }
 
+// Fast sync check (uses in-memory set, no S3) — use for non-critical paths
 function isActivatedSync(chatId) {
   return _activatedSet.has(String(chatId))
 }
@@ -731,7 +736,7 @@ async function activateUser(chatId, key, daysValid) {
   activated[String(chatId)] = { key, at: Date.now(), expiresAt, daysValid }
   _actCache.data = activated
   _actCache.ts = Date.now()
-  _activatedSet.add(String(chatId))
+  _activatedSet.add(String(chatId))  // instant update
   await saveActivated(activated)
 }
 
@@ -741,7 +746,7 @@ async function getUserActivation(chatId) {
 }
 
 function fmtExpiry(ts) {
-  if (!ts) return "Sem expiracao"
+  if (!ts) return "Sem expiração"
   return new Date(ts).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })
 }
 
@@ -755,19 +760,27 @@ function generateKey(prefix) {
   const block = () => crypto.randomBytes(2).toString("hex").toUpperCase()
   return `${prefix}-${block()}-${block()}-${block()}`
 }
+// ──────────────────────────────────────────────────────────────────
+
+function generateKey(prefix) {
+  prefix = (prefix || "ARES").toUpperCase().slice(0, 6)
+  const block = () => crypto.randomBytes(2).toString("hex").toUpperCase()
+  return `${prefix}-${block()}-${block()}-${block()}`
+}
+// ──────────────────────────────────────────────────────────────────
 
 const TERMOS_TEXTO = `📋 *Termos de Uso — ARES HOST*
 
 Antes de continuar, leia e aceite os termos abaixo:
 
 *1. Uso permitido*
-Apenas bots legitimios sao permitidos.
+Apenas bots legítimos são permitidos.
 
 *2. Responsabilidade*
-Voce e responsavel pelo conteudo do seu bot.
+Você é responsável pelo conteúdo do seu bot.
 
 *3. Disponibilidade*
-O servico pode passar por manutencoes.
+O serviço pode passar por manutenções.
 
 *4. Dados*
 Seus arquivos ficam armazenados em nossos servidores.
@@ -806,7 +819,7 @@ bot.onText(/^\/active$/, async msg => {
   const chatId = msg.chat.id
   if (await isActivated(chatId)) {
     return bot.sendMessage(chatId,
-      "✅ *Sua conta ja esta ativada!*\n\nVoce ja tem acesso ao ARES HOST.",
+      "✅ *Sua conta já está ativada!*\n\nVocê já tem acesso ao ARES HOST.",
       {
         parse_mode: "Markdown",
         reply_markup: {
@@ -817,7 +830,7 @@ bot.onText(/^\/active$/, async msg => {
   }
   const activateUrl = `${DOMAIN}/activate?chatId=${chatId}`
   bot.sendMessage(chatId,
-    "🔑 *Ativacao do ARES HOST*\n\nClique no botao abaixo para inserir sua chave de ativacao.",
+    "🔑 *Ativação do ARES HOST*\n\nClique no botão abaixo para inserir sua chave de ativação.",
     {
       parse_mode: "Markdown",
       reply_markup: {
@@ -830,7 +843,7 @@ bot.onText(/^\/active$/, async msg => {
 bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
   const chatId = msg.chat.id
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) {
-    return bot.sendMessage(chatId, "❌ Sem permissao.")
+    return bot.sendMessage(chatId, "❌ Sem permissão.")
   }
   const args = (msg.text.split(" ").slice(1))
   const prefix = isNaN(args[0]) ? (args[0] || "ARES") : "ARES"
@@ -840,7 +853,7 @@ bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
   keys[key] = { createdAt: Date.now(), usedBy: null, prefix, daysValid: days }
   await saveActiveKeys(keys)
   bot.sendMessage(chatId,
-    `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\n⏳ Validade: *${days} dias* apos ativacao\n\nEnvie essa chave para o usuario.`,
+    `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\n⏳ Validade: *${days} dias* após ativação\n\nEnvie essa chave para o usuário.`,
     { parse_mode: "Markdown" }
   )
 })
@@ -859,7 +872,7 @@ bot.onText(/^\/listkeys$/, async msg => {
     return `${v.usedBy ? "✅" : "⬜"} \`${k}\`${v.usedBy ? " — usado" : ""}`
   }).join("\n")
   bot.sendMessage(chatId,
-    `🔑 *Chaves de ativacao*\n\nTotal: *${total}* | Usadas: *${used}* | Livres: *${free}*\nUsuarios ativados: *${usersCount}*\n\n${lines}`,
+    `🔑 *Chaves de ativação*\n\nTotal: *${total}* | Usadas: *${used}* | Livres: *${free}*\nUsuários ativados: *${usersCount}*\n\n${lines}`,
     { parse_mode: "Markdown" }
   )
 })
@@ -871,7 +884,7 @@ bot.onText(/^\/meuid$/, msg => {
 bot.onText(/^\/(limpar|limpeza)$/, async msg => {
   const chatId = msg.chat.id
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) {
-    return bot.sendMessage(chatId, "❌ Sem permissao.")
+    return bot.sendMessage(chatId, "❌ Sem permissão.")
   }
   bot.sendMessage(chatId,
     "🗑️ *O que deseja limpar?*",
@@ -891,14 +904,10 @@ bot.onText(/^\/(limpar|limpeza)$/, async msg => {
 bot.onText(/^\/reiniciar$/, async msg => {
   const chatId = msg.chat.id
   if (String(chatId) !== String(OWNER_ID)) {
-    return bot.sendMessage(chatId, "❌ Sem permissao.")
+    return bot.sendMessage(chatId, "❌ Sem permissão.")
   }
   bot.sendMessage(chatId, "🔄 Reiniciando processo...")
   setTimeout(() => process.exit(0), 1000)
-})
-
-bot.onText(/^\/ping$/, (msg) => {
-  bot.sendMessage(msg.chat.id, "pong")
 })
 
 bot.onText(/\/start/, async msg => {
@@ -1071,29 +1080,33 @@ async function buildStartCard(user, stats, act, chatId) {
   const sharp = require("sharp")
 
   const W = 900, H = 280
-  const AV = 96
-  const AX = 48, AY = (H - AV) / 2
+  const AV = 96  // avatar size
+  const AX = 48, AY = (H - AV) / 2  // avatar position
 
+  // ── helpers ──
   const xe = s => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
 
-  const fn   = user ? (((user.first_name||"") + " " + (user.last_name||"")).trim() || "Usuario") : "Usuario"
+  const fn   = user ? (((user.first_name||"") + " " + (user.last_name||"")).trim() || "Usuário") : "Usuário"
   const un   = user?.username ? `@${user.username}` : `ID: ${chatId}`
   const initials = fn.split(" ").map(w=>w[0]||"").join("").slice(0,2).toUpperCase()
 
+  // expiry
   let expText = "", expColor = "#4e5a6e"
   if (act && act.expiresAt) {
     const left = daysLeft(act.expiresAt)
     if (left <= 0)      { expText = "Acesso expirado";                    expColor = "#ef4444" }
     else if (left <= 7) { expText = `Expira em ${left}d · ${fmtExpiry(act.expiresAt)}`; expColor = "#f5a623" }
-    else                { expText = `Valido ate ${fmtExpiry(act.expiresAt)}`;          expColor = "#34d17a" }
+    else                { expText = `Válido até ${fmtExpiry(act.expiresAt)}`;          expColor = "#34d17a" }
   }
 
   const TX = "#e4e8f0", TX2 = "#8a95a8", TX3 = "#4e5a6e"
   const GREEN = "#34d17a", RED = "#ef4444", BLUE = "#4d8ef5"
   const BG = "#111318", BG2 = "#181c27", BORDER = "#1e2535"
 
+  // text X start (after avatar)
   const TX0 = AX + AV + 30
 
+  // ── avatar ──
   let avatarBuf = null
   try {
     const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
@@ -1107,8 +1120,9 @@ async function buildStartCard(user, stats, act, chatId) {
         .composite([{ input: mask, blend: "dest-in" }])
         .png().toBuffer()
     }
-  } catch (e) { }
+  } catch (e) { /* no avatar */ }
 
+  // ── SVG card ──
   const svg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <clipPath id="card"><rect width="${W}" height="${H}" rx="22" ry="22"/></clipPath>
@@ -1122,37 +1136,54 @@ async function buildStartCard(user, stats, act, chatId) {
     </linearGradient>
   </defs>
 
+  <!-- bg -->
   <rect width="${W}" height="${H}" rx="22" ry="22" fill="${BG}"/>
+  <!-- top gradient zone -->
   <rect width="${W}" height="${H}" rx="22" ry="22" fill="url(#topgrad)" clip-path="url(#card)"/>
+  <!-- accent left strip -->
   <rect x="0" y="0" width="4" height="${H}" rx="0" fill="url(#accent)" clip-path="url(#card)"/>
+  <!-- subtle grid texture -->
   <rect width="${W}" height="${H}" rx="22" ry="22" fill="none" stroke="${BORDER}" stroke-width="1"/>
 
+  <!-- avatar placeholder circle (will be replaced if photo exists) -->
   ${!avatarBuf ? `
   <circle cx="${AX + AV/2}" cy="${AY + AV/2}" r="${AV/2 + 2}" fill="${BG2}" stroke="${BORDER}" stroke-width="1.5"/>
   <text x="${AX + AV/2}" y="${AY + AV/2 + 12}" font-family="sans-serif" font-size="32" font-weight="bold" fill="${TX2}" text-anchor="middle">${xe(initials)}</text>
   ` : `
+  <!-- avatar ring -->
   <circle cx="${AX + AV/2}" cy="${AY + AV/2}" r="${AV/2 + 3}" fill="none" stroke="url(#accent)" stroke-width="2.5"/>
   `}
 
+  <!-- name -->
   <text x="${TX0}" y="${AY + 30}" font-family="sans-serif" font-size="28" font-weight="bold" fill="${TX}" letter-spacing="-0.5">${xe(fn)}</text>
+  <!-- username -->
   <text x="${TX0}" y="${AY + 58}" font-family="sans-serif" font-size="16" fill="${TX2}">${xe(un)}</text>
+  <!-- expiry -->
   ${expText ? `<text x="${TX0}" y="${AY + 84}" font-family="sans-serif" font-size="14" fill="${expColor}">${xe(expText)}</text>` : ""}
 
+  <!-- divider -->
   <line x1="${TX0}" y1="${H - 74}" x2="${W - 32}" y2="${H - 74}" stroke="${BORDER}" stroke-width="1"/>
 
+  <!-- stat blocks -->
+  <!-- Bots -->
   <text x="${TX0}" y="${H - 46}" font-family="sans-serif" font-size="11" fill="${TX3}" letter-spacing="1">BOTS</text>
   <text x="${TX0}" y="${H - 24}" font-family="sans-serif" font-size="22" font-weight="bold" fill="${TX}">${xe(String(stats.total))}</text>
+  <!-- Online -->
   <text x="${TX0 + 90}" y="${H - 46}" font-family="sans-serif" font-size="11" fill="${TX3}" letter-spacing="1">ONLINE</text>
   <circle cx="${TX0 + 89}" cy="${H - 49}" r="4" fill="${GREEN}"/>
   <text x="${TX0 + 90}" y="${H - 24}" font-family="sans-serif" font-size="22" font-weight="bold" fill="${GREEN}">${xe(String(stats.online))}</text>
+  <!-- Offline -->
   <text x="${TX0 + 190}" y="${H - 46}" font-family="sans-serif" font-size="11" fill="${TX3}" letter-spacing="1">OFFLINE</text>
   <circle cx="${TX0 + 189}" cy="${H - 49}" r="4" fill="${RED}"/>
   <text x="${TX0 + 190}" y="${H - 24}" font-family="sans-serif" font-size="22" font-weight="bold" fill="${RED}">${xe(String(stats.offline))}</text>
+  <!-- RAM -->
   <text x="${TX0 + 310}" y="${H - 46}" font-family="sans-serif" font-size="11" fill="${TX3}" letter-spacing="1">RAM</text>
   <text x="${TX0 + 310}" y="${H - 24}" font-family="sans-serif" font-size="22" font-weight="bold" fill="${TX}">${xe(stats.ram)}<tspan font-size="13" fill="${TX3}">MB</tspan></text>
+  <!-- Uptime -->
   <text x="${TX0 + 420}" y="${H - 46}" font-family="sans-serif" font-size="11" fill="${TX3}" letter-spacing="1">UPTIME</text>
   <text x="${TX0 + 420}" y="${H - 24}" font-family="sans-serif" font-size="22" font-weight="bold" fill="${TX}">${xe(stats.uptime)}</text>
 
+  <!-- ARES badge top-right -->
   <rect x="${W - 90}" y="18" width="68" height="22" rx="11" fill="${BG2}" stroke="${BORDER}" stroke-width="1"/>
   <text x="${W - 56}" y="33" font-family="sans-serif" font-size="10" font-weight="bold" fill="${TX3}" text-anchor="middle" letter-spacing="2">ARES</text>
 </svg>`
@@ -1180,14 +1211,14 @@ async function sendStartMessage(chatId, msgId, mode, fromUser) {
     const left = daysLeft(act.expiresAt)
     if (left <= 0)      expiryLine = `\n⛔ Acesso expirado`
     else if (left <= 7) expiryLine = `\n⚠️ Expira em *${left} dias* — ${fmtExpiry(act.expiresAt)}`
-    else                expiryLine = `\n📅 Valido ate *${fmtExpiry(act.expiresAt)}*`
+    else                expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
   }
 
   const keyboard = {
     inline_keyboard: [
       [{ text: "➕ Novo Bot",     callback_data: "menu_new"   }],
       [{ text: "📂 Meus Bots",    callback_data: "menu_list"  }],
-      [{ text: "📊 Estatisticas", callback_data: "menu_stats" }],
+      [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
     ]
   }
 
@@ -1208,6 +1239,7 @@ async function sendStartMessage(chatId, msgId, mode, fromUser) {
     console.error("buildStartCard error:", e.message)
   }
 
+  // fallback text
   return bot.sendMessage(chatId,
     (fn ? `👤 *${fn}*` + (un ? `  ${un}` : "") + "\n" : "") +
     expiryLine + (expiryLine ? "\n" : "") +
@@ -1217,12 +1249,15 @@ async function sendStartMessage(chatId, msgId, mode, fromUser) {
   )
 }
 
+// Edita texto OU caption (para mensagens de foto do card /start)
 async function safeEdit(chatId, msgId, text, opts) {
   const options = { parse_mode: "Markdown", ...opts }
   try {
     return await bot.editMessageText(text, options)
   } catch (e) {
     if (e.message && e.message.includes("there is no text in the message")) {
+      // É uma mensagem de foto — edita o caption e remove a foto
+      // Telegram não permite editar foto->texto, então deletamos e mandamos novo
       try {
         await bot.deleteMessage(chatId, msgId)
       } catch (e2) {}
@@ -1231,11 +1266,11 @@ async function safeEdit(chatId, msgId, text, opts) {
         reply_markup: opts?.reply_markup
       })
     }
+    // outros erros: ignora silenciosamente
   }
 }
 
 bot.on("callback_query", async query => {
-  console.log("Callback recebido:", query.data)
   const chatId = query.message.chat.id
   const msgId = query.message.message_id
   const data = query.data
@@ -1282,7 +1317,7 @@ bot.on("callback_query", async query => {
       return safeEdit(chatId, msgId, 
         `✅ *Disco limpo!*\n\n` +
         `🛑 Bots parados: *${stopped}*\n` +
-        `📦 node_modules: *${nmCount}*\n` +
+        `📦 node\\_modules: *${nmCount}*\n` +
         `📋 Logs: *${logCount}*\n` +
         `♻️ Reiniciando: *${restarted}* bots\n\n` +
         `💿 Disco: *${diskAfter}%*  |  💾 RAM: *${ramAfter}MB*`,
@@ -1295,8 +1330,9 @@ bot.on("callback_query", async query => {
 
   if (action === "limpar_tudo") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
+    // Confirmação extra antes de apagar tudo
     return safeEdit(chatId, msgId, 
-      `💣 *ATENÇÃO — Acao irreversivel!*\n\nIsso vai:\n• Parar todos os bots\n• Apagar todos os arquivos locais\n• Apagar todos os arquivos nos buckets\n\nTodos os bots serao *permanentemente deletados*. Tem certeza?`,
+      `💣 *ATENÇÃO — Ação irreversível!*\n\nIsso vai:\n• Parar todos os bots\n• Apagar todos os arquivos locais\n• Apagar todos os arquivos nos buckets\n\nTodos os bots serão *permanentemente deletados*. Tem certeza?`,
       {
         parse_mode: "Markdown",
         reply_markup: {
@@ -1313,10 +1349,12 @@ bot.on("callback_query", async query => {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
     safeEdit(chatId, msgId, "💣 Apagando tudo...", { })
     try {
+      // 1. Parar todos os bots
       for (const bid of Object.keys(activeBots)) {
         try { activeBots[bid].process.kill(); delete activeBots[bid] } catch (e) {}
       }
 
+      // 2. Apagar disco local inteiro mas preservar estrutura necessária
       if (fs.existsSync(BASE_PATH)) {
         fs.rmSync(BASE_PATH, { recursive: true, force: true })
       }
@@ -1324,6 +1362,7 @@ bot.on("callback_query", async query => {
       fs.mkdirSync(path.join(BASE_PATH, "_users"), { recursive: true, mode: 0o755 })
       fs.mkdirSync(path.join(BASE_PATH, "_uploads"), { recursive: true, mode: 0o755 })
 
+      // 3. Apagar tudo nos buckets
       let objDeleted = 0
       for (const { client, bucketName } of s3Clients) {
         try {
@@ -1376,7 +1415,7 @@ bot.on("callback_query", async query => {
   }
   if (action === "termo_confirmar") {
     if (!termoCheck[chatId]) {
-      return bot.answerCallbackQuery(query.id, { text: "⚠️ Marque a caixa de confirmacao primeiro!", show_alert: true })
+      return bot.answerCallbackQuery(query.id, { text: "⚠️ Marque a caixa de confirmação primeiro!", show_alert: true })
     }
     saveAccepted(chatId)
     delete termoCheck[chatId]
@@ -1389,7 +1428,7 @@ bot.on("callback_query", async query => {
       inline_keyboard: [
         [{ text: "➕ Novo Bot",     callback_data: "menu_new"   }],
         [{ text: "📂 Meus Bots",    callback_data: "menu_list"  }],
-        [{ text: "📊 Estatisticas", callback_data: "menu_stats" }],
+        [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
       ]
     }
     return safeEdit(chatId, msgId, 
@@ -1453,13 +1492,13 @@ bot.on("callback_query", async query => {
         dependencies: {}
       }
       fs.writeFileSync(path.join(instancePath, "package.json"), JSON.stringify(packageJson, null, 2))
-      console.log("package.json criado")
+      console.log("✅ package.json criado")
       const indexJs = `console.log("🤖 Bot iniciado com sucesso!");
 
 const http = require('http');
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot esta rodando!');
+  res.end('Bot está rodando!');
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1468,23 +1507,23 @@ server.listen(PORT, () => {
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('Erro nao tratado:', err);
+  console.error('Erro não tratado:', err);
 });`
       fs.writeFileSync(path.join(instancePath, "index.js"), indexJs)
-      console.log("index.js criado")
+      console.log("✅ index.js criado")
       fs.writeFileSync(path.join(instancePath, "README.md"), "# Meu Bot\n\nBot criado do zero no ARES HOST.")
-      console.log("README.md criado")
+      console.log("✅ README.md criado")
       saveMeta(botId, chatId, "meu-bot")
-      console.log("Meta salva")
+      console.log("✅ Meta salva")
       await saveBotFilesToBucket(botId)
       const sessionToken = genWebSession(chatId)
       const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
       const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
-      console.log("Bot criado com sucesso:", botId)
+      console.log("✅ Bot criado com sucesso:", botId)
       return safeEdit(chatId, msgId, 
         `✅ *Bot criado do zero!*\n\n` +
         `🆔 ID: \`${botId}\`\n` +
-        `📁 Estrutura basica criada:\n` +
+        `📁 Estrutura básica criada:\n` +
         `• package.json\n` +
         `• index.js\n` +
         `• README.md\n\n` +
@@ -1557,9 +1596,28 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
+  if (false && action === "menu_market_disabled") {
+    const sessionToken = genWebSession(chatId)
+    const url = `${DOMAIN}/marketplace?s=${sessionToken}`
+    return safeEdit(chatId, msgId, 
+      `🛒 *Marketplace de Bases*\n\n` +
+      `Explore bases de bots de WhatsApp prontas criadas pela comunidade ARES!\n\n` +
+      `✅ Gratuito e open source\n` +
+      `📦 Instale com 1 clique\n` +
+      `🤝 Contribua publicando a sua base`,
+      { parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🛒 Abrir Marketplace", url }],
+            [{ text: "⬅️ Voltar", callback_data: "menu_home" }]
+          ]
+        }
+      }
+    )
+  }
   if (["manage", "stop", "start", "restart"].includes(action) && id) {
     if (getOwner(id) && getOwner(id) !== String(chatId)) {
-      return bot.answerCallbackQuery(query.id, { text: "❌ Esse bot nao e seu!", show_alert: true })
+      return bot.answerCallbackQuery(query.id, { text: "❌ Esse bot não é seu!", show_alert: true })
     }
   }
   if (action === "manage" && id) {
@@ -1655,10 +1713,6 @@ process.on('uncaughtException', (err) => {
   }
 })
 
-app.get("/ping", (req, res) => {
-  res.send("pong")
-})
-
 app.get("/terminal/:botId", authBot, (req, res) => {
   const botId = req.params.botId
   const sessionToken = req.query.s
@@ -1722,7 +1776,7 @@ app.get("/upload/:token", (req, res) => {
       <style>body{background:#0a0a0a;color:#fff;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
       .box{text-align:center;padding:40px;border:1px solid #333;border-radius:12px}
       h2{color:#f44;margin:0 0 10px}</style></head>
-      <body><div class="box"><h2>❌ Link invalido ou expirado</h2><p>Gere um novo link pelo Telegram.</p></div></body>
+      <body><div class="box"><h2>❌ Link inválido ou expirado</h2><p>Gere um novo link pelo Telegram.</p></div></body>
       </html>
     `)
   }
@@ -1852,7 +1906,7 @@ app.get("/upload/:token", (req, res) => {
         }
       }
       xhr.onerror = () => {
-        status.textContent = "❌ Erro de conexao."
+        status.textContent = "❌ Erro de conexão."
         status.className = "status err"
         btn.disabled = false
       }
@@ -1919,7 +1973,7 @@ function walkDir(dir, base) {
       }
     }
   } catch (e) {
-    console.error("Erro ao ler diretorio:", e)
+    console.error("Erro ao ler diretório:", e)
   }
   return result.sort((a, b) => {
     if (a.type !== b.type) return a.type === "dir" ? -1 : 1
@@ -1964,6 +2018,7 @@ function buildEditorHtml(botId, sessionToken, API) {
 }
 html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-family:"Inter",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;touch-action:pan-x pan-y}
 
+/* ─── TOPBAR ─── */
 #topbar{
   height:var(--top);background:var(--bg2);border-bottom:1px solid var(--bd);
   display:flex;align-items:center;padding:0 10px;gap:6px;flex-shrink:0;z-index:30;
@@ -2000,8 +2055,10 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 }
 #mbtn:active{background:var(--bg3);color:var(--tx)}
 
+/* ─── LAYOUT ─── */
 #layout{display:flex;height:calc(100vh - var(--top));position:relative;overflow:hidden}
 
+/* ─── SIDEBAR ─── */
 #side{
   width:280px;background:var(--bg2);
   display:flex;flex-direction:column;flex-shrink:0;
@@ -2015,6 +2072,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 #side-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:19;backdrop-filter:blur(4px)}
 #side-ov.on{display:block}
 
+/* sidebar tabs */
 #stabs{display:flex;border-bottom:1px solid var(--bd);flex-shrink:0;padding:0 4px;gap:2px;padding-top:4px}
 .stab{
   flex:1;padding:9px 4px 8px;text-align:center;font-size:11px;font-weight:700;
@@ -2041,6 +2099,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 }
 .ib:active{background:var(--bg4);color:var(--green)}
 
+/* ─── TREE ─── */
 #tree{
   flex:1;overflow-y:auto;overflow-x:hidden;
   padding:6px 4px 80px;user-select:none;
@@ -2068,10 +2127,12 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .row .lbl{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-family:"JetBrains Mono",monospace;color:var(--tx)}
 .row .lbl.d{color:#93c5fd;font-weight:600}
 
+/* desktop-only context buttons */
 .rctx{display:none;position:absolute;right:4px;top:50%;transform:translateY(-50%);gap:1px;background:var(--bg4);border:1px solid var(--bd);border-radius:7px;padding:2px}
 .cx{background:none;border:none;border-radius:5px;padding:5px 6px;cursor:pointer;color:var(--tx3);line-height:1;display:flex;align-items:center;transition:all .1s;min-width:28px;min-height:28px;justify-content:center}
 .cx:active{color:var(--tx);background:var(--bg5)}
 
+/* long-press context menu */
 #ctx-menu{
   display:none;position:fixed;
   background:var(--bg2);border:1px solid var(--bd2);border-radius:14px;
@@ -2089,6 +2150,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .ctx-item.danger{color:var(--red)}.ctx-item.danger svg{color:var(--red)}
 .ctx-sep{height:1px;background:var(--bd);margin:4px 6px}
 
+/* ─── PACKAGES ─── */
 .pinput{
   width:100%;background:var(--bg3);border:1px solid var(--bd);border-radius:9px;
   padding:11px 14px;color:var(--tx);font-size:16px;outline:none;
@@ -2120,8 +2182,10 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 #sr-list{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
 #sr-list::-webkit-scrollbar{width:3px}
 
+/* ─── EDITOR AREA ─── */
 #right{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 
+/* tabs */
 #tabs-bar{
   background:var(--bg2);border-bottom:1px solid var(--bd);
   display:flex;overflow-x:auto;flex-shrink:0;min-height:40px;
@@ -2141,6 +2205,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .tab .tx:active{background:var(--bd);color:var(--tx)}
 .tdot{width:6px;height:6px;background:var(--orange);border-radius:50%;flex-shrink:0}
 
+/* findbar */
 #findbar{display:none;background:var(--bg2);border-bottom:1px solid var(--bd);padding:7px 10px;align-items:center;gap:6px;flex-shrink:0}
 #findbar.on{display:flex}
 #find-in{background:var(--bg3);border:1px solid var(--bd);border-radius:8px;padding:8px 12px;color:var(--tx);font-size:15px;outline:none;flex:1;font-family:"JetBrains Mono",monospace;-webkit-appearance:none}
@@ -2150,9 +2215,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 #find-close{background:none;border:none;color:var(--tx3);cursor:pointer;display:flex;align-items:center;padding:7px;touch-action:manipulation}
 #find-close:active{color:var(--tx)}
 
+/* infobar */
 #infobar{background:var(--bg);border-bottom:1px solid var(--bd);padding:0 12px;height:24px;display:flex;align-items:center;gap:12px;font-size:10px;color:var(--tx3);flex-shrink:0;font-family:"JetBrains Mono",monospace}
 #infobar span{color:var(--tx2)}#cur-pos{margin-left:auto}
 
+/* floating edit toolbar (mobile) */
 #edit-toolbar{
   display:none;position:absolute;bottom:calc(var(--bot) + 4px);left:4px;right:4px;
   background:var(--bg2);border:1px solid var(--bd2);border-radius:12px;
@@ -2173,6 +2240,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .et-btn.wide{min-width:60px}
 .et-sep{width:1px;height:28px;background:var(--bd);flex-shrink:0;margin:0 2px}
 
+/* editor & welcome */
 #editor-wrap{flex:1;overflow:hidden;position:relative}
 #welcome{
   flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -2183,6 +2251,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .wtitle{font-size:20px;color:var(--tx);font-weight:700;margin-bottom:6px;letter-spacing:-.4px}
 .wsub{font-size:13px;line-height:1.7;max-width:260px;color:var(--tx3);margin-bottom:24px}
 
+/* quick action cards (welcome mobile) */
 #wactions{display:flex;flex-direction:column;gap:10px;width:100%;max-width:300px}
 .wact{
   display:flex;align-items:center;gap:12px;padding:14px 16px;
@@ -2201,9 +2270,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .wk{background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:5px 10px;font-size:11px;color:var(--tx2);display:flex;align-items:center;gap:4px}
 .wk kbd{background:var(--bg4);border:1px solid var(--bd2);border-radius:3px;padding:0 4px;font-family:"JetBrains Mono",monospace;font-size:10px}
 
+/* status bar */
 #statusbar{height:22px;background:#0a0e17;border-top:1px solid var(--bd);display:flex;align-items:center;padding:0 12px;gap:10px;font-size:10px;color:var(--tx3);flex-shrink:0;font-family:"JetBrains Mono",monospace}
 #statusbar .si{display:flex;align-items:center;gap:4px}#statusbar .si span{color:var(--tx2)}.ssep{width:1px;height:10px;background:var(--bd)}
 
+/* ─── MOBILE BOTTOM BAR ─── */
 #mob-bar{
   display:none;height:var(--bot);
   background:var(--bg2);border-top:1px solid var(--bd);
@@ -2223,6 +2294,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .mob-btn.active{color:var(--green);border-top-color:var(--green)}
 .mob-sep{width:1px;background:var(--bd);margin:10px 0;flex-shrink:0}
 
+/* ─── MODALS ─── */
 .ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:999;align-items:flex-end;justify-content:center;backdrop-filter:blur(6px)}
 .ov.on{display:flex}
 @media(min-width:600px){.ov{align-items:center}}
@@ -2249,6 +2321,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .dz{border:2px dashed var(--bd);border-radius:12px;padding:28px 20px;text-align:center;margin-bottom:14px;cursor:pointer;transition:all .2s;font-size:14px;color:var(--tx3);touch-action:manipulation}
 .dz:active,.dz.over{border-color:var(--green);background:rgba(34,211,165,.06);color:var(--green)}
 
+/* toast */
 .toast{
   position:fixed;bottom:calc(var(--bot) + 16px);left:50%;
   transform:translateX(-50%) translateY(10px);
@@ -2261,6 +2334,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .toast.err{border-color:var(--red);color:var(--red);background:rgba(10,14,23,.95)}
 .toast.info{border-color:var(--blue);color:var(--blue)}
 
+/* ─── DESKTOP (≥768px) ─── */
 @media(min-width:768px){
   :root{--top:44px;--bot:0px}
   #side{position:relative;top:auto;bottom:auto;left:auto;transform:none!important;box-shadow:none;width:240px;border-right:1px solid var(--bd)}
@@ -2287,6 +2361,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   #statusbar{display:flex!important}
 }
 
+/* ─── MOBILE (<768px) ─── */
 @media(max-width:767px){
   #mob-bar{display:flex}
   #mbtn{display:flex}
@@ -2327,7 +2402,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
           <button class="ib" title="Upload de arquivo" onclick="openUploadModal()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><polyline points="10 10 7 7 4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="7" y1="7" x2="7" y2="13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2 10A5 5 0 1 1 12 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg></button>
           <button class="ib" title="Novo arquivo" onclick="doNewFile()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8 2H3.5A1.5 1.5 0 0 0 2 3.5v7A1.5 1.5 0 0 0 3.5 12h7A1.5 1.5 0 0 0 12 10.5V6L8 2Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 2v4h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="7" y1="9" x2="7" y2="6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="5.5" y1="7.5" x2="8.5" y2="7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
           <button class="ib" title="Nova pasta" onclick="doNewFolder()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1.5 3C1.5 2.17 2.17 1.5 3 1.5H5.8l1 1.5H11C11.83 3 12.5 3.67 12.5 4.5v6C12.5 11.33 11.83 12 11 12H3C2.17 12 1.5 11.33 1.5 10.5V3Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><line x1="7" y1="6" x2="7" y2="9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="5.2" y1="7.75" x2="8.8" y2="7.75" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
-          <button class="ib" title="Atualizar arvore" onclick="loadTree()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M13 2.5v4h-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 11.5v-4h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.34 5.5A5 5 0 0 1 11.66 8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/><path d="M11.66 8.5A5 5 0 0 1 2.34 5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/></svg></button>
+          <button class="ib" title="Atualizar árvore" onclick="loadTree()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M13 2.5v4h-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 11.5v-4h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.34 5.5A5 5 0 0 1 11.66 8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/><path d="M11.66 8.5A5 5 0 0 1 2.34 5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/></svg></button>
         </div>
       </div>
       <div id="tree"><div style="padding:12px;font-size:12px;color:var(--tx3)">Carregando...</div></div>
@@ -2363,7 +2438,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
     <div id="welcome">
       <svg class="wlogo" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width=".8"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
       <div class="wtitle">ARES Editor</div>
-      <div class="wsub">Selecione um arquivo no explorador ou crie um novo para comecar</div>
+      <div class="wsub">Selecione um arquivo no explorador ou crie um novo para começar</div>
       <div class="wkeys"><div class="wk"><kbd>Ctrl+S</kbd> Salvar</div><div class="wk"><kbd>Ctrl+F</kbd> Buscar</div><div class="wk"><kbd>Ctrl+Z</kbd> Desfazer</div></div>
       <div id="wactions">
         <div class="wact" onclick="doNewFile()">
@@ -2380,6 +2455,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
         </div>
       </div>
     </div>
+    <!-- Floating edit toolbar for mobile -->
     <div id="edit-toolbar">
       <button class="et-btn" onclick="insertSnippet('  ')" title="Tab"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/><line x1="6" y1="12" x2="15" y2="12"/></svg>Tab</button>
       <div class="et-sep"></div>
@@ -2401,6 +2477,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   </div>
 </div>
 
+<!-- Mobile bottom toolbar -->
 <div id="mob-bar">
   <button class="mob-btn" id="mob-files" onclick="mobShowFiles()">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
@@ -2427,6 +2504,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   </button>
 </div>
 
+<!-- Long-press context menu -->
 <div id="ctx-menu">
   <div class="ctx-item" id="ctx-open"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Abrir</div>
   <div class="ctx-item" id="ctx-ren"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Renomear</div>
@@ -3308,7 +3386,7 @@ document.addEventListener('DOMContentLoaded', function() {
     hideCtxMenu();
     if (!confirm('Excluir "' + p + '"?')) return;
     fetch(au('/delete'), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:p}) })
-      .then(function(r) { if(r.ok){ toast('Excluido','ok'); if(!isDir&&curFile===p) closeTab(p); loadTree(); } else r.text().then(function(t){toast('Erro: '+t,'err');}); });
+      .then(function(r) { if(r.ok){ toast('Excluído','ok'); if(!isDir&&curFile===p) closeTab(p); loadTree(); } else r.text().then(function(t){toast('Erro: '+t,'err');}); });
   });
 
   document.getElementById('tree').addEventListener('touchstart', function(e) {
@@ -3349,7 +3427,7 @@ document.addEventListener('DOMContentLoaded', function() {
     else if (a === 'del1') {
       if (!confirm('Excluir "' + p + '"?')) return;
       fetch(au('/delete'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) })
-        .then(function(r) { if (r.ok) { toast('Excluido', 'ok'); if (curFile === p) closeTab(p); loadTree(); } else r.text().then(function(t) { toast('Erro: ' + t, 'err'); }); });
+        .then(function(r) { if (r.ok) { toast('Excluído', 'ok'); if (curFile === p) closeTab(p); loadTree(); } else r.text().then(function(t) { toast('Erro: ' + t, 'err'); }); });
     }
   });
 
@@ -3472,16 +3550,16 @@ app.use("/files-api", authBot, (req, res, next) => {
 
   if (action === "/read") {
     const fp = safe(req.query.path)
-    if (!fp) return res.status(400).send("Caminho invalido")
-    if (!fs.existsSync(fp) || fs.statSync(fp).isDirectory()) return res.status(404).send("Arquivo nao encontrado")
+    if (!fp) return res.status(400).send("Caminho inválido")
+    if (!fs.existsSync(fp) || fs.statSync(fp).isDirectory()) return res.status(404).send("Arquivo não encontrado")
     res.setHeader("Content-Type", "text/plain; charset=utf-8")
     return res.send(fs.readFileSync(fp, "utf8"))
   }
 
   if (action === "/download") {
     const fp = safe(req.query.path)
-    if (!fp) return res.status(400).send("Caminho invalido")
-    if (!fs.existsSync(fp) || fs.statSync(fp).isDirectory()) return res.status(404).send("Arquivo nao encontrado")
+    if (!fp) return res.status(400).send("Caminho inválido")
+    if (!fs.existsSync(fp) || fs.statSync(fp).isDirectory()) return res.status(404).send("Arquivo não encontrado")
     const filename = path.basename(fp)
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`)
     res.setHeader("Content-Type", "application/octet-stream")
@@ -3491,7 +3569,7 @@ app.use("/files-api", authBot, (req, res, next) => {
   if (action === "/write") {
     const body = req.body || {}
     const fp = safe(body.path)
-    if (!fp) return res.status(400).send("Caminho invalido. Recebido: " + JSON.stringify(body))
+    if (!fp) return res.status(400).send("Caminho inválido. Recebido: " + JSON.stringify(body))
     try {
       const dir = path.dirname(fp)
       if (!fs.existsSync(dir)) {
@@ -3508,8 +3586,8 @@ app.use("/files-api", authBot, (req, res, next) => {
   if (action === "/delete") {
     const body = req.body || {}
     const fp = safe(body.path)
-    if (!fp) return res.status(400).send("Caminho invalido")
-    if (!fs.existsSync(fp)) return res.status(404).send("Nao encontrado")
+    if (!fp) return res.status(400).send("Caminho inválido")
+    if (!fs.existsSync(fp)) return res.status(404).send("Não encontrado")
     try {
       fs.statSync(fp).isDirectory() ? fs.rmSync(fp, { recursive: true, force: true }) : fs.unlinkSync(fp)
       saveBotFilesToBucketDebounced(botId)
@@ -3520,7 +3598,7 @@ app.use("/files-api", authBot, (req, res, next) => {
   if (action === "/mkdir") {
     const body = req.body || {}
     const dp = safe(body.path)
-    if (!dp) return res.status(400).send("Caminho invalido")
+    if (!dp) return res.status(400).send("Caminho inválido")
     try {
       fs.mkdirSync(dp, { recursive: true, mode: 0o755 })
       saveBotFilesToBucketDebounced(botId)
@@ -3532,8 +3610,8 @@ app.use("/files-api", authBot, (req, res, next) => {
     const body = req.body || {}
     const from = safe(body.from)
     const to = safe(body.to)
-    if (!from || !to) return res.status(400).send("Caminhos invalidos")
-    if (!fs.existsSync(from)) return res.status(404).send("Arquivo origem nao encontrado")
+    if (!from || !to) return res.status(400).send("Caminhos inválidos")
+    if (!fs.existsSync(from)) return res.status(404).send("Arquivo origem não encontrado")
     try {
       fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o755 })
       fs.renameSync(from, to)
@@ -3554,9 +3632,9 @@ app.use("/files-api", authBot, (req, res, next) => {
   if (action === "/npm-run") {
     const body = req.body || {}
     const { args } = body
-    if (!args || !Array.isArray(args)) return res.status(400).send("Args invalidos")
+    if (!args || !Array.isArray(args)) return res.status(400).send("Args inválidos")
     const allowedCommands = ["install", "uninstall", "update", "outdated", "list", "audit"]
-    if (!allowedCommands.includes(args[0])) return res.status(403).send("Comando npm nao permitido")
+    if (!allowedCommands.includes(args[0])) return res.status(403).send("Comando npm não permitido")
     res.setHeader("Content-Type", "text/plain; charset=utf-8")
     res.setHeader("Transfer-Encoding", "chunked")
     res.setHeader("X-Content-Type-Options", "nosniff")
@@ -3565,7 +3643,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     child.stdout.on("data", d => res.write(d.toString()))
     child.stderr.on("data", d => res.write(d.toString()))
     child.on("close", (code) => {
-      if (code !== 0) res.write(`\nProcesso encerrado com codigo ${code}`)
+      if (code !== 0) res.write(`\nProcesso encerrado com código ${code}`)
       saveBotFilesToBucketDebounced(botId)
       res.end()
     })
@@ -3610,6 +3688,35 @@ app.use("/files-api", authBot, (req, res, next) => {
   next()
 })
 
+// ─────────────────────────────────────────────
+//  MARKETPLACE DE BASES DE BOTS — COMUNIDADE
+// ─────────────────────────────────────────────
+
+const MARKET_KEY = "marketplace_bases.json"
+
+async function getMarketData() {
+  try {
+    const { client, bucketName } = s3Clients[0]
+    const res = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: MARKET_KEY }))
+    const chunks = []
+    for await (const chunk of res.Body) chunks.push(chunk)
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+  } catch { return { bases: [] } }
+}
+
+async function saveMarketData(data) {
+  try {
+    const { client, bucketName } = s3Clients[0]
+    await client.send(new PutObjectCommand({
+      Bucket: bucketName, Key: MARKET_KEY,
+      Body: JSON.stringify(data),
+      ContentType: "application/json"
+    }))
+    return true
+  } catch { return false }
+}
+
+// Página Web App de ativação
 app.get("/activate", (req, res) => {
   const chatId = req.query.chatId || ""
   res.send(`<!DOCTYPE html>
@@ -3674,11 +3781,11 @@ h1{font-size:22px;font-weight:700;color:var(--tx);letter-spacing:-.4px;margin-bo
         </svg>
       </div>
       <h1>Ativar conta</h1>
-      <p class="sub">Insira sua chave de ativacao para acessar o ARES HOST.</p>
+      <p class="sub">Insira sua chave de ativação para acessar o ARES HOST.</p>
     </div>
     <div id="status" class="status"></div>
     <div class="field">
-      <label>Chave de ativacao</label>
+      <label>Chave de ativação</label>
       <input id="key-input" type="text" placeholder="ARES-XXXX-XXXX-XXXX" maxlength="24" autocomplete="off" autocorrect="off" spellcheck="false">
       <div class="hint">A chave foi enviada pelo administrador. Formato: PREFIXO-XXXX-XXXX-XXXX</div>
     </div>
@@ -3687,7 +3794,7 @@ h1{font-size:22px;font-weight:700;color:var(--tx);letter-spacing:-.4px;margin-bo
   <div id="ok-view" style="display:none" class="already">
     <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>
     <h2>Conta ativada!</h2>
-    <p>Voce ja pode usar o ARES HOST.</p>
+    <p>Você já pode usar o ARES HOST.</p>
   </div>
 </div>
 <script>
@@ -3700,6 +3807,7 @@ if (tg) {
 
 var chatId = "${chatId}";
 
+// Check if already activated
 fetch('/activate-api/check?chatId=' + chatId)
   .then(function(r){ return r.json(); })
   .then(function(d){
@@ -3709,6 +3817,7 @@ fetch('/activate-api/check?chatId=' + chatId)
 var inp = document.getElementById('key-input');
 inp.addEventListener('input', function(){
   var raw = this.value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  // Format: keep first block as-is (prefix, up to 6 chars), then 3 blocks of 4
   var parts = [];
   if (raw.length <= 6) {
     parts = [raw];
@@ -3716,7 +3825,7 @@ inp.addEventListener('input', function(){
     parts = [raw.slice(0, 4)];
     var rest = raw.slice(4);
     for (var i = 0; i < rest.length; i += 4) parts.push(rest.slice(i, i+4));
-    parts = parts.slice(0, 4);
+    parts = parts.slice(0, 4); // max 4 parts
   }
   this.value = parts.join('-').slice(0, 24);
 });
@@ -3731,7 +3840,7 @@ function showOk() {
 async function activate() {
   var key = inp.value.trim().toUpperCase();
   if (!key || key.length < 12) {
-    setStatus('Chave invalida. Verifique e tente novamente.', 'err');
+    setStatus('Chave inválida. Verifique e tente novamente.', 'err');
     return;
   }
   var btn = document.getElementById('btn-activate');
@@ -3747,11 +3856,11 @@ async function activate() {
     if (d.ok) {
       showOk();
     } else {
-      setStatus(d.error || 'Chave invalida ou ja utilizada.', 'err');
+      setStatus(d.error || 'Chave inválida ou já utilizada.', 'err');
       btn.disabled = false; btn.textContent = 'Ativar';
     }
   } catch(e) {
-    setStatus('Erro de conexao. Tente novamente.', 'err');
+    setStatus('Erro de conexão. Tente novamente.', 'err');
     btn.disabled = false; btn.textContent = 'Ativar';
   }
 }
@@ -3766,6 +3875,7 @@ function setStatus(msg, type) {
 </html>`)
 })
 
+// API: checar se está ativado
 app.get("/activate-api/check", async (req, res) => {
   const chatId = req.query.chatId
   if (!chatId) return res.json({ activated: false })
@@ -3773,14 +3883,15 @@ app.get("/activate-api/check", async (req, res) => {
   res.json({ activated: actCheck })
 })
 
+// API: ativar com chave
 app.post("/activate-api/activate", async (req, res) => {
   const { key, chatId } = req.body
-  if (!key || !chatId) return res.status(400).json({ error: "Dados invalidos" })
+  if (!key || !chatId) return res.status(400).json({ error: "Dados inválidos" })
   if (await isActivated(chatId)) return res.json({ ok: true, already: true })
   const inputKey = key.trim().toUpperCase()
   const keys = await loadActiveKeys()
-  if (!keys[inputKey]) return res.json({ ok: false, error: "Chave nao encontrada" })
-  if (keys[inputKey].usedBy) return res.json({ ok: false, error: "Chave ja utilizada" })
+  if (!keys[inputKey]) return res.json({ ok: false, error: "Chave não encontrada" })
+  if (keys[inputKey].usedBy) return res.json({ ok: false, error: "Chave já utilizada" })
   const keyDays = keys[inputKey].daysValid || 30
   keys[inputKey].usedBy = String(chatId)
   keys[inputKey].usedAt = Date.now()
@@ -3788,6 +3899,7 @@ app.post("/activate-api/activate", async (req, res) => {
   await saveActiveKeys(keys)
   await activateUser(chatId, inputKey, keyDays)
   saveAccepted(chatId)
+  // Notificar o usuário via bot
   try {
     const s = getStats(chatId)
     bot.sendMessage(chatId,
@@ -3806,11 +3918,683 @@ app.post("/activate-api/activate", async (req, res) => {
   res.json({ ok: true })
 })
 
-function getDiskPercent() {
+
+/* MARKETPLACE DESATIVADO
+app.get("/marketplace", (req, res) => {
+  res.status(503).send("<html><head><meta charset=UTF-8><title>ARES</title><style>body{background:#0f1117;color:#6b7a94;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}</style></head><body><div><div style=font-size:20px;font-weight:700;color:#dde2ec;margin-bottom:8px>Marketplace</div><div>Em breve</div></div></body></html>")
+})
+
+// API: upload de zip para marketplace
+app.post("/marketplace-api/upload-zip", multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.originalname.toLowerCase().endsWith(".zip")) return cb(new Error("Apenas .zip"))
+    cb(null, true)
+  }
+}).single("file"), async (req, res) => {
+  const tok = req.query.s
+  const chatId = checkSession({ query: { s: tok } })
+  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
+  if (!req.file) return res.status(400).json({ error: "Nenhum arquivo" })
   try {
-    const df = execSync("df / | tail -1").toString()
-    const parts = df.split(/\s+/)
-    return parseInt(parts[4].replace("%", ""))
+    const key = `market_zips/${Date.now()}_${Math.floor(Math.random()*9999)}.zip`
+    const { client, bucketName } = s3Clients[0]
+    await client.send(new PutObjectCommand({
+      Bucket: bucketName,
+      Key: key,
+      Body: req.file.buffer,
+      ContentType: "application/zip",
+      ContentDisposition: `attachment; filename="${req.file.originalname}"`
+    }))
+    // Build public URL
+    const endpoint = s3Clients[0].endpoint.replace(/\/$/, "")
+    const url = `${endpoint}/${bucketName}/${key}`
+    res.json({ ok: true, url })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/* === MARKETPLACE DESATIVADO ===
+// API: verificar se é dono + se curtiu
+app.get("/marketplace-api/check-owner/:id", async (req, res) => {
+  const tok = req.query.s
+  const chatId = checkSession({ query: { s: tok } })
+  if (!chatId) return res.json({ isOwner: false, liked: false })
+  const data = await getMarketData()
+  const base = data.bases.find(b => b.id === req.params.id)
+  if (!base) return res.json({ isOwner: false, liked: false })
+  const isOwner = base.authorId === String(chatId) || String(chatId) === String(OWNER_ID)
+  const liked = Array.isArray(base.likes) && base.likes.includes(String(chatId))
+  res.json({ isOwner, liked })
+})
+
+// API: listar bases
+app.get("/marketplace-api/list", async (req, res) => {
+  const data = await getMarketData()
+  res.json(data.bases || [])
+})
+
+// API: publicar base (requer sessão)
+app.post("/marketplace-api/publish", async (req, res) => {
+  const tok = req.query.s
+  const chatId = checkSession({ query: { s: tok } })
+  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
+
+  const { name, description, category, tags, zipUrl, preview, author } = req.body
+  if (!name || !description || !zipUrl) return res.status(400).json({ error: "Campos obrigatórios: name, description, zipUrl" })
+
+  const data = await getMarketData()
+  const id = "base_" + Date.now() + "_" + Math.floor(Math.random() * 9999)
+  const base = {
+    id, name, description, category: category || "geral",
+    tags: Array.isArray(tags) ? tags.slice(0, 5) : [],
+    zipUrl, preview: preview || "",
+    author: author || "Anônimo",
+    authorId: chatId,
+    createdAt: Date.now(),
+    downloads: 0,
+    likes: [],
+    approved: true
+  }
+  data.bases.unshift(base)
+  if (data.bases.length > 200) data.bases = data.bases.slice(0, 200)
+  await saveMarketData(data)
+  res.json({ ok: true, id })
+})
+
+// API: curtir base
+app.post("/marketplace-api/like/:id", async (req, res) => {
+  const tok = req.query.s
+  const chatId = checkSession({ query: { s: tok } })
+  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
+
+  const data = await getMarketData()
+  const base = data.bases.find(b => b.id === req.params.id)
+  if (!base) return res.status(404).json({ error: "Base não encontrada" })
+  if (!Array.isArray(base.likes)) base.likes = []
+  const idx = base.likes.indexOf(String(chatId))
+  if (idx > -1) base.likes.splice(idx, 1)
+  else base.likes.push(String(chatId))
+  await saveMarketData(data)
+  res.json({ ok: true, likes: base.likes.length, liked: idx === -1 })
+})
+
+// API: incrementar download
+app.post("/marketplace-api/download/:id", async (req, res) => {
+  const data = await getMarketData()
+  const base = data.bases.find(b => b.id === req.params.id)
+  if (base) { base.downloads = (base.downloads || 0) + 1; await saveMarketData(data) }
+  res.json({ ok: true })
+})
+
+// API: deletar (só o dono ou OWNER_ID)
+app.delete("/marketplace-api/delete/:id", async (req, res) => {
+  const tok = req.query.s
+  const chatId = checkSession({ query: { s: tok } })
+  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
+  const data = await getMarketData()
+  const idx = data.bases.findIndex(b => b.id === req.params.id)
+  if (idx === -1) return res.status(404).json({ error: "Não encontrada" })
+  const base = data.bases[idx]
+  if (base.authorId !== chatId && String(chatId) !== String(OWNER_ID)) return res.status(403).json({ error: "Sem permissão" })
+  data.bases.splice(idx, 1)
+  await saveMarketData(data)
+  res.json({ ok: true })
+})
+
+// Callback do Telegram para abrir marketplace
+/* bot.onText(/^\/marketplace$/, msg => {
+  const chatId = msg.chat.id
+  const sessionToken = genWebSession(chatId)
+  const url = `${DOMAIN}/marketplace?s=${sessionToken}`
+  bot.sendMessage(chatId,
+    `🛒 *Marketplace de Bases*\n\nExplore e compartilhe bases de bots de WhatsApp da comunidade ARES!\n\n✅ Gratuito\n📦 Instale direto no seu bot\n🤝 Contribua com a comunidade`,
+    {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "🛒 Abrir Marketplace", url }]] }
+    }
+  )
+})
+*/
+function buildMarketplaceHtml(sessionToken) {
+  const T = JSON.stringify(sessionToken || "")
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0f1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Marketplace — ARES</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{min-height:100%;background:#0f1117;color:#dde2ec;font-family:Inter,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+
+/* NAV */
+nav{position:sticky;top:0;z-index:40;background:rgba(15,17,23,.93);backdrop-filter:blur(12px);border-bottom:1px solid #1e2430;display:flex;align-items:center;height:52px;padding:0 16px;gap:10px;padding-top:env(safe-area-inset-top,0)}
+.logo{font-size:14px;font-weight:700;color:#dde2ec;letter-spacing:-.3px;text-decoration:none;display:flex;align-items:center;gap:7px;flex-shrink:0}
+.logo-dot{width:6px;height:6px;border-radius:50%;background:#4d8ef5}
+.sp{flex:1}
+#sinput{background:#181c27;border:1px solid #1e2430;border-radius:8px;padding:7px 12px;color:#dde2ec;font-size:13px;outline:none;width:180px;font-family:Inter,sans-serif;-webkit-appearance:none}
+#sinput:focus{border-color:#4d8ef5}
+#btn-pub{padding:7px 14px;background:#4d8ef5;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0;font-family:Inter,sans-serif;touch-action:manipulation}
+#btn-pub:active{opacity:.82}
+
+/* NOTICE */
+#notice{background:#1a2035;border-bottom:1px solid #263050;padding:9px 16px;font-size:13px;color:#7a9ad4;display:none}
+#notice.on{display:block}
+
+/* PAGE */
+.wrap{max-width:720px;margin:0 auto;padding:24px 16px 80px}
+
+/* HEADER */
+.ph{margin-bottom:28px}
+.ph-label{font-size:11px;font-weight:600;color:#4d8ef5;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+.ph-title{font-size:24px;font-weight:700;color:#dde2ec;letter-spacing:-.4px;line-height:1.2;margin-bottom:8px}
+.ph-sub{font-size:14px;color:#6b7a94;line-height:1.6;margin-bottom:18px}
+.ph-stats{display:flex;gap:20px}
+.phs{display:flex;flex-direction:column;gap:1px}
+.phs-n{font-size:18px;font-weight:700;color:#dde2ec;letter-spacing:-.3px}
+.phs-l{font-size:11px;color:#44526a;font-weight:500;text-transform:uppercase;letter-spacing:.05em}
+
+/* FILTERS */
+.fbar{display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:16px;border-bottom:1px solid #1e2430;margin-bottom:0}
+.fbar::-webkit-scrollbar{display:none}
+.fc{padding:5px 12px;border-radius:99px;border:1px solid #1e2430;background:none;color:#6b7a94;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap;touch-action:manipulation;flex-shrink:0;font-family:Inter,sans-serif}
+.fc.on{background:rgba(77,142,245,.12);border-color:#4d8ef5;color:#4d8ef5;font-weight:600}
+.fbar-sep{width:1px;height:16px;background:#1e2430;flex-shrink:0;margin:0 2px}
+.fsort{padding:5px 12px;border-radius:99px;border:1px solid transparent;background:none;color:#44526a;font-size:12px;cursor:pointer;white-space:nowrap;touch-action:manipulation;flex-shrink:0;font-family:Inter,sans-serif}
+.fsort.on{color:#6b7a94;border-color:#1e2430}
+.fcount{margin-left:auto;font-size:12px;color:#44526a;flex-shrink:0;padding-left:8px;white-space:nowrap}
+.fcount b{color:#6b7a94;font-weight:600}
+
+/* LIST */
+#loading{padding:48px;text-align:center;color:#44526a;font-size:13px}
+#empty{display:none;padding:48px;text-align:center;color:#44526a}
+#empty strong{display:block;color:#6b7a94;font-size:14px;margin-bottom:6px}
+#list{display:flex;flex-direction:column}
+
+/* ITEM */
+.item{display:flex;align-items:flex-start;gap:13px;padding:16px 0;border-bottom:1px solid #1a1f2b;cursor:pointer;touch-action:manipulation}
+.item:first-child{border-top:1px solid #1a1f2b}
+.item:active{opacity:.75}
+.item-ico{width:40px;height:40px;border-radius:9px;background:#181c27;border:1px solid #1e2430;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#6b7a94;flex-shrink:0;letter-spacing:-.5px}
+.item-body{flex:1;min-width:0}
+.item-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:3px}
+.item-name{font-size:14px;font-weight:600;color:#dde2ec;letter-spacing:-.1px;line-height:1.3}
+.item-cat{font-size:10px;font-weight:600;color:#44526a;text-transform:uppercase;letter-spacing:.04em;background:#181c27;border:1px solid #1e2430;border-radius:4px;padding:1px 6px;white-space:nowrap;flex-shrink:0}
+.item-desc{font-size:13px;color:#6b7a94;line-height:1.55;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:6px}
+.item-foot{display:flex;align-items:center;gap:10px}
+.item-by{font-size:11px;color:#44526a}
+.item-stats{display:flex;gap:8px;margin-left:auto}
+.istat{font-size:11px;color:#44526a}
+
+/* MODAL OVERLAY */
+.ov{display:none;position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.7);backdrop-filter:blur(5px);align-items:flex-end;justify-content:center}
+.ov.on{display:flex}
+@media(min-width:600px){.ov{align-items:center}}
+
+/* SHEET */
+.sh{background:#161921;border:1px solid #1e2430;border-radius:16px 16px 0 0;width:100%;max-width:500px;max-height:92vh;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0)}
+@media(min-width:600px){.sh{border-radius:12px;max-height:85vh;padding-bottom:0}}
+.sh-pip{width:28px;height:3px;background:#2a3040;border-radius:2px;margin:10px auto 0;flex-shrink:0}
+.sh-top{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 12px;border-bottom:1px solid #1e2430;flex-shrink:0;position:sticky;top:0;background:#161921;z-index:2}
+.sh-top h2{font-size:15px;font-weight:700;color:#dde2ec;letter-spacing:-.2px}
+.sh-x{background:none;border:none;color:#44526a;cursor:pointer;padding:4px;border-radius:6px;display:flex;align-items:center;touch-action:manipulation;font-family:Inter,sans-serif}
+.sh-x:active{background:#1e2430;color:#dde2ec}
+.sh-body{padding:18px;display:flex;flex-direction:column;gap:14px}
+.sh-foot{padding:12px 18px;border-top:1px solid #1e2430;display:flex;gap:8px;flex-shrink:0}
+
+/* FIELDS */
+.fl{display:flex;flex-direction:column;gap:5px}
+.fl label{font-size:12px;font-weight:600;color:#8a95a8}
+.fl input,.fl textarea,.fl select{background:#181c27;border:1px solid #1e2430;color:#dde2ec;border-radius:8px;padding:10px 12px;font-size:15px;outline:none;-webkit-appearance:none;width:100%;font-family:Inter,sans-serif;transition:border .12s}
+.fl input:focus,.fl textarea:focus,.fl select:focus{border-color:#4d8ef5;background:#1a1f2c}
+.fl textarea{resize:vertical;min-height:72px;line-height:1.55}
+.fl select option{background:#181c27}
+.fl-hint{font-size:11px;color:#44526a;line-height:1.5}
+.fl-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.or-line{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;color:#44526a;text-transform:uppercase;letter-spacing:.07em}
+.or-line::before,.or-line::after{content:"";flex:1;height:1px;background:#1e2430}
+
+/* UPLOAD */
+.upz{border:1.5px dashed #1e2430;border-radius:8px;padding:18px;text-align:center;cursor:pointer;position:relative;touch-action:manipulation;transition:all .12s}
+.upz:hover,.upz.over{border-color:#4d8ef5;background:rgba(77,142,245,.06)}
+.upz input{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:0}
+.upz-t{font-size:13px;font-weight:600;color:#8a95a8;margin-bottom:3px}
+.upz-s{font-size:12px;color:#44526a}
+.up-prog{height:2px;background:#1e2430;border-radius:2px;overflow:hidden;margin-top:10px;display:none}
+.up-prog.on{display:block}
+.up-bar{height:100%;background:#4d8ef5;width:0%;transition:width .15s;border-radius:2px}
+.up-st{font-size:11px;margin-top:5px;color:#44526a}
+
+/* BUTTONS */
+.btn{padding:11px 16px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;border:none;font-family:Inter,sans-serif;touch-action:manipulation}
+.btn:active{opacity:.82}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.p{background:#4d8ef5;color:#fff;flex:1}
+.btn.g{background:none;border:1px solid #1e2430;color:#8a95a8}
+.btn.d{background:rgba(240,80,80,.08);border:1px solid rgba(240,80,80,.25);color:#e05050}
+.btn-lk{padding:10px 13px;background:none;border:1px solid #1e2430;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:5px;font-size:13px;font-weight:600;color:#6b7a94;font-family:Inter,sans-serif;touch-action:manipulation}
+.btn-lk.on{background:rgba(240,80,80,.08);border-color:rgba(240,80,80,.3);color:#e05050}
+.btn-lk:active{opacity:.8}
+
+/* DETAIL */
+.dt-head{padding:18px;border-bottom:1px solid #1e2430;flex-shrink:0}
+.dt-row{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
+.dt-ico{width:44px;height:44px;border-radius:9px;background:#181c27;border:1px solid #1e2430;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#6b7a94;flex-shrink:0;letter-spacing:-.5px}
+.dt-name{font-size:17px;font-weight:700;color:#dde2ec;letter-spacing:-.3px;margin-bottom:4px}
+.dt-meta{font-size:12px;color:#44526a;display:flex;flex-wrap:wrap;gap:8px}
+.dt-stats{display:flex;border:1px solid #1e2430;border-radius:8px;overflow:hidden}
+.dst{flex:1;padding:10px 8px;text-align:center;border-right:1px solid #1e2430}
+.dst:last-child{border-right:none}
+.dst-n{font-size:15px;font-weight:700;color:#dde2ec;letter-spacing:-.2px}
+.dst-l{font-size:10px;color:#44526a;text-transform:uppercase;letter-spacing:.05em;margin-top:1px}
+.dt-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
+.dt-dl{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:11px 14px;background:#4d8ef5;border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;text-decoration:none;cursor:pointer;font-family:Inter,sans-serif;touch-action:manipulation}
+.dt-dl:active{opacity:.82}
+
+/* INSTALL */
+.inst{background:#181c27;border:1px solid #1e2430;border-radius:8px;overflow:hidden;margin-top:4px}
+.inst-h{padding:9px 14px;font-size:11px;font-weight:700;color:#44526a;text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid #1e2430}
+.ist{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border-bottom:1px solid #1e2430;font-size:13px;color:#6b7a94;line-height:1.55}
+.ist:last-child{border-bottom:none}
+.ist-n{width:18px;height:18px;border-radius:50%;background:rgba(77,142,245,.1);border:1px solid rgba(77,142,245,.25);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#4d8ef5;flex-shrink:0;margin-top:2px}
+
+/* TOAST */
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(8px);background:#161921;border:1px solid #2a3040;padding:9px 16px;border-radius:9px;font-size:13px;font-weight:500;z-index:9999;opacity:0;transition:.2s;pointer-events:none;white-space:nowrap;max-width:90vw;color:#dde2ec}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.toast.ok{border-color:#3ab96a;color:#3ab96a}
+.toast.err{border-color:#e05050;color:#e05050}
+
+@media(max-width:480px){
+  #sinput{width:120px}
+  .fl-row{grid-template-columns:1fr}
+  .ph-stats{gap:16px}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="/marketplace" class="logo"><div class="logo-dot"></div>ARES Marketplace</a>
+  <div class="sp"></div>
+  <input id="sinput" type="search" placeholder="Buscar..." autocomplete="off" spellcheck="false">
+  <button id="btn-pub" onclick="openPub()">Publicar</button>
+</nav>
+
+<div id="notice">Abra pelo link do Telegram para curtir e publicar bases.</div>
+
+<div class="wrap">
+  <div class="ph">
+    <div class="ph-label">Comunidade</div>
+    <h1 class="ph-title">Bases de bots de WhatsApp</h1>
+    <p class="ph-sub">Bases prontas criadas pela comunidade. Instale com um clique no ARES HOST.</p>
+    <div class="ph-stats">
+      <div class="phs"><div class="phs-n" id="st-t">—</div><div class="phs-l">Bases</div></div>
+      <div class="phs"><div class="phs-n" id="st-d">—</div><div class="phs-l">Downloads</div></div>
+      <div class="phs"><div class="phs-n" id="st-a">—</div><div class="phs-l">Autores</div></div>
+    </div>
+  </div>
+
+  <div class="fbar">
+    <button class="fc on" data-cat="all">Todos</button>
+    <button class="fc" data-cat="atendimento">Atendimento</button>
+    <button class="fc" data-cat="vendas">Vendas</button>
+    <button class="fc" data-cat="delivery">Delivery</button>
+    <button class="fc" data-cat="agendamento">Agendamento</button>
+    <button class="fc" data-cat="suporte">Suporte</button>
+    <button class="fc" data-cat="financeiro">Financeiro</button>
+    <button class="fc" data-cat="geral">Geral</button>
+    <div class="fbar-sep"></div>
+    <button class="fsort on" data-sort="new">Recente</button>
+    <button class="fsort" data-sort="likes">Curtidas</button>
+    <button class="fsort" data-sort="dl">Downloads</button>
+    <span class="fcount"><b id="cnt">0</b> bases</span>
+  </div>
+
+  <div id="loading">Carregando...</div>
+  <div id="empty"><strong>Nenhuma base encontrada</strong>Tente outro filtro.</div>
+  <div id="list"></div>
+</div>
+
+<!-- Publish modal -->
+<div class="ov" id="pub-ov">
+  <div class="sh">
+    <div class="sh-pip"></div>
+    <div class="sh-top">
+      <h2>Publicar base</h2>
+      <button class="sh-x" onclick="closePub()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="sh-body">
+      <div class="fl"><label>Nome</label><input id="p-name" type="text" placeholder="Ex: Bot de vendas com cardápio" maxlength="60" autocorrect="off"></div>
+      <div class="fl"><label>Descrição</label><textarea id="p-desc" placeholder="O que o bot faz? Quais funcionalidades tem?" maxlength="400"></textarea></div>
+      <div class="fl-row">
+        <div class="fl"><label>Categoria</label>
+          <select id="p-cat">
+            <option value="geral">Geral</option>
+            <option value="atendimento">Atendimento</option>
+            <option value="vendas">Vendas</option>
+            <option value="delivery">Delivery</option>
+            <option value="agendamento">Agendamento</option>
+            <option value="suporte">Suporte</option>
+            <option value="financeiro">Financeiro</option>
+          </select>
+        </div>
+        <div class="fl"><label>Seu nome</label><input id="p-author" type="text" placeholder="Apelido" maxlength="30" autocorrect="off" autocapitalize="off"></div>
+      </div>
+      <div class="fl">
+        <label>Arquivo .zip</label>
+        <div class="upz" id="upz">
+          <input type="file" id="p-file" accept=".zip">
+          <div class="upz-t" id="upz-t">Selecionar .zip</div>
+          <div class="upz-s" id="upz-s">Clique ou arraste aqui</div>
+          <div class="up-prog" id="up-prog"><div class="up-bar" id="up-bar"></div></div>
+          <div class="up-st" id="up-st"></div>
+        </div>
+        <div class="or-line">ou</div>
+        <input id="p-link" type="url" placeholder="Link público do .zip (GitHub, Drive...)" autocorrect="off" autocapitalize="off">
+        <span class="fl-hint">Envie o arquivo diretamente ou cole um link público</span>
+      </div>
+      <div class="fl"><label>Tags (vírgula)</label><input id="p-tags" type="text" placeholder="nodejs, menu, pagamento..." maxlength="100" autocorrect="off"></div>
+    </div>
+    <div class="sh-foot">
+      <button class="btn g" onclick="closePub()">Cancelar</button>
+      <button class="btn p" id="p-btn" onclick="submitPub()">Publicar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Detail modal -->
+<div class="ov" id="det-ov">
+  <div class="sh">
+    <div class="sh-pip"></div>
+    <div class="sh-top">
+      <h2 id="d-title-head">Detalhes</h2>
+      <button class="sh-x" onclick="closeDet()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="dt-head">
+      <div class="dt-row">
+        <div class="dt-ico" id="d-ico">—</div>
+        <div>
+          <div class="dt-name" id="d-name"></div>
+          <div class="dt-meta" id="d-meta"></div>
+        </div>
+      </div>
+      <div class="dt-stats">
+        <div class="dst"><div class="dst-n" id="d-lk">0</div><div class="dst-l">Curtidas</div></div>
+        <div class="dst"><div class="dst-n" id="d-dl">0</div><div class="dst-l">Downloads</div></div>
+        <div class="dst"><div class="dst-n" id="d-age">—</div><div class="dst-l">Dias</div></div>
+      </div>
+      <div class="dt-actions">
+        <a class="dt-dl" id="d-zip" href="#" target="_blank" rel="noopener" onclick="trackDl()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Baixar .zip
+        </a>
+        <button class="btn-lk" id="d-lkbtn" onclick="toggleLike()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          <span id="d-lk2">0</span>
+        </button>
+        <button class="btn d" id="d-del" style="display:none;padding:10px 12px" onclick="deleteCur()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="sh-body">
+      <p id="d-desc" style="font-size:14px;color:#6b7a94;line-height:1.7"></p>
+      <div id="d-tags" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+      <div class="inst">
+        <div class="inst-h">Como instalar</div>
+        <div class="ist"><div class="ist-n">1</div><span>Clique em <b>Baixar .zip</b> e copie o link</span></div>
+        <div class="ist"><div class="ist-n">2</div><span>No Telegram, vá em <b>Novo Bot</b> e cole o link</span></div>
+        <div class="ist"><div class="ist-n">3</div><span>Dê um nome — o ARES instala e inicia automaticamente</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var TOK = ${T};
+var bases = [], cat = 'all', srt = 'new', q = '', cur = null, uploadedUrl = null;
+
+if (!TOK) document.getElementById('notice').classList.add('on');
+
+function toast(m, t) {
+  var el = document.getElementById('toast');
+  el.textContent = m;
+  el.className = 'toast on' + (t ? ' '+t : '');
+  clearTimeout(el._t);
+  el._t = setTimeout(function(){ el.className = 'toast'; }, 3000);
+}
+function xe(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fn(n){ n=n||0; return n>=1000?(n/1000).toFixed(1)+'k':String(n); }
+function days(ts){ return Math.max(0,Math.floor((Date.now()-ts)/86400000)); }
+function ini(n){ return (n||'?').slice(0,2).toUpperCase(); }
+function catN(c){ return {atendimento:'Atendimento',vendas:'Vendas',delivery:'Delivery',agendamento:'Agendamento',suporte:'Suporte',financeiro:'Financeiro',geral:'Geral'}[c]||'Geral'; }
+function fmtD(ts){ return new Date(ts).toLocaleDateString('pt-BR',{day:'2-digit',month:'short',year:'numeric'}); }
+
+function mkItem(b) {
+  var el = document.createElement('div');
+  el.className = 'item';
+  el.addEventListener('click', function(){ openDet(b.id); });
+  el.innerHTML =
+    '<div class="item-ico">'+xe(ini(b.name))+'</div>'+
+    '<div class="item-body">'+
+      '<div class="item-top">'+
+        '<div class="item-name">'+xe(b.name)+'</div>'+
+        '<span class="item-cat">'+xe(catN(b.category))+'</span>'+
+      '</div>'+
+      '<div class="item-desc">'+xe(b.description)+'</div>'+
+      '<div class="item-foot">'+
+        '<span class="item-by">por '+xe(b.author||'Anônimo')+'</span>'+
+        '<div class="item-stats">'+
+          '<span class="istat">'+fn((b.likes||[]).length)+' curtidas</span>'+
+          '<span class="istat">'+fn(b.downloads||0)+' dl</span>'+
+          '<span class="istat">'+days(b.createdAt)+'d</span>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  return el;
+}
+
+function filtered() {
+  var l = bases.slice();
+  if (cat !== 'all') l = l.filter(function(b){ return b.category===cat; });
+  if (q) { var qq=q.toLowerCase(); l=l.filter(function(b){ return (b.name+' '+b.description+' '+b.author+' '+(b.tags||[]).join(' ')).toLowerCase().includes(qq); }); }
+  if (srt==='likes') l.sort(function(a,b){ return (b.likes||[]).length-(a.likes||[]).length; });
+  else if (srt==='dl') l.sort(function(a,b){ return (b.downloads||0)-(a.downloads||0); });
+  else l.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
+  return l;
+}
+
+function render() {
+  var l = filtered();
+  document.getElementById('cnt').textContent = l.length;
+  var list = document.getElementById('list');
+  var empty = document.getElementById('empty');
+  list.innerHTML = '';
+  if (!l.length) { empty.style.display='block'; return; }
+  empty.style.display = 'none';
+  var f = document.createDocumentFragment();
+  l.forEach(function(b){ f.appendChild(mkItem(b)); });
+  list.appendChild(f);
+}
+
+function updStats() {
+  document.getElementById('st-t').textContent = fn(bases.length);
+  document.getElementById('st-d').textContent = fn(bases.reduce(function(s,b){ return s+(b.downloads||0); }, 0));
+  document.getElementById('st-a').textContent = fn(new Set(bases.map(function(b){ return b.authorId; })).size);
+}
+
+async function load() {
+  try {
+    var r = await fetch('/marketplace-api/list');
+    bases = await r.json();
+    document.getElementById('loading').style.display = 'none';
+    updStats(); render();
+  } catch(e) { document.getElementById('loading').textContent = 'Erro ao carregar.'; }
+}
+
+// PUBLISH
+function openPub() {
+  if (!TOK) { toast('Abra pelo Telegram para publicar', 'err'); return; }
+  uploadedUrl = null;
+  document.getElementById('upz-t').textContent = 'Selecionar .zip';
+  document.getElementById('upz-s').textContent = 'Clique ou arraste aqui';
+  document.getElementById('up-st').textContent = '';
+  document.getElementById('up-prog').classList.remove('on');
+  document.getElementById('up-bar').style.width = '0%';
+  document.getElementById('p-file').value = '';
+  document.getElementById('pub-ov').classList.add('on');
+}
+function closePub() { document.getElementById('pub-ov').classList.remove('on'); }
+
+var upzEl = document.getElementById('upz');
+var fEl = document.getElementById('p-file');
+upzEl.addEventListener('dragover', function(e){ e.preventDefault(); upzEl.classList.add('over'); });
+upzEl.addEventListener('dragleave', function(){ upzEl.classList.remove('over'); });
+upzEl.addEventListener('drop', function(e){ e.preventDefault(); upzEl.classList.remove('over'); var f=e.dataTransfer.files[0]; if(f) handleF(f); });
+fEl.addEventListener('change', function(){ if(fEl.files[0]) handleF(fEl.files[0]); });
+
+function handleF(file) {
+  if (!file.name.toLowerCase().endsWith('.zip')) { toast('Apenas .zip', 'err'); return; }
+  document.getElementById('upz-t').textContent = file.name;
+  document.getElementById('upz-s').textContent = (file.size/1024/1024).toFixed(1)+' MB';
+  doUp(file);
+}
+
+function doUp(file) {
+  var prog=document.getElementById('up-prog'), bar=document.getElementById('up-bar'), st=document.getElementById('up-st');
+  prog.classList.add('on'); bar.style.width='0%'; st.textContent='Enviando...'; st.style.color='#44526a';
+  var fd=new FormData(); fd.append('file', file);
+  var xhr=new XMLHttpRequest();
+  xhr.open('POST', '/marketplace-api/upload-zip?s='+TOK);
+  xhr.upload.onprogress=function(e){ if(e.lengthComputable) bar.style.width=Math.round(e.loaded/e.total*100)+'%'; };
+  xhr.onload=function(){
+    if(xhr.status===200){ var d=JSON.parse(xhr.responseText); uploadedUrl=d.url; bar.style.width='100%'; st.textContent='Pronto'; st.style.color='#3ab96a'; }
+    else { st.textContent='Erro no upload'; st.style.color='#e05050'; }
+  };
+  xhr.onerror=function(){ st.textContent='Erro de conexão'; st.style.color='#e05050'; };
+  xhr.send(fd);
+}
+
+async function submitPub() {
+  var name=document.getElementById('p-name').value.trim();
+  var desc=document.getElementById('p-desc').value.trim();
+  var link=document.getElementById('p-link').value.trim();
+  var zipUrl=uploadedUrl||link;
+  var pcat=document.getElementById('p-cat').value;
+  var author=document.getElementById('p-author').value.trim()||'Anônimo';
+  var tags=document.getElementById('p-tags').value.trim().split(',').map(function(t){return t.trim();}).filter(Boolean).slice(0,5);
+  if (!name){toast('Informe o nome','err');return;}
+  if (!desc){toast('Informe a descrição','err');return;}
+  if (!zipUrl){toast('Envie o .zip ou cole o link','err');return;}
+  if (link&&!link.startsWith('http')){toast('Link inválido','err');return;}
+  var btn=document.getElementById('p-btn');
+  btn.textContent='Publicando...'; btn.disabled=true;
+  try {
+    var r=await fetch('/marketplace-api/publish?s='+TOK,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,description:desc,category:pcat,tags:tags,zipUrl:zipUrl,author:author})});
+    var d=await r.json();
+    if(d.ok){ toast('Publicado!','ok'); closePub(); ['p-name','p-desc','p-link','p-tags'].forEach(function(id){document.getElementById(id).value='';}); uploadedUrl=null; await load(); }
+    else toast(d.error||'Erro','err');
+  } catch(e){ toast('Erro','err'); }
+  btn.textContent='Publicar'; btn.disabled=false;
+}
+
+// DETAIL
+function openDet(id) {
+  var b=bases.find(function(x){return x.id===id;}); if(!b) return;
+  cur=b;
+  document.getElementById('d-title-head').textContent = b.name;
+  document.getElementById('d-ico').textContent = ini(b.name);
+  document.getElementById('d-name').textContent = b.name;
+  document.getElementById('d-meta').innerHTML = '<span>'+xe(b.author||'Anônimo')+'</span><span>'+fmtD(b.createdAt)+'</span><span>'+xe(catN(b.category))+'</span>';
+  document.getElementById('d-lk').textContent = (b.likes||[]).length;
+  document.getElementById('d-dl').textContent = b.downloads||0;
+  document.getElementById('d-age').textContent = days(b.createdAt);
+  document.getElementById('d-desc').textContent = b.description;
+  document.getElementById('d-zip').href = b.zipUrl;
+  document.getElementById('d-lk2').textContent = (b.likes||[]).length;
+  document.getElementById('d-lkbtn').className = 'btn-lk';
+  document.getElementById('d-del').style.display = 'none';
+  document.getElementById('d-tags').innerHTML = (b.tags||[]).map(function(t){return '<span class="tag">'+xe(t)+'</span>';}).join('');
+  document.getElementById('det-ov').classList.add('on');
+  if (TOK) checkOwn(b);
+}
+function closeDet() { document.getElementById('det-ov').classList.remove('on'); cur=null; }
+
+async function checkOwn(b) {
+  try {
+    var r=await fetch('/marketplace-api/check-owner/'+b.id+'?s='+TOK);
+    var d=await r.json();
+    if(d.isOwner) document.getElementById('d-del').style.display='flex';
+    if(d.liked) document.getElementById('d-lkbtn').classList.add('on');
+  } catch(e){}
+}
+
+function trackDl() {
+  if(!cur) return;
+  fetch('/marketplace-api/download/'+cur.id,{method:'POST'}).then(function(){
+    cur.downloads=(cur.downloads||0)+1;
+    document.getElementById('d-dl').textContent=cur.downloads;
+    var b=bases.find(function(x){return x.id===cur.id;}); if(b) b.downloads=cur.downloads;
+  });
+}
+
+async function toggleLike() {
+  if(!TOK){toast('Abra pelo Telegram para curtir','err');return;}
+  if(!cur) return;
+  try {
+    var r=await fetch('/marketplace-api/like/'+cur.id+'?s='+TOK,{method:'POST'});
+    var d=await r.json();
+    if(d.ok){
+      document.getElementById('d-lk').textContent=d.likes;
+      document.getElementById('d-lk2').textContent=d.likes;
+      document.getElementById('d-lkbtn').className='btn-lk'+(d.liked?' on':'');
+      var b=bases.find(function(x){return x.id===cur.id;}); if(b) b.likes=Array(d.likes).fill('x');
+      render();
+    }
+  } catch(e){toast('Erro','err');}
+}
+
+async function deleteCur() {
+  if(!cur||!confirm('Excluir "'+cur.name+'"?')) return;
+  try {
+    var r=await fetch('/marketplace-api/delete/'+cur.id+'?s='+TOK,{method:'DELETE'});
+    var d=await r.json();
+    if(d.ok){ toast('Excluído','ok'); bases=bases.filter(function(b){return b.id!==cur.id;}); closeDet(); updStats(); render(); }
+    else toast(d.error||'Sem permissão','err');
+  } catch(e){toast('Erro','err');}
+}
+
+// EVENTS
+document.querySelectorAll('.fc').forEach(function(b){ b.addEventListener('click',function(){ document.querySelectorAll('.fc').forEach(function(x){x.classList.remove('on');}); b.classList.add('on'); cat=b.dataset.cat; render(); }); });
+document.querySelectorAll('.fsort').forEach(function(b){ b.addEventListener('click',function(){ document.querySelectorAll('.fsort').forEach(function(x){x.classList.remove('on');}); b.classList.add('on'); srt=b.dataset.sort; render(); }); });
+var sT; document.getElementById('sinput').addEventListener('input',function(){ clearTimeout(sT); var v=this.value.trim(); sT=setTimeout(function(){q=v;render();},250); });
+document.getElementById('pub-ov').addEventListener('click',function(e){if(e.target===this)closePub();});
+document.getElementById('det-ov').addEventListener('click',function(e){if(e.target===this)closeDet();});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){closePub();closeDet();}});
+
+load();
+</script>
+</body>
+</html>`
+}
+
+
+
+
+function getDiskPercent() {
+
+try {
+  const df = execSync("df / | tail -1").toString()
+  const parts = df.split(/\s+/)
+  return parseInt(parts[4].replace("%", ""))
   } catch { return 0 }
 }
 
@@ -3862,12 +4646,12 @@ function checkDiskAlert() {
   if (!alertId) return
   if (pct >= 90) {
     bot.sendMessage(alertId,
-      `🚨 *DISCO CRITICO: ${pct}%*\n\nO servidor esta quase sem espaco! Use /limpar para liberar espaco local.`,
+      `🚨 *DISCO CRÍTICO: ${pct}%*\n\nO servidor está quase sem espaço! Use /limpar para liberar espaço local.`,
       { parse_mode: "Markdown" }
     ).catch(() => {})
   } else if (pct >= 80) {
     bot.sendMessage(alertId,
-      `⚠️ *Disco em ${pct}%*\n\nFique atento ao espaco em disco.`,
+      `⚠️ *Disco em ${pct}%*\n\nFique atento ao espaço em disco.`,
       { parse_mode: "Markdown" }
     ).catch(() => {})
   }
@@ -3880,8 +4664,8 @@ setTimeout(checkDiskAlert, 10 * 60 * 1000)
 
 process.on("uncaughtException", err => {
   if (err.code === "EADDRINUSE") return
-  if (err.code === "ETELEGRAM") return
-  console.error("Erro nao tratado:", err.message || err)
+  if (err.code === "ETELEGRAM") return  // Telegram API errors são tratados localmente
+  console.error("Erro não tratado:", err.message || err)
 })
 
 process.on("SIGTERM", async () => {
@@ -3907,18 +4691,14 @@ server.listen(PORT, async () => {
   const diskPctInit = getDiskPercent()
   console.log(`💿 DISCO NO STARTUP: ${diskPctInit}%`)
   aresBanner()
-  try {
-    await bot.startPolling({ restart: true, interval: 500 })
-    console.log("✅ Bot polling iniciado com sucesso")
-  } catch (err) {
-    console.error("❌ Erro ao iniciar polling:", err.message)
-  }
+  bot.startPolling({ restart: true, interval: 2000 }).catch(() => {})
   bot.on("polling_error", (err) => {
     if (err.code === "ETELEGRAM" && err.message.includes("409")) return
     console.error("polling_error:", err.message)
   })
+  // Warm caches in background (don't await — don't block startup)
   getActivated().then(d => {
-    console.log(`✅ Cache de ativacao aquecido: ${Object.keys(d).length} usuarios`)
+    console.log(`✅ Cache de ativação aquecido: ${Object.keys(d).length} usuários`)
   }).catch(() => {})
   getActiveKeys().then(d => {
     console.log(`✅ Cache de chaves aquecido: ${Object.keys(d).length} chaves`)
