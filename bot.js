@@ -686,8 +686,9 @@ function daysLeft(ts) {
 }
 
 function generateKey(prefix) {
-  prefix = prefix || "ARES"
-  return `${prefix}-${crypto.randomBytes(4).toString("hex").toUpperCase()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
+  prefix = (prefix || "ARES").toUpperCase().slice(0, 6)
+  const block = () => crypto.randomBytes(2).toString("hex").toUpperCase()
+  return `${prefix}-${block()}-${block()}-${block()}`
 }
 // ──────────────────────────────────────────────────────────────────
 
@@ -838,64 +839,7 @@ bot.onText(/\/start/, async msg => {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
   }
-
-  const s = getStats(chatId)
-  const act = getUserActivation(chatId)
-  const user = msg.from
-
-  // Build name line
-  const firstName = user.first_name || ""
-  const lastName = user.last_name || ""
-  const fullName = (firstName + " " + lastName).trim()
-  const username = user.username ? `@${user.username}` : `ID: ${chatId}`
-
-  // Build expiry line
-  let expiryLine = ""
-  if (act && act.expiresAt) {
-    const left = daysLeft(act.expiresAt)
-    if (left <= 0) {
-      expiryLine = `⛔ Expirado em ${fmtExpiry(act.expiresAt)}`
-    } else if (left <= 7) {
-      expiryLine = `⚠️ Expira em *${left} dias* (${fmtExpiry(act.expiresAt)})`
-    } else {
-      expiryLine = `📅 Válido até *${fmtExpiry(act.expiresAt)}* (${left}d)`
-    }
-  }
-
-  const caption =
-    `*${fullName}*\n` +
-    `${username}\n` +
-    (expiryLine ? expiryLine + "\n" : "") +
-    `\n` +
-    `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`
-
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-      [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-      [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
-    ]
-  }
-
-  // Try to get user profile photo
-  try {
-    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
-    if (photos && photos.total_count > 0) {
-      const fileId = photos.photos[0][photos.photos[0].length - 1].file_id
-      return bot.sendPhoto(chatId, fileId, {
-        caption,
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      })
-    }
-  } catch (e) {}
-
-  // Fallback sem foto
-  bot.sendMessage(chatId,
-    `🚀 *ARES HOST*\n\n` + caption,
-    { parse_mode: "Markdown", reply_markup: keyboard }
-  )
+  return sendStartMessage(chatId, null, null, msg.from)
 })
 
 function downloadFile(url, dest) {
@@ -1040,6 +984,76 @@ bot.on("message", async msg => {
     })
   }
 })
+
+async function sendStartMessage(chatId, msgId, mode, fromUser) {
+  const s = getStats(chatId)
+  const act = getUserActivation(chatId)
+
+  let expiryLine = ""
+  if (act && act.expiresAt) {
+    const left = daysLeft(act.expiresAt)
+    if (left <= 0) expiryLine = `\n⛔ Acesso expirado`
+    else if (left <= 7) expiryLine = `\n⚠️ Expira em *${left} dias* (${fmtExpiry(act.expiresAt)})`
+    else expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
+  }
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
+      [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
+      [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
+    ]
+  }
+
+  // mode "edit" = editMessageText (sem foto, vindo de botão)
+  if (mode === "edit") {
+    return bot.editMessageText(
+      `🚀 *ARES HOST*${expiryLine}\n\n` +
+      `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
+      { chat_id: chatId, message_id: msgId, parse_mode: "Markdown", reply_markup: keyboard }
+    ).catch(() => {})
+  }
+
+  // mode null = envio novo com foto
+  const user = fromUser || null
+  let nameLine = "ARES HOST"
+  let userLine = ""
+  if (user) {
+    const fn = ((user.first_name || "") + " " + (user.last_name || "")).trim()
+    nameLine = fn || "ARES HOST"
+    userLine = user.username ? `@${user.username}` : `ID: ${chatId}`
+  }
+
+  const caption =
+    (nameLine ? `*${nameLine}*\n` : "") +
+    (userLine ? `${userLine}\n` : "") +
+    expiryLine + (expiryLine ? "\n" : "") +
+    `\n🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`
+
+  // Try send with profile photo
+  try {
+    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
+    if (photos && photos.total_count > 0) {
+      const fileId = photos.photos[0][photos.photos[0].length - 1].file_id
+      return bot.sendPhoto(chatId, fileId, {
+        caption,
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      })
+    }
+  } catch (e) {}
+
+  // Fallback sem foto
+  return bot.sendMessage(chatId,
+    `🚀 *${nameLine}*\n` + (userLine ? userLine + "\n" : "") +
+    expiryLine + (expiryLine ? "\n" : "") +
+    `\n🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
+    { parse_mode: "Markdown", reply_markup: keyboard }
+  )
+}
 
 bot.on("callback_query", async query => {
   const chatId = query.message.chat.id
@@ -1191,49 +1205,10 @@ bot.on("callback_query", async query => {
     saveAccepted(chatId)
     delete termoCheck[chatId]
     bot.deleteMessage(chatId, msgId).catch(() => {})
-    const s = getStats(chatId)
-    return bot.sendMessage(chatId,
-      `✅ *Termos aceitos! Bem-vindo ao ARES HOST.*\n\n` +
-      `🚀 *ARES HOST*\n\n` +
-      `🤖 Seus Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
-      `💾 RAM: *${s.ram}MB*  |  ⏱ Uptime: *${s.uptime}*`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-            [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-            [{ text: "📊 Estatisticas", callback_data: "menu_stats" }],
-          ]
-        }
-      }
-    )
+    return sendStartMessage(chatId, null, null)
   }
   if (action === "menu_home") {
-    const s = getStats(chatId)
-    const act = getUserActivation(chatId)
-    let expiryLine = ""
-    if (act && act.expiresAt) {
-      const left = daysLeft(act.expiresAt)
-      if (left <= 0) expiryLine = `\n⛔ Acesso expirado`
-      else if (left <= 7) expiryLine = `\n⚠️ Expira em *${left} dias*`
-      else expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
-    }
-    return bot.editMessageText(
-      `🚀 *ARES HOST*${expiryLine}\n\n` +
-      `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
-      {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-            [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-            [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
-          ]
-        }
-      }
-    )
+    return sendStartMessage(chatId, msgId, "edit")
   }
   if (action === "menu_new") {
     return bot.editMessageText(
@@ -3589,8 +3564,8 @@ h1{font-size:22px;font-weight:700;color:var(--tx);letter-spacing:-.4px;margin-bo
     <div id="status" class="status"></div>
     <div class="field">
       <label>Chave de ativação</label>
-      <input id="key-input" type="text" placeholder="ARES-XXXX-XXXX" maxlength="20" autocomplete="off" autocorrect="off" spellcheck="false">
-      <div class="hint">A chave foi enviada pelo administrador. Formato: XXXX-XXXX-XXXX</div>
+      <input id="key-input" type="text" placeholder="ARES-XXXX-XXXX-XXXX" maxlength="24" autocomplete="off" autocorrect="off" spellcheck="false">
+      <div class="hint">A chave foi enviada pelo administrador. Formato: PREFIXO-XXXX-XXXX-XXXX</div>
     </div>
     <button class="btn" id="btn-activate" onclick="activate()">Ativar</button>
   </div>
@@ -3619,11 +3594,18 @@ fetch('/activate-api/check?chatId=' + chatId)
 
 var inp = document.getElementById('key-input');
 inp.addEventListener('input', function(){
-  // auto-format: insert dashes
-  var v = this.value.replace(/[^A-Z0-9]/gi,'').toUpperCase();
-  if (v.length > 4 && v[4] !== '-') v = v.slice(0,4)+'-'+v.slice(4);
-  if (v.length > 9 && v[9] !== '-') v = v.slice(0,9)+'-'+v.slice(9);
-  this.value = v.slice(0,14);
+  var raw = this.value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  // Format: keep first block as-is (prefix, up to 6 chars), then 3 blocks of 4
+  var parts = [];
+  if (raw.length <= 6) {
+    parts = [raw];
+  } else {
+    parts = [raw.slice(0, 4)];
+    var rest = raw.slice(4);
+    for (var i = 0; i < rest.length; i += 4) parts.push(rest.slice(i, i+4));
+    parts = parts.slice(0, 4); // max 4 parts
+  }
+  this.value = parts.join('-').slice(0, 24);
 });
 inp.addEventListener('keydown', function(e){ if(e.key==='Enter') activate(); });
 
@@ -3635,7 +3617,7 @@ function showOk() {
 
 async function activate() {
   var key = inp.value.trim().toUpperCase();
-  if (!key || key.length < 14) {
+  if (!key || key.length < 12) {
     setStatus('Chave inválida. Verifique e tente novamente.', 'err');
     return;
   }
