@@ -129,15 +129,11 @@ function getMeta(botId) {
 }
 
 function updateMetaAccess(botId) {
-  setImmediate(() => {
-    try {
-      const meta = getMeta(botId)
-      if (meta) {
-        meta.lastAccessed = Date.now()
-        fs.writeFileSync(path.join(BASE_PATH, botId, "meta.json"), JSON.stringify(meta))
-      }
-    } catch (e) {}
-  })
+  const meta = getMeta(botId)
+  if (meta) {
+    meta.lastAccessed = Date.now()
+    fs.writeFileSync(path.join(BASE_PATH, botId, "meta.json"), JSON.stringify(meta))
+  }
 }
 
 function updateNodeModulesHash(botId, hash) {
@@ -331,15 +327,6 @@ async function downloadNodeModulesFromBucket(botId, targetPath, packageHash) {
   } finally {
     try { fs.unlinkSync(tarballPath) } catch {}
   }
-}
-
-const _saveDebounce = {}
-function saveBotFilesToBucketDebounced(botId) {
-  clearTimeout(_saveDebounce[botId])
-  _saveDebounce[botId] = setTimeout(() => {
-    delete _saveDebounce[botId]
-    saveBotFilesToBucketDebounced(botId)
-  }, 10000) // wait 10s of inactivity before saving
 }
 
 async function saveBotFilesToBucket(botId) {
@@ -627,25 +614,17 @@ io.on("connection", socket => {
 const USERS_PATH = path.join(BASE_PATH, "_users")
 if (!fs.existsSync(USERS_PATH)) fs.mkdirSync(USERS_PATH, { recursive: true })
 
-const _acceptedCache = new Set()
-
 function hasAccepted(chatId) {
-  const cid = String(chatId)
-  if (_acceptedCache.has(cid)) return true
   try {
-    const f = path.join(USERS_PATH, `${cid}.json`)
-    const ok = fs.existsSync(f) && JSON.parse(fs.readFileSync(f, "utf8")).accepted === true
-    if (ok) _acceptedCache.add(cid)
-    return ok
+    const f = path.join(USERS_PATH, `${chatId}.json`)
+    return fs.existsSync(f) && JSON.parse(fs.readFileSync(f, "utf8")).accepted === true
   } catch { return false }
 }
 
 function saveAccepted(chatId) {
-  const cid = String(chatId)
   if (!fs.existsSync(USERS_PATH)) fs.mkdirSync(USERS_PATH, { recursive: true })
-  const f = path.join(USERS_PATH, `${cid}.json`)
+  const f = path.join(USERS_PATH, `${chatId}.json`)
   fs.writeFileSync(f, JSON.stringify({ accepted: true, at: Date.now() }))
-  _acceptedCache.add(cid)
 }
 
 // ─── SISTEMA DE ATIVAÇÃO ───────────────────────────────────────────
@@ -695,9 +674,7 @@ async function saveActivated(data) {
 // Cache em memória para evitar chamadas repetidas ao bucket
 const _keysCache  = { data: null, ts: 0 }
 const _actCache   = { data: null, ts: 0 }
-const CACHE_TTL   = 5 * 60 * 1000 // 5 min
-// Fast in-memory set for activation check (populated on first load)
-const _activatedSet = new Set()
+const CACHE_TTL   = 30 * 1000 // 30s
 
 async function getActiveKeys() {
   if (_keysCache.data && Date.now() - _keysCache.ts < CACHE_TTL) return _keysCache.data
@@ -710,15 +687,7 @@ async function getActivated() {
   if (_actCache.data && Date.now() - _actCache.ts < CACHE_TTL) return _actCache.data
   _actCache.data = await loadActivated()
   _actCache.ts = Date.now()
-  // populate fast set
-  _activatedSet.clear()
-  for (const k of Object.keys(_actCache.data)) _activatedSet.add(k)
   return _actCache.data
-}
-
-// Fast sync check (uses in-memory set, no S3) — use for non-critical paths
-function isActivatedSync(chatId) {
-  return _activatedSet.has(String(chatId))
 }
 
 async function isActivated(chatId) {
@@ -736,7 +705,6 @@ async function activateUser(chatId, key, daysValid) {
   activated[String(chatId)] = { key, at: Date.now(), expiresAt, daysValid }
   _actCache.data = activated
   _actCache.ts = Date.now()
-  _activatedSet.add(String(chatId))  // instant update
   await saveActivated(activated)
 }
 
@@ -1249,27 +1217,6 @@ async function sendStartMessage(chatId, msgId, mode, fromUser) {
   )
 }
 
-// Edita texto OU caption (para mensagens de foto do card /start)
-async function safeEdit(chatId, msgId, text, opts) {
-  const options = { parse_mode: "Markdown", ...opts }
-  try {
-    return await bot.editMessageText(text, options)
-  } catch (e) {
-    if (e.message && e.message.includes("there is no text in the message")) {
-      // É uma mensagem de foto — edita o caption e remove a foto
-      // Telegram não permite editar foto->texto, então deletamos e mandamos novo
-      try {
-        await bot.deleteMessage(chatId, msgId)
-      } catch (e2) {}
-      return bot.sendMessage(chatId, text, {
-        parse_mode: "Markdown",
-        reply_markup: opts?.reply_markup
-      })
-    }
-    // outros erros: ignora silenciosamente
-  }
-}
-
 bot.on("callback_query", async query => {
   const chatId = query.message.chat.id
   const msgId = query.message.message_id
@@ -1281,7 +1228,7 @@ bot.on("callback_query", async query => {
 
   if (action === "limpar_local" || action === "owner_limpar_confirm") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-    safeEdit(chatId, msgId, "🧹 Parando bots e limpando disco...", { })
+    bot.editMessageText("🧹 Parando bots e limpando disco...", { chat_id: chatId, message_id: msgId })
     try {
       const botIds = Object.keys(activeBots)
       let stopped = 0
@@ -1314,27 +1261,27 @@ bot.on("callback_query", async query => {
       }
       const diskAfter = getDiskPercent()
       const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
-      return safeEdit(chatId, msgId, 
+      return bot.editMessageText(
         `✅ *Disco limpo!*\n\n` +
         `🛑 Bots parados: *${stopped}*\n` +
         `📦 node\\_modules: *${nmCount}*\n` +
         `📋 Logs: *${logCount}*\n` +
         `♻️ Reiniciando: *${restarted}* bots\n\n` +
         `💿 Disco: *${diskAfter}%*  |  💾 RAM: *${ramAfter}MB*`,
-        { parse_mode: "Markdown" }
+        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
     } catch (err) {
-      return safeEdit(chatId, msgId, `❌ Erro: ${err.message}`, { })
+      return bot.editMessageText(`❌ Erro: ${err.message}`, { chat_id: chatId, message_id: msgId })
     }
   }
 
   if (action === "limpar_tudo") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
     // Confirmação extra antes de apagar tudo
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `💣 *ATENÇÃO — Ação irreversível!*\n\nIsso vai:\n• Parar todos os bots\n• Apagar todos os arquivos locais\n• Apagar todos os arquivos nos buckets\n\nTodos os bots serão *permanentemente deletados*. Tem certeza?`,
       {
-        parse_mode: "Markdown",
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "💣 Sim, apagar TUDO", callback_data: "limpar_tudo_confirm:" + chatId }],
@@ -1347,7 +1294,7 @@ bot.on("callback_query", async query => {
 
   if (action === "limpar_tudo_confirm") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-    safeEdit(chatId, msgId, "💣 Apagando tudo...", { })
+    bot.editMessageText("💣 Apagando tudo...", { chat_id: chatId, message_id: msgId })
     try {
       // 1. Parar todos os bots
       for (const bid of Object.keys(activeBots)) {
@@ -1392,20 +1339,20 @@ bot.on("callback_query", async query => {
 
       const diskAfter = getDiskPercent()
       const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
-      return safeEdit(chatId, msgId, 
+      return bot.editMessageText(
         `✅ *Tudo apagado!*\n\n` +
         `🗑️ Disco local: limpo\n` +
         `☁️ Objetos no bucket: *${objDeleted}* deletados\n\n` +
         `💿 Disco: *${diskAfter}%*  |  💾 RAM: *${ramAfter}MB*`,
-        { parse_mode: "Markdown" }
+        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
     } catch (err) {
-      return safeEdit(chatId, msgId, `❌ Erro: ${err.message}`, { })
+      return bot.editMessageText(`❌ Erro: ${err.message}`, { chat_id: chatId, message_id: msgId })
     }
   }
 
   if (action === "owner_limpar_cancel") {
-    return safeEdit(chatId, msgId, "❌ Limpeza cancelada.", { })
+    return bot.editMessageText("❌ Limpeza cancelada.", { chat_id: chatId, message_id: msgId })
   }
 
   if (action === "termo_check") {
@@ -1423,30 +1370,18 @@ bot.on("callback_query", async query => {
     return sendStartMessage(chatId, null, null)
   }
   if (action === "menu_home") {
-    const s = getStats(chatId)
-    const keyboard = {
-      inline_keyboard: [
-        [{ text: "➕ Novo Bot",     callback_data: "menu_new"   }],
-        [{ text: "📂 Meus Bots",    callback_data: "menu_list"  }],
-        [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
-      ]
-    }
-    return safeEdit(chatId, msgId, 
-      `🚀 *ARES HOST*\n\n` +
-      `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
-      { parse_mode: "Markdown", reply_markup: keyboard }
-    ).catch(() => {})
+    return sendStartMessage(chatId, msgId, "edit")
   }
   if (action === "menu_new") {
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       "➕ *Novo Bot*\n\n" +
       "Escolha como criar seu bot:\n\n" +
       "📎 Envie um arquivo .zip (ate 20MB)\n" +
       "🔗 Envie um link publico do ZIP\n" +
       "🌐 Use a pagina de upload (sem limite)\n" +
       "🆕 Crie um bot do zero com editor",
-      { parse_mode: "Markdown",
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🌐 Upload via Web", callback_data: "gen_upload" }],
@@ -1462,11 +1397,12 @@ bot.on("callback_query", async query => {
     uploadTokens[token] = { chatId, createdAt: Date.now() }
     setTimeout(() => { delete uploadTokens[token] }, 15 * 60 * 1000)
     const uploadUrl = `${DOMAIN}/upload/${token}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🌐 *Link de Upload Gerado*\n\n` +
       `Acesse a pagina abaixo, escolha o .zip e o nome do bot:\n\n` +
       `⏳ Expira em *15 minutos*`,
-      { parse_mode: "Markdown",
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🌐 Abrir pagina de upload", url: uploadUrl }],
@@ -1520,7 +1456,7 @@ process.on('uncaughtException', (err) => {
       const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
       const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
       console.log("✅ Bot criado com sucesso:", botId)
-      return safeEdit(chatId, msgId, 
+      return bot.editMessageText(
         `✅ *Bot criado do zero!*\n\n` +
         `🆔 ID: \`${botId}\`\n` +
         `📁 Estrutura básica criada:\n` +
@@ -1528,7 +1464,8 @@ process.on('uncaughtException', (err) => {
         `• index.js\n` +
         `• README.md\n\n` +
         `Agora edite os arquivos e depois inicie o bot.`,
-        { parse_mode: "Markdown",
+        {
+          chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
               [{ text: "📁 Abrir Editor", url: editorUrl }],
@@ -1541,9 +1478,9 @@ process.on('uncaughtException', (err) => {
       )
     } catch (err) {
       console.error("❌ Erro ao criar bot do zero:", err)
-      return safeEdit(chatId, msgId, 
+      return bot.editMessageText(
         `❌ *Erro ao criar bot:*\n\n${err.message}`,
-        { parse_mode: "Markdown" }
+        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
     }
   }
@@ -1551,10 +1488,10 @@ process.on('uncaughtException', (err) => {
     const folders = getUserBots(chatId)
     const s = getStats(chatId)
     if (folders.length === 0) {
-      return safeEdit(chatId, msgId, 
+      return bot.editMessageText(
         "📂 *Meus Bots*\n\nNenhum bot hospedado ainda.\nUse Novo Bot para fazer upload!",
         {
-          parse_mode: "Markdown",
+          chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
               [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
@@ -1569,24 +1506,25 @@ process.on('uncaughtException', (err) => {
       callback_data: `manage:${f}`
     }])
     buttons.push([{ text: "⬅️ Voltar", callback_data: "menu_home" }])
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `📂 *Meus Bots*\n\n🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*  |  Total: *${s.total}*\n\nEscolha um bot:`,
       {
-        parse_mode: "Markdown",
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: { inline_keyboard: buttons }
       }
     )
   }
   if (action === "menu_stats") {
     const s = getStats(chatId)
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `📊 *Estatisticas*\n\n` +
       `🤖 Total: *${s.total}*\n` +
       `🟢 Online: *${s.online}*\n` +
       `🔴 Offline: *${s.offline}*\n` +
       `💾 RAM: *${s.ram}MB*\n` +
       `⏱ Uptime: *${s.uptime}*`,
-      { parse_mode: "Markdown",
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🔄 Atualizar", callback_data: "menu_stats" }],
@@ -1599,13 +1537,14 @@ process.on('uncaughtException', (err) => {
   if (false && action === "menu_market_disabled") {
     const sessionToken = genWebSession(chatId)
     const url = `${DOMAIN}/marketplace?s=${sessionToken}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🛒 *Marketplace de Bases*\n\n` +
       `Explore bases de bots de WhatsApp prontas criadas pela comunidade ARES!\n\n` +
       `✅ Gratuito e open source\n` +
       `📦 Instale com 1 clique\n` +
       `🤝 Contribua publicando a sua base`,
-      { parse_mode: "Markdown",
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🛒 Abrir Marketplace", url }],
@@ -1628,12 +1567,13 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\n` +
       `ID: \`${id}\`\n` +
       `Status: ${isRunning ? "🟢 Online" : "🔴 Offline"}\n` +
       `Log: ${logSize}`,
-      { parse_mode: "Markdown",
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -1656,10 +1596,10 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🔴 Offline`,
       {
-        parse_mode: "Markdown",
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -1676,10 +1616,10 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🟢 Iniciando...`,
       {
-        parse_mode: "Markdown",
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -1696,10 +1636,10 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🟢 Reiniciando...`,
       {
-        parse_mode: "Markdown",
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -3576,7 +3516,7 @@ app.use("/files-api", authBot, (req, res, next) => {
         fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
       }
       fs.writeFileSync(fp, body.content !== undefined ? body.content : "", "utf8")
-      saveBotFilesToBucketDebounced(botId)
+      saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
     } catch (err) {
       return res.status(500).send("Erro ao escrever: " + err.message)
@@ -3590,7 +3530,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     if (!fs.existsSync(fp)) return res.status(404).send("Não encontrado")
     try {
       fs.statSync(fp).isDirectory() ? fs.rmSync(fp, { recursive: true, force: true }) : fs.unlinkSync(fp)
-      saveBotFilesToBucketDebounced(botId)
+      saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
     } catch (err) { return res.status(500).send("Erro ao deletar: " + err.message) }
   }
@@ -3601,7 +3541,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     if (!dp) return res.status(400).send("Caminho inválido")
     try {
       fs.mkdirSync(dp, { recursive: true, mode: 0o755 })
-      saveBotFilesToBucketDebounced(botId)
+      saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
     } catch (err) { return res.status(500).send("Erro ao criar pasta: " + err.message) }
   }
@@ -3615,7 +3555,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     try {
       fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o755 })
       fs.renameSync(from, to)
-      saveBotFilesToBucketDebounced(botId)
+      saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
     } catch (err) { return res.status(500).send("Erro ao renomear: " + err.message) }
   }
@@ -3644,7 +3584,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     child.stderr.on("data", d => res.write(d.toString()))
     child.on("close", (code) => {
       if (code !== 0) res.write(`\nProcesso encerrado com código ${code}`)
-      saveBotFilesToBucketDebounced(botId)
+      saveBotFilesToBucket(botId).catch(() => {})
       res.end()
     })
     child.on("error", err => { res.write("\nErro: " + err.message); res.end() })
@@ -4663,9 +4603,7 @@ setInterval(checkDiskAlert, 30 * 60 * 1000)
 setTimeout(checkDiskAlert, 10 * 60 * 1000)
 
 process.on("uncaughtException", err => {
-  if (err.code === "EADDRINUSE") return
-  if (err.code === "ETELEGRAM") return  // Telegram API errors são tratados localmente
-  console.error("Erro não tratado:", err.message || err)
+  if (err.code !== "EADDRINUSE") console.error("Erro não tratado:", err)
 })
 
 process.on("SIGTERM", async () => {
@@ -4696,13 +4634,6 @@ server.listen(PORT, async () => {
     if (err.code === "ETELEGRAM" && err.message.includes("409")) return
     console.error("polling_error:", err.message)
   })
-  // Warm caches in background (don't await — don't block startup)
-  getActivated().then(d => {
-    console.log(`✅ Cache de ativação aquecido: ${Object.keys(d).length} usuários`)
-  }).catch(() => {})
-  getActiveKeys().then(d => {
-    console.log(`✅ Cache de chaves aquecido: ${Object.keys(d).length} chaves`)
-  }).catch(() => {})
   await restoreAllBotsFromBucket()
   if (fs.existsSync(BASE_PATH)) {
     const bots = fs.readdirSync(BASE_PATH).filter(f => {
