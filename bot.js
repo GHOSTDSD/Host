@@ -628,112 +628,66 @@ function saveAccepted(chatId) {
 }
 
 // ─── SISTEMA DE ATIVAÇÃO ───────────────────────────────────────────
-const ACTIVE_KEYS_S3  = "system/active_keys.json"
-const ACTIVATED_S3    = "system/activated.json"
+const ACTIVE_KEYS_FILE = path.join(BASE_PATH, "_users", "active_keys.json")
+const ACTIVATED_FILE   = path.join(BASE_PATH, "_users", "activated.json")
 
-async function loadActiveKeys() {
+function loadActiveKeys() {
   try {
-    const { client, bucketName } = s3Clients[0]
-    const res = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: ACTIVE_KEYS_S3 }))
-    const chunks = []
-    for await (const chunk of res.Body) chunks.push(chunk)
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+    if (!fs.existsSync(ACTIVE_KEYS_FILE)) return {}
+    return JSON.parse(fs.readFileSync(ACTIVE_KEYS_FILE, "utf8"))
   } catch { return {} }
 }
 
-async function saveActiveKeys(data) {
-  try {
-    const { client, bucketName } = s3Clients[0]
-    await client.send(new PutObjectCommand({
-      Bucket: bucketName, Key: ACTIVE_KEYS_S3,
-      Body: JSON.stringify(data), ContentType: "application/json"
-    }))
-  } catch (e) { console.error("saveActiveKeys error:", e.message) }
+function saveActiveKeys(data) {
+  if (!fs.existsSync(path.dirname(ACTIVE_KEYS_FILE))) fs.mkdirSync(path.dirname(ACTIVE_KEYS_FILE), { recursive: true })
+  fs.writeFileSync(ACTIVE_KEYS_FILE, JSON.stringify(data, null, 2))
 }
 
-async function loadActivated() {
+function loadActivated() {
   try {
-    const { client, bucketName } = s3Clients[0]
-    const res = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: ACTIVATED_S3 }))
-    const chunks = []
-    for await (const chunk of res.Body) chunks.push(chunk)
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+    if (!fs.existsSync(ACTIVATED_FILE)) return {}
+    return JSON.parse(fs.readFileSync(ACTIVATED_FILE, "utf8"))
   } catch { return {} }
 }
 
-async function saveActivated(data) {
-  try {
-    const { client, bucketName } = s3Clients[0]
-    await client.send(new PutObjectCommand({
-      Bucket: bucketName, Key: ACTIVATED_S3,
-      Body: JSON.stringify(data), ContentType: "application/json"
-    }))
-  } catch (e) { console.error("saveActivated error:", e.message) }
+function saveActivated(data) {
+  if (!fs.existsSync(path.dirname(ACTIVATED_FILE))) fs.mkdirSync(path.dirname(ACTIVATED_FILE), { recursive: true })
+  fs.writeFileSync(ACTIVATED_FILE, JSON.stringify(data, null, 2))
 }
 
-// Cache em memória para evitar chamadas repetidas ao bucket
-const _keysCache  = { data: null, ts: 0 }
-const _actCache   = { data: null, ts: 0 }
-const CACHE_TTL   = 30 * 1000 // 30s
-
-async function getActiveKeys() {
-  if (_keysCache.data && Date.now() - _keysCache.ts < CACHE_TTL) return _keysCache.data
-  _keysCache.data = await loadActiveKeys()
-  _keysCache.ts = Date.now()
-  return _keysCache.data
+function isActivated(chatId) {
+  const activated = loadActivated()
+  return !!activated[String(chatId)]
 }
 
-async function getActivated() {
-  if (_actCache.data && Date.now() - _actCache.ts < CACHE_TTL) return _actCache.data
-  _actCache.data = await loadActivated()
-  _actCache.ts = Date.now()
-  return _actCache.data
-}
-
-async function isActivated(chatId) {
-  const activated = await getActivated()
-  const entry = activated[String(chatId)]
-  if (!entry) return false
-  if (entry.expiresAt && entry.expiresAt < Date.now()) return false
-  return true
-}
-
-async function activateUser(chatId, key, daysValid) {
+function activateUser(chatId, key, daysValid) {
   daysValid = daysValid || 30
-  const activated = await loadActivated()
+  const activated = loadActivated()
   const expiresAt = Date.now() + daysValid * 24 * 60 * 60 * 1000
   activated[String(chatId)] = { key, at: Date.now(), expiresAt, daysValid }
-  _actCache.data = activated
-  _actCache.ts = Date.now()
-  await saveActivated(activated)
+  saveActivated(activated)
 }
 
-async function getUserActivation(chatId) {
-  const activated = await getActivated()
+function getUserActivation(chatId) {
+  const activated = loadActivated()
   return activated[String(chatId)] || null
 }
 
 function fmtExpiry(ts) {
   if (!ts) return "Sem expiração"
-  return new Date(ts).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })
+  const d = new Date(ts)
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })
 }
 
 function daysLeft(ts) {
   if (!ts) return null
-  return Math.ceil((ts - Date.now()) / (1000 * 60 * 60 * 24))
+  const diff = Math.ceil((ts - Date.now()) / (1000 * 60 * 60 * 24))
+  return diff
 }
 
 function generateKey(prefix) {
-  prefix = (prefix || "ARES").toUpperCase().slice(0, 6)
-  const block = () => crypto.randomBytes(2).toString("hex").toUpperCase()
-  return `${prefix}-${block()}-${block()}-${block()}`
-}
-// ──────────────────────────────────────────────────────────────────
-
-function generateKey(prefix) {
-  prefix = (prefix || "ARES").toUpperCase().slice(0, 6)
-  const block = () => crypto.randomBytes(2).toString("hex").toUpperCase()
-  return `${prefix}-${block()}-${block()}-${block()}`
+  prefix = prefix || "ARES"
+  return `${prefix}-${crypto.randomBytes(4).toString("hex").toUpperCase()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
 }
 // ──────────────────────────────────────────────────────────────────
 
@@ -785,7 +739,7 @@ const termoCheck = {}
 
 bot.onText(/^\/active$/, async msg => {
   const chatId = msg.chat.id
-  if (await isActivated(chatId)) {
+  if (isActivated(chatId)) {
     return bot.sendMessage(chatId,
       "✅ *Sua conta já está ativada!*\n\nVocê já tem acesso ao ARES HOST.",
       {
@@ -817,9 +771,9 @@ bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
   const prefix = isNaN(args[0]) ? (args[0] || "ARES") : "ARES"
   const days = parseInt(args.find(a => !isNaN(a))) || 30
   const key = generateKey(prefix)
-  const keys = await loadActiveKeys()
+  const keys = loadActiveKeys()
   keys[key] = { createdAt: Date.now(), usedBy: null, prefix, daysValid: days }
-  await saveActiveKeys(keys)
+  saveActiveKeys(keys)
   bot.sendMessage(chatId,
     `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\n⏳ Validade: *${days} dias* após ativação\n\nEnvie essa chave para o usuário.`,
     { parse_mode: "Markdown" }
@@ -829,8 +783,8 @@ bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
 bot.onText(/^\/listkeys$/, async msg => {
   const chatId = msg.chat.id
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-  const keys = await loadActiveKeys()
-  const activated = await loadActivated()
+  const keys = loadActiveKeys()
+  const activated = loadActivated()
   const total = Object.keys(keys).length
   const used = Object.values(keys).filter(k => k.usedBy).length
   const free = total - used
@@ -884,7 +838,64 @@ bot.onText(/\/start/, async msg => {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
   }
-  return sendStartMessage(chatId, null, null, msg.from)
+
+  const s = getStats(chatId)
+  const act = getUserActivation(chatId)
+  const user = msg.from
+
+  // Build name line
+  const firstName = user.first_name || ""
+  const lastName = user.last_name || ""
+  const fullName = (firstName + " " + lastName).trim()
+  const username = user.username ? `@${user.username}` : `ID: ${chatId}`
+
+  // Build expiry line
+  let expiryLine = ""
+  if (act && act.expiresAt) {
+    const left = daysLeft(act.expiresAt)
+    if (left <= 0) {
+      expiryLine = `⛔ Expirado em ${fmtExpiry(act.expiresAt)}`
+    } else if (left <= 7) {
+      expiryLine = `⚠️ Expira em *${left} dias* (${fmtExpiry(act.expiresAt)})`
+    } else {
+      expiryLine = `📅 Válido até *${fmtExpiry(act.expiresAt)}* (${left}d)`
+    }
+  }
+
+  const caption =
+    `*${fullName}*\n` +
+    `${username}\n` +
+    (expiryLine ? expiryLine + "\n" : "") +
+    `\n` +
+    `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
+      [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
+      [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
+    ]
+  }
+
+  // Try to get user profile photo
+  try {
+    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
+    if (photos && photos.total_count > 0) {
+      const fileId = photos.photos[0][photos.photos[0].length - 1].file_id
+      return bot.sendPhoto(chatId, fileId, {
+        caption,
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      })
+    }
+  } catch (e) {}
+
+  // Fallback sem foto
+  bot.sendMessage(chatId,
+    `🚀 *ARES HOST*\n\n` + caption,
+    { parse_mode: "Markdown", reply_markup: keyboard }
+  )
 })
 
 function downloadFile(url, dest) {
@@ -1029,76 +1040,6 @@ bot.on("message", async msg => {
     })
   }
 })
-
-async function sendStartMessage(chatId, msgId, mode, fromUser) {
-  const s = getStats(chatId)
-  const act = await getUserActivation(chatId)
-
-  let expiryLine = ""
-  if (act && act.expiresAt) {
-    const left = daysLeft(act.expiresAt)
-    if (left <= 0) expiryLine = `\n⛔ Acesso expirado`
-    else if (left <= 7) expiryLine = `\n⚠️ Expira em *${left} dias* (${fmtExpiry(act.expiresAt)})`
-    else expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
-  }
-
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-      [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-      [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
-    ]
-  }
-
-  // mode "edit" = editMessageText (sem foto, vindo de botão)
-  if (mode === "edit") {
-    return bot.editMessageText(
-      `🚀 *ARES HOST*${expiryLine}\n\n` +
-      `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
-      { chat_id: chatId, message_id: msgId, parse_mode: "Markdown", reply_markup: keyboard }
-    ).catch(() => {})
-  }
-
-  // mode null = envio novo com foto
-  const user = fromUser || null
-  let nameLine = "ARES HOST"
-  let userLine = ""
-  if (user) {
-    const fn = ((user.first_name || "") + " " + (user.last_name || "")).trim()
-    nameLine = fn || "ARES HOST"
-    userLine = user.username ? `@${user.username}` : `ID: ${chatId}`
-  }
-
-  const caption =
-    (nameLine ? `*${nameLine}*\n` : "") +
-    (userLine ? `${userLine}\n` : "") +
-    expiryLine + (expiryLine ? "\n" : "") +
-    `\n🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`
-
-  // Try send with profile photo
-  try {
-    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
-    if (photos && photos.total_count > 0) {
-      const fileId = photos.photos[0][photos.photos[0].length - 1].file_id
-      return bot.sendPhoto(chatId, fileId, {
-        caption,
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      })
-    }
-  } catch (e) {}
-
-  // Fallback sem foto
-  return bot.sendMessage(chatId,
-    `🚀 *${nameLine}*\n` + (userLine ? userLine + "\n" : "") +
-    expiryLine + (expiryLine ? "\n" : "") +
-    `\n🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
-    { parse_mode: "Markdown", reply_markup: keyboard }
-  )
-}
 
 bot.on("callback_query", async query => {
   const chatId = query.message.chat.id
@@ -1250,10 +1191,49 @@ bot.on("callback_query", async query => {
     saveAccepted(chatId)
     delete termoCheck[chatId]
     bot.deleteMessage(chatId, msgId).catch(() => {})
-    return sendStartMessage(chatId, null, null)
+    const s = getStats(chatId)
+    return bot.sendMessage(chatId,
+      `✅ *Termos aceitos! Bem-vindo ao ARES HOST.*\n\n` +
+      `🚀 *ARES HOST*\n\n` +
+      `🤖 Seus Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
+      `💾 RAM: *${s.ram}MB*  |  ⏱ Uptime: *${s.uptime}*`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
+            [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
+            [{ text: "📊 Estatisticas", callback_data: "menu_stats" }],
+          ]
+        }
+      }
+    )
   }
   if (action === "menu_home") {
-    return sendStartMessage(chatId, msgId, "edit")
+    const s = getStats(chatId)
+    const act = getUserActivation(chatId)
+    let expiryLine = ""
+    if (act && act.expiresAt) {
+      const left = daysLeft(act.expiresAt)
+      if (left <= 0) expiryLine = `\n⛔ Acesso expirado`
+      else if (left <= 7) expiryLine = `\n⚠️ Expira em *${left} dias*`
+      else expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
+    }
+    return bot.editMessageText(
+      `🚀 *ARES HOST*${expiryLine}\n\n` +
+      `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
+            [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
+            [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
+          ]
+        }
+      }
+    )
   }
   if (action === "menu_new") {
     return bot.editMessageText(
@@ -3609,8 +3589,8 @@ h1{font-size:22px;font-weight:700;color:var(--tx);letter-spacing:-.4px;margin-bo
     <div id="status" class="status"></div>
     <div class="field">
       <label>Chave de ativação</label>
-      <input id="key-input" type="text" placeholder="ARES-XXXX-XXXX-XXXX" maxlength="24" autocomplete="off" autocorrect="off" spellcheck="false">
-      <div class="hint">A chave foi enviada pelo administrador. Formato: PREFIXO-XXXX-XXXX-XXXX</div>
+      <input id="key-input" type="text" placeholder="ARES-XXXX-XXXX" maxlength="20" autocomplete="off" autocorrect="off" spellcheck="false">
+      <div class="hint">A chave foi enviada pelo administrador. Formato: XXXX-XXXX-XXXX</div>
     </div>
     <button class="btn" id="btn-activate" onclick="activate()">Ativar</button>
   </div>
@@ -3639,18 +3619,11 @@ fetch('/activate-api/check?chatId=' + chatId)
 
 var inp = document.getElementById('key-input');
 inp.addEventListener('input', function(){
-  var raw = this.value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-  // Format: keep first block as-is (prefix, up to 6 chars), then 3 blocks of 4
-  var parts = [];
-  if (raw.length <= 6) {
-    parts = [raw];
-  } else {
-    parts = [raw.slice(0, 4)];
-    var rest = raw.slice(4);
-    for (var i = 0; i < rest.length; i += 4) parts.push(rest.slice(i, i+4));
-    parts = parts.slice(0, 4); // max 4 parts
-  }
-  this.value = parts.join('-').slice(0, 24);
+  // auto-format: insert dashes
+  var v = this.value.replace(/[^A-Z0-9]/gi,'').toUpperCase();
+  if (v.length > 4 && v[4] !== '-') v = v.slice(0,4)+'-'+v.slice(4);
+  if (v.length > 9 && v[9] !== '-') v = v.slice(0,9)+'-'+v.slice(9);
+  this.value = v.slice(0,14);
 });
 inp.addEventListener('keydown', function(e){ if(e.key==='Enter') activate(); });
 
@@ -3662,7 +3635,7 @@ function showOk() {
 
 async function activate() {
   var key = inp.value.trim().toUpperCase();
-  if (!key || key.length < 12) {
+  if (!key || key.length < 14) {
     setStatus('Chave inválida. Verifique e tente novamente.', 'err');
     return;
   }
@@ -3699,28 +3672,25 @@ function setStatus(msg, type) {
 })
 
 // API: checar se está ativado
-app.get("/activate-api/check", async (req, res) => {
+app.get("/activate-api/check", (req, res) => {
   const chatId = req.query.chatId
   if (!chatId) return res.json({ activated: false })
-  const actCheck = await isActivated(chatId)
-  res.json({ activated: actCheck })
+  res.json({ activated: isActivated(chatId) })
 })
 
 // API: ativar com chave
 app.post("/activate-api/activate", async (req, res) => {
   const { key, chatId } = req.body
   if (!key || !chatId) return res.status(400).json({ error: "Dados inválidos" })
-  if (await isActivated(chatId)) return res.json({ ok: true, already: true })
+  if (isActivated(chatId)) return res.json({ ok: true, already: true })
   const inputKey = key.trim().toUpperCase()
-  const keys = await loadActiveKeys()
+  const keys = loadActiveKeys()
   if (!keys[inputKey]) return res.json({ ok: false, error: "Chave não encontrada" })
   if (keys[inputKey].usedBy) return res.json({ ok: false, error: "Chave já utilizada" })
-  const keyDays = keys[inputKey].daysValid || 30
   keys[inputKey].usedBy = String(chatId)
   keys[inputKey].usedAt = Date.now()
-  _keysCache.data = null
-  await saveActiveKeys(keys)
-  await activateUser(chatId, inputKey, keyDays)
+  saveActiveKeys(keys)
+  activateUser(chatId, inputKey, keys[inputKey].daysValid || 30)
   saveAccepted(chatId)
   // Notificar o usuário via bot
   try {
