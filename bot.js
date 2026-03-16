@@ -678,6 +678,7 @@ bot.onText(/^\/meuid$/, msg => {
 
 bot.onText(/^\/(limpar|limpeza)$/, async msg => {
   const chatId = msg.chat.id
+  console.log(`🧹 /limpar recebido de chatId=${chatId}, OWNER_ID="${OWNER_ID}"`)
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) {
     return bot.sendMessage(chatId, "❌ Sem permissão.")
   }
@@ -878,12 +879,15 @@ bot.on("callback_query", async query => {
   const colonIdx = data.indexOf(":")
   const action = colonIdx === -1 ? data : data.slice(0, colonIdx)
   const id = colonIdx === -1 ? null : data.slice(colonIdx + 1)
+  console.log(`📲 callback: action="${action}" id="${id}" chatId="${chatId}"`)
   bot.answerCallbackQuery(query.id)
 
   if (action === "owner_limpar_confirm") {
-    const confirmChatId = id || chatId
-    if (String(chatId) !== String(confirmChatId)) return
-    if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
+    console.log(`🧹 limpar confirmado por ${chatId}, OWNER_ID="${OWNER_ID}"`)
+    if (OWNER_ID && String(chatId) !== String(OWNER_ID)) {
+      console.log(`❌ chatId ${chatId} !== OWNER_ID ${OWNER_ID}, bloqueado`)
+      return
+    }
 
     bot.editMessageText("🧹 Parando bots e limpando...", { chat_id: chatId, message_id: msgId })
 
@@ -934,6 +938,7 @@ bot.on("callback_query", async query => {
 
       const diskAfter = getDiskPercent()
       const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
+      console.log(`✅ Limpeza: parou ${stopped}, nmCount=${nmCount}, logs=${logCount}, zips=${tmpCount}, reiniciando=${restarted}, disco=${diskAfter}%, ram=${ramAfter}MB`)
 
       return bot.editMessageText(
         `✅ *Limpeza concluída!*\n\n` +
