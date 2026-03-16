@@ -830,9 +830,9 @@ function daysLeft(ts) {
 
 function generateKey(prefix) {
   prefix = prefix || "ARES"
-  const random1 = crypto.randomBytes(4).toString("hex").toUpperCase()
-  const random2 = crypto.randomBytes(4).toString("hex").toUpperCase()
-  return `${prefix}-${random1}-${random2}`
+  const block1 = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
+  const block2 = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
+  return `${prefix}-${block1}-${block2}`
 }
 // ──────────────────────────────────────────────────────────────────
 
