@@ -750,16 +750,16 @@ async function isActivated(chatId) {
   }
 }
 
-async function activateUser(chatId, key, daysValid) {
+async function activateUser(chatId, key, durationMs) {
   try {
-    daysValid = daysValid || 30
-    const expiresAt = Date.now() + daysValid * 24 * 60 * 60 * 1000
+    const ms = durationMs || (30 * 24 * 60 * 60 * 1000)
+    const expiresAt = Date.now() + ms
     const userData = {
       chatId: String(chatId),
       key,
       activatedAt: Date.now(),
       expiresAt,
-      daysValid,
+      durationMs: ms,
       updatedAt: new Date()
     }
     await db.collection(USERS_COLLECTION).updateOne(
@@ -767,7 +767,7 @@ async function activateUser(chatId, key, daysValid) {
       { $set: userData },
       { upsert: true }
     )
-    activatedCache.set(chatId, { activated: true, timestamp: Date.now() })
+    activatedCache.set(String(chatId), { activated: true, timestamp: Date.now() })
     console.log(`✅ Usuário ${chatId} ativado até ${new Date(expiresAt).toLocaleString()}`)
     return true
   } catch (error) {
@@ -789,7 +789,31 @@ async function getUserActivation(chatId) {
 function fmtExpiry(ts) {
   if (!ts) return "Sem expiração"
   const d = new Date(ts)
+  const diff = ts - Date.now()
+  // menos de 1 dia: mostra data + hora
+  if (diff < 24 * 60 * 60 * 1000 && diff > 0) {
+    return d.toLocaleString("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
+  }
   return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })
+}
+
+function fmtTimeLeft(ts) {
+  if (!ts) return null
+  const diff = ts - Date.now()
+  if (diff <= 0) return "⛔ Expirado"
+  const totalSec = Math.floor(diff / 1000)
+  const y  = Math.floor(totalSec / (365*24*3600))
+  const mo = Math.floor((totalSec % (365*24*3600)) / (30*24*3600))
+  const d  = Math.floor((totalSec % (30*24*3600))  / (24*3600))
+  const h  = Math.floor((totalSec % (24*3600))     / 3600)
+  const mi = Math.floor((totalSec % 3600)           / 60)
+  const parts = []
+  if (y)  parts.push(`${y}a`)
+  if (mo) parts.push(`${mo}m`)
+  if (d)  parts.push(`${d}d`)
+  if (h)  parts.push(`${h}h`)
+  if (mi && !y && !mo) parts.push(`${mi}min`)
+  return parts.join(" ") || "< 1min"
 }
 
 function daysLeft(ts) {
@@ -821,9 +845,11 @@ async function buildHomeMenu(chatId, user) {
   let expiryLine = ""
   if (act?.expiresAt) {
     const left = daysLeft(act.expiresAt)
-    if (left <= 0)      expiryLine = `⛔ Expirado em ${fmtExpiry(act.expiresAt)}\n`
-    else if (left <= 7) expiryLine = `⚠️ Expira em *${left} dias* (${fmtExpiry(act.expiresAt)})\n`
-    else                expiryLine = `📅 Válido até *${fmtExpiry(act.expiresAt)}* (${left}d)\n`
+    const timeLeft = fmtTimeLeft(act.expiresAt)
+    if (left <= 0)      expiryLine = `⛔ *Expirado* em ${fmtExpiry(act.expiresAt)}\n`
+    else if (left <= 1) expiryLine = `🚨 Expira *hoje!* (${timeLeft})\n`
+    else if (left <= 7) expiryLine = `⚠️ Expira em *${timeLeft}* (${fmtExpiry(act.expiresAt)})\n`
+    else                expiryLine = `📅 Válido por *${timeLeft}* — até ${fmtExpiry(act.expiresAt)}\n`
   }
 
   if (activated) {
@@ -927,26 +953,65 @@ async function handleStart(chatId, from) {
 bot.onText(/\/start/, msg => handleStart(msg.chat.id, msg.from))
 bot.onText(/^\/active$/, msg => handleStart(msg.chat.id, msg.from))
 
+// ─────────────────────────────────────────────────────────────
+// Parser de duração: "1d" "2m" "5mn" "1y" "30h" "15s" "1w" etc.
+// ─────────────────────────────────────────────────────────────
+function parseDuration(str) {
+  if (!str) return null
+  const re = /^(\d+(?:\.\d+)?)\s*(mn?|mo|mes|meses|y|yr|anos?|d|dias?|h|horas?|s|sec|w|semanas?)$/i
+  const m = String(str).trim().toLowerCase().match(re)
+  if (!m) return null
+  const n = parseFloat(m[1])
+  const unit = m[2]
+  let ms = 0
+  if (/^mn?$/.test(unit))       ms = n * 60 * 1000
+  else if (/^mo$|^mes/.test(unit)) ms = n * 30 * 24 * 60 * 60 * 1000
+  else if (/^y|^yr|^ano/.test(unit)) ms = n * 365 * 24 * 60 * 60 * 1000
+  else if (/^d/.test(unit))     ms = n * 24 * 60 * 60 * 1000
+  else if (/^h/.test(unit))     ms = n * 60 * 60 * 1000
+  else if (/^s/.test(unit))     ms = n * 1000
+  else if (/^w/.test(unit))     ms = n * 7 * 24 * 60 * 60 * 1000
+  else return null
+  if (ms <= 0) return null
+  const totalSec = Math.round(ms / 1000)
+  const y  = Math.floor(totalSec / (365*24*3600))
+  const mo = Math.floor((totalSec % (365*24*3600)) / (30*24*3600))
+  const d  = Math.floor((totalSec % (30*24*3600))  / (24*3600))
+  const h  = Math.floor((totalSec % (24*3600))     / 3600)
+  const mi = Math.floor((totalSec % 3600)           / 60)
+  const s  = totalSec % 60
+  const parts = []
+  if (y)  parts.push(`${y}a`)
+  if (mo) parts.push(`${mo}m`)
+  if (d)  parts.push(`${d}d`)
+  if (h)  parts.push(`${h}h`)
+  if (mi) parts.push(`${mi}min`)
+  if (s && !y && !mo && !d && !h) parts.push(`${s}s`)
+  return { ms, label: parts.join(" ") || "0s" }
+}
+
 bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
   const chatId = msg.chat.id
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) {
     return bot.sendMessage(chatId, "❌ Sem permissão.")
   }
-  const args = (msg.text.split(" ").slice(1))
-  const prefix = isNaN(args[0]) ? (args[0] || "ARES") : "ARES"
-  const days = parseInt(args.find(a => !isNaN(a))) || 30
+  const args = msg.text.split(" ").slice(1)
+  const durStr = args.slice().reverse().find(a => /^\d/.test(a))
+  const dur = parseDuration(durStr) || { ms: 30 * 24 * 60 * 60 * 1000, label: "30d" }
+  const prefix = (args.find(a => !/^\d/.test(a)) || "ARES").toUpperCase()
   const key = generateKey(prefix)
   const keys = await loadActiveKeys()
   keys[key] = {
     createdAt: Date.now(),
     usedBy: null,
     prefix,
-    daysValid: days,
+    durationMs: dur.ms,
+    durationLabel: dur.label,
     updatedAt: new Date()
   }
   await saveActiveKeys(keys)
   bot.sendMessage(chatId,
-    `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\n⏳ Validade: *${days} dias* após ativação\n\nEnvie essa chave para o usuário.`,
+    `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\n⏳ Validade: *${dur.label}* após ativação\n\nEnvie essa chave para o usuário.`,
     { parse_mode: "Markdown" }
   )
 })
@@ -978,8 +1043,10 @@ bot.onText(/^\/listusers$/, async msg => {
   if (users.length === 0) return bot.sendMessage(chatId, "📋 Nenhum usuário ativado ainda.")
   const lines = users.slice(-20).map(u => {
     const left = daysLeft(u.expiresAt)
-    const status = left <= 0 ? "🔴 Expirado" : left <= 7 ? "🟡 " + left + "d" : "🟢 " + left + "d"
-    return `${status} \`${u.chatId}\` - ${fmtExpiry(u.expiresAt)}`
+    const timeLeft = fmtTimeLeft(u.expiresAt)
+    const status = left <= 0 ? "🔴" : left <= 1 ? "🚨" : left <= 7 ? "🟡" : "🟢"
+    const info = left <= 0 ? "Expirado" : timeLeft
+    return `${status} \`${u.chatId}\` — ${info} (até ${fmtExpiry(u.expiresAt)})`
   }).join("\n")
   bot.sendMessage(chatId,
     `👥 *Usuários ativados:* ${users.length}\n\n${lines}`,
@@ -3535,18 +3602,19 @@ app.post("/activate-api/activate", async (req, res) => {
   keys[inputKey].usedBy = String(chatId)
   keys[inputKey].usedAt = Date.now()
   await saveActiveKeys(keys)
-  await activateUser(chatId, inputKey, keys[inputKey].daysValid || 30)
+  await activateUser(chatId, inputKey, keys[inputKey].durationMs || (30 * 24 * 60 * 60 * 1000))
   saveAccepted(chatId)
   try {
+    const keyData = keys[inputKey]
+    const expiresAt = Date.now() + (keyData.durationMs || (30 * 24 * 60 * 60 * 1000))
     const s = getStats(chatId)
     bot.sendMessage(chatId,
-      `✅ *Conta ativada!*\n\nBem-vindo ao ARES HOST.\n\n🤖 Seus bots: *${s.total}*`,
+      `✅ *Conta ativada!*\n\nBem-vindo ao ARES HOST.\n\n📅 Válido até: *${fmtExpiry(expiresAt)}* (${keyData.durationLabel || "30d"})\n🤖 Seus bots: *${s.total}*`,
       {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-            [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
+            [{ text: "🚀 Abrir Menu", callback_data: "menu_home" }]
           ]
         }
       }
@@ -3617,6 +3685,95 @@ function checkDiskAlert() {
     ).catch(() => {})
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// SISTEMA DE EXPIRAÇÃO EM TEMPO REAL
+// Verifica a cada 30s quem expirou → para bots → notifica
+// ─────────────────────────────────────────────────────────────
+const notifiedExpiry = new Set()   // evita spam de notificação
+const notifiedWarning = new Set()  // aviso de "vai expirar em breve"
+
+async function checkExpirations() {
+  if (!db) return
+  try {
+    const now = Date.now()
+    // Busca usuários que expiraram ou vão expirar em breve
+    const users = await db.collection(USERS_COLLECTION).find({
+      expiresAt: { $gt: 0 }
+    }).toArray()
+
+    for (const user of users) {
+      const cid = String(user.chatId)
+      const left = user.expiresAt - now
+
+      // ── Aviso 1h antes da expiração ──
+      const warnKey = `${cid}:${user.expiresAt}`
+      if (left > 0 && left < 60 * 60 * 1000 && !notifiedWarning.has(warnKey)) {
+        notifiedWarning.add(warnKey)
+        const mins = Math.ceil(left / 60000)
+        bot.sendMessage(cid,
+          `⚠️ *Sua conta expira em ${mins} minuto${mins !== 1 ? "s" : ""}!*\n\nRenove sua chave para continuar usando o ARES HOST.`,
+          { parse_mode: "Markdown" }
+        ).catch(() => {})
+      }
+
+      // ── Conta expirada ──
+      if (left <= 0) {
+        const expKey = `${cid}:expired`
+        // Invalida cache
+        activatedCache.delete(cid)
+        activatedCache.delete(Number(cid))
+
+        // Para todos os bots do usuário
+        const userBots = getUserBots(cid)
+        let stopped = 0
+        for (const botId of userBots) {
+          if (activeBots[botId]) {
+            try { activeBots[botId].process.kill() } catch {}
+            delete activeBots[botId]
+            stopped++
+          }
+        }
+
+        // Notifica o usuário (apenas uma vez por expiração)
+        if (!notifiedExpiry.has(expKey)) {
+          notifiedExpiry.add(expKey)
+          const activateUrl = `${DOMAIN}/activate?chatId=${cid}`
+          bot.sendMessage(cid,
+            `⛔ *Sua assinatura do ARES HOST expirou.*\n\n` +
+            (stopped > 0 ? `🛑 *${stopped} bot(s) foram parados.*\n\n` : "") +
+            `Ative uma nova chave para reativar sua conta e seus bots.`,
+            {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "🔑 Ativar Conta", web_app: { url: activateUrl } }]
+                ]
+              }
+            }
+          ).catch(() => {})
+          console.log(`⛔ Conta expirada: ${cid} — ${stopped} bot(s) parados`)
+        }
+
+        // Notifica o owner se configurado
+        const ownerId = OWNER_ID || ADMIN_ID
+        if (ownerId && !notifiedExpiry.has(`owner:${expKey}`)) {
+          notifiedExpiry.add(`owner:${expKey}`)
+          bot.sendMessage(ownerId,
+            `📋 Conta *${cid}* expirou. ${stopped} bot(s) parados.`,
+            { parse_mode: "Markdown" }
+          ).catch(() => {})
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Erro em checkExpirations:", err.message)
+  }
+}
+
+// Roda a cada 30 segundos
+setInterval(checkExpirations, 30 * 1000)
+setTimeout(checkExpirations, 5 * 1000)
 
 setInterval(cleanupOldLogs, 2 * 60 * 60 * 1000)
 setTimeout(cleanupOldLogs, 2 * 60 * 1000)
