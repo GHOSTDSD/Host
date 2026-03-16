@@ -909,55 +909,23 @@ function editTermos(chatId, msgId, checked) {
 const termoCheck = {}
 
 // ─────────────────────────────────────────────────────────────
-// /start — fluxo unificado
+// /start e /active — fluxo unificado (sem foto de perfil)
 // ─────────────────────────────────────────────────────────────
-bot.onText(/\/start/, async msg => {
-  const chatId = msg.chat.id
-
-  // Passo 1: se não aceitou termos, mostra termos primeiro
+async function handleStart(chatId, from) {
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
   }
 
-  // Passo 2: termos ok — monta menu (ativado ou bloqueado)
-  const { caption, keyboard } = await buildHomeMenu(chatId, msg.from)
-  const fullCaption = `🚀 *ARES HOST*\n\n` + caption
-
-  try {
-    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
-    if (photos?.total_count > 0) {
-      const fileId = photos.photos[0][photos.photos[0].length - 1].file_id
-      return bot.sendPhoto(chatId, fileId, {
-        caption: fullCaption,
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      })
-    }
-  } catch {}
-
-  // Sem foto de perfil — envia só texto
-  bot.sendMessage(chatId, fullCaption, {
-    parse_mode: "Markdown",
-    reply_markup: keyboard
-  })
-})
-
-// /active — redireciona para o menu unificado
-bot.onText(/^\/active$/, async msg => {
-  const chatId = msg.chat.id
-
-  if (!hasAccepted(chatId)) {
-    termoCheck[chatId] = false
-    return sendTermos(chatId, false)
-  }
-
-  const { caption, keyboard } = await buildHomeMenu(chatId, msg.from)
+  const { caption, keyboard } = await buildHomeMenu(chatId, from)
   bot.sendMessage(chatId, `🚀 *ARES HOST*\n\n` + caption, {
     parse_mode: "Markdown",
     reply_markup: keyboard
   })
-})
+}
+
+bot.onText(/\/start/, msg => handleStart(msg.chat.id, msg.from))
+bot.onText(/^\/active$/, msg => handleStart(msg.chat.id, msg.from))
 
 bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
   const chatId = msg.chat.id
