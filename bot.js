@@ -721,17 +721,26 @@ const termoCheck = {}
 bot.onText(/^\/active$/, async msg => {
   const chatId = msg.chat.id
   if (isActivated(chatId)) {
-    return bot.sendMessage(chatId, "✅ *Sua conta já está ativada!*", { parse_mode: "Markdown" })
+    return bot.sendMessage(chatId,
+      "✅ *Sua conta já está ativada!*\n\nVocê já tem acesso ao ARES HOST.",
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "🚀 Abrir ARES HOST", callback_data: "menu_home" }]]
+        }
+      }
+    )
   }
+  const activateUrl = `${DOMAIN}/activate?chatId=${chatId}`
   bot.sendMessage(chatId,
-    "🔑 *Ativação necessária*\n\nPara usar o ARES HOST você precisa de uma chave de ativação.\n\nDigite sua chave abaixo ou pressione o botão para enviá-la:",
+    "🔑 *Ativação do ARES HOST*\n\nClique no botão abaixo para inserir sua chave de ativação.",
     {
       parse_mode: "Markdown",
-      reply_markup: { force_reply: true, selective: true }
+      reply_markup: {
+        inline_keyboard: [[{ text: "🔑 Inserir chave", web_app: { url: activateUrl } }]]
+      }
     }
-  ).then(sent => {
-    userState[chatId] = { waitingKey: true, keyMsgId: sent.message_id }
-  })
+  )
 })
 
 bot.onText(/^\/genkey(?:\s+(\S+))?$/, async msg => {
@@ -920,41 +929,6 @@ bot.on("document", async msg => {
 bot.on("message", async msg => {
   if (msg.document || msg.text?.startsWith("/")) return
   const chatId = msg.chat.id
-
-  // Verificar se está esperando chave de ativação
-  if (userState[chatId]?.waitingKey) {
-    delete userState[chatId]
-    const inputKey = msg.text?.trim().toUpperCase()
-    if (!inputKey) return bot.sendMessage(chatId, "❌ Chave inválida.")
-    const keys = loadActiveKeys()
-    if (!keys[inputKey]) {
-      return bot.sendMessage(chatId, "❌ *Chave não encontrada.*\n\nVerifique se digitou corretamente ou peça uma nova chave.", { parse_mode: "Markdown" })
-    }
-    if (keys[inputKey].usedBy) {
-      return bot.sendMessage(chatId, "❌ *Esta chave já foi utilizada.*\n\nPeça uma nova chave.", { parse_mode: "Markdown" })
-    }
-    // Ativar
-    keys[inputKey].usedBy = String(chatId)
-    keys[inputKey].usedAt = Date.now()
-    saveActiveKeys(keys)
-    activateUser(chatId, inputKey)
-    // Marcar também os termos como aceitos
-    saveAccepted(chatId)
-    const s = getStats(chatId)
-    return bot.sendMessage(chatId,
-      `✅ *Conta ativada com sucesso!*\n\nBem-vindo ao ARES HOST!\n\n` +
-      `🤖 Seus Bots: *${s.total}*  |  🟢 Online: *${s.online}*`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-            [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
-          ]
-        }
-      }
-    )
-  }
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
@@ -3474,7 +3448,199 @@ async function saveMarketData(data) {
   } catch { return false }
 }
 
-// Página pública do marketplace
+// Página Web App de ativação
+app.get("/activate", (req, res) => {
+  const chatId = req.query.chatId || ""
+  res.send(`<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Ativar conta</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:var(--tg-theme-bg-color,#111318);
+  --bg2:var(--tg-theme-secondary-bg-color,#1a1e28);
+  --tx:var(--tg-theme-text-color,#dde2ec);
+  --t2:var(--tg-theme-hint-color,#6b7a94);
+  --accent:var(--tg-theme-button-color,#4d8ef5);
+  --accent-tx:var(--tg-theme-button-text-color,#fff);
+  --bd:#2a3040;--r:12px
+}
+html,body{height:100%;background:var(--bg);color:var(--tx);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:16px;-webkit-font-smoothing:antialiased}
+.wrap{min-height:100vh;display:flex;flex-direction:column;padding:24px 20px calc(24px + env(safe-area-inset-bottom,0))}
+.header{margin-bottom:28px}
+.icon{width:56px;height:56px;border-radius:16px;background:rgba(77,142,245,.15);display:flex;align-items:center;justify-content:center;margin-bottom:16px}
+.icon svg{color:var(--accent)}
+h1{font-size:22px;font-weight:700;color:var(--tx);letter-spacing:-.4px;margin-bottom:6px}
+.sub{font-size:14px;color:var(--t2);line-height:1.6}
+.field{margin-bottom:16px}
+.field label{display:block;font-size:12px;font-weight:600;color:var(--t2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em}
+.field input{
+  width:100%;background:var(--bg2);border:1.5px solid var(--bd);border-radius:var(--r);
+  padding:14px 16px;color:var(--tx);font-size:17px;outline:none;
+  font-family:"SF Mono",monospace;letter-spacing:.05em;-webkit-appearance:none;
+  transition:border .15s;text-transform:uppercase
+}
+.field input:focus{border-color:var(--accent)}
+.field input::placeholder{color:var(--t2);letter-spacing:0;font-family:-apple-system,sans-serif;text-transform:none;font-size:15px}
+.hint{font-size:12px;color:var(--t2);margin-top:6px;line-height:1.5}
+.btn{
+  width:100%;padding:15px;background:var(--accent);border:none;border-radius:var(--r);
+  color:var(--accent-tx);font-size:16px;font-weight:600;cursor:pointer;
+  touch-action:manipulation;font-family:inherit;margin-top:4px;transition:opacity .15s
+}
+.btn:active{opacity:.82}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.status{display:none;padding:14px;border-radius:var(--r);font-size:14px;font-weight:500;margin-bottom:16px;text-align:center}
+.status.err{background:rgba(240,80,80,.12);border:1px solid rgba(240,80,80,.3);color:#e05050;display:block}
+.status.ok{background:rgba(52,209,122,.12);border:1px solid rgba(52,209,122,.3);color:#34d17a;display:block}
+.already{text-align:center;padding:40px 0}
+.already svg{margin:0 auto 16px;display:block;color:#34d17a}
+.already h2{font-size:20px;font-weight:700;margin-bottom:8px}
+.already p{font-size:14px;color:var(--t2)}
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <div id="form-view">
+    <div class="header">
+      <div class="icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </div>
+      <h1>Ativar conta</h1>
+      <p class="sub">Insira sua chave de ativação para acessar o ARES HOST.</p>
+    </div>
+    <div id="status" class="status"></div>
+    <div class="field">
+      <label>Chave de ativação</label>
+      <input id="key-input" type="text" placeholder="ARES-XXXX-XXXX" maxlength="20" autocomplete="off" autocorrect="off" spellcheck="false">
+      <div class="hint">A chave foi enviada pelo administrador. Formato: XXXX-XXXX-XXXX</div>
+    </div>
+    <button class="btn" id="btn-activate" onclick="activate()">Ativar</button>
+  </div>
+  <div id="ok-view" style="display:none" class="already">
+    <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>
+    <h2>Conta ativada!</h2>
+    <p>Você já pode usar o ARES HOST.</p>
+  </div>
+</div>
+<script>
+var tg = window.Telegram && window.Telegram.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+  tg.MainButton.hide();
+}
+
+var chatId = "${chatId}";
+
+// Check if already activated
+fetch('/activate-api/check?chatId=' + chatId)
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if (d.activated) showOk();
+  }).catch(function(){});
+
+var inp = document.getElementById('key-input');
+inp.addEventListener('input', function(){
+  // auto-format: insert dashes
+  var v = this.value.replace(/[^A-Z0-9]/gi,'').toUpperCase();
+  if (v.length > 4 && v[4] !== '-') v = v.slice(0,4)+'-'+v.slice(4);
+  if (v.length > 9 && v[9] !== '-') v = v.slice(0,9)+'-'+v.slice(9);
+  this.value = v.slice(0,14);
+});
+inp.addEventListener('keydown', function(e){ if(e.key==='Enter') activate(); });
+
+function showOk() {
+  document.getElementById('form-view').style.display = 'none';
+  document.getElementById('ok-view').style.display = 'block';
+  if (tg) setTimeout(function(){ tg.close(); }, 2000);
+}
+
+async function activate() {
+  var key = inp.value.trim().toUpperCase();
+  if (!key || key.length < 14) {
+    setStatus('Chave inválida. Verifique e tente novamente.', 'err');
+    return;
+  }
+  var btn = document.getElementById('btn-activate');
+  btn.disabled = true; btn.textContent = 'Verificando...';
+  setStatus('', '');
+  try {
+    var r = await fetch('/activate-api/activate', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ key: key, chatId: chatId })
+    });
+    var d = await r.json();
+    if (d.ok) {
+      showOk();
+    } else {
+      setStatus(d.error || 'Chave inválida ou já utilizada.', 'err');
+      btn.disabled = false; btn.textContent = 'Ativar';
+    }
+  } catch(e) {
+    setStatus('Erro de conexão. Tente novamente.', 'err');
+    btn.disabled = false; btn.textContent = 'Ativar';
+  }
+}
+
+function setStatus(msg, type) {
+  var el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status' + (type ? ' '+type : '');
+}
+</script>
+</body>
+</html>`)
+})
+
+// API: checar se está ativado
+app.get("/activate-api/check", (req, res) => {
+  const chatId = req.query.chatId
+  if (!chatId) return res.json({ activated: false })
+  res.json({ activated: isActivated(chatId) })
+})
+
+// API: ativar com chave
+app.post("/activate-api/activate", async (req, res) => {
+  const { key, chatId } = req.body
+  if (!key || !chatId) return res.status(400).json({ error: "Dados inválidos" })
+  if (isActivated(chatId)) return res.json({ ok: true, already: true })
+  const inputKey = key.trim().toUpperCase()
+  const keys = loadActiveKeys()
+  if (!keys[inputKey]) return res.json({ ok: false, error: "Chave não encontrada" })
+  if (keys[inputKey].usedBy) return res.json({ ok: false, error: "Chave já utilizada" })
+  keys[inputKey].usedBy = String(chatId)
+  keys[inputKey].usedAt = Date.now()
+  saveActiveKeys(keys)
+  activateUser(chatId, inputKey)
+  saveAccepted(chatId)
+  // Notificar o usuário via bot
+  try {
+    const s = getStats(chatId)
+    bot.sendMessage(chatId,
+      `✅ *Conta ativada!*\n\nBem-vindo ao ARES HOST.\n\n🤖 Seus bots: *${s.total}*`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
+            [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
+          ]
+        }
+      }
+    )
+  } catch (e) {}
+  res.json({ ok: true })
+})
+
+
 /* MARKETPLACE DESATIVADO
 app.get("/marketplace", (req, res) => {
   res.status(503).send("<html><head><meta charset=UTF-8><title>ARES</title><style>body{background:#0f1117;color:#6b7a94;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}</style></head><body><div><div style=font-size:20px;font-weight:700;color:#dde2ec;margin-bottom:8px>Marketplace</div><div>Em breve</div></div></body></html>")
