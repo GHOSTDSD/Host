@@ -1249,6 +1249,27 @@ async function sendStartMessage(chatId, msgId, mode, fromUser) {
   )
 }
 
+// Edita texto OU caption (para mensagens de foto do card /start)
+async function safeEdit(chatId, msgId, text, opts) {
+  const options = { chat_id: chatId, message_id: msgId, parse_mode: "Markdown", ...opts }
+  try {
+    return await bot.editMessageText(text, options)
+  } catch (e) {
+    if (e.message && e.message.includes("there is no text in the message")) {
+      // É uma mensagem de foto — edita o caption e remove a foto
+      // Telegram não permite editar foto->texto, então deletamos e mandamos novo
+      try {
+        await bot.deleteMessage(chatId, msgId)
+      } catch (e2) {}
+      return bot.sendMessage(chatId, text, {
+        parse_mode: "Markdown",
+        reply_markup: opts?.reply_markup
+      })
+    }
+    // outros erros: ignora silenciosamente
+  }
+}
+
 bot.on("callback_query", async query => {
   const chatId = query.message.chat.id
   const msgId = query.message.message_id
@@ -1260,7 +1281,7 @@ bot.on("callback_query", async query => {
 
   if (action === "limpar_local" || action === "owner_limpar_confirm") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-    bot.editMessageText("🧹 Parando bots e limpando disco...", { chat_id: chatId, message_id: msgId })
+    safeEdit(chatId, msgId, "🧹 Parando bots e limpando disco...", { })
     try {
       const botIds = Object.keys(activeBots)
       let stopped = 0
@@ -1303,17 +1324,17 @@ bot.on("callback_query", async query => {
         { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
     } catch (err) {
-      return bot.editMessageText(`❌ Erro: ${err.message}`, { chat_id: chatId, message_id: msgId })
+      return safeEdit(chatId, msgId, `❌ Erro: ${err.message}`, { })
     }
   }
 
   if (action === "limpar_tudo") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
     // Confirmação extra antes de apagar tudo
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       `💣 *ATENÇÃO — Ação irreversível!*\n\nIsso vai:\n• Parar todos os bots\n• Apagar todos os arquivos locais\n• Apagar todos os arquivos nos buckets\n\nTodos os bots serão *permanentemente deletados*. Tem certeza?`,
       {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+        parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "💣 Sim, apagar TUDO", callback_data: "limpar_tudo_confirm:" + chatId }],
@@ -1326,7 +1347,7 @@ bot.on("callback_query", async query => {
 
   if (action === "limpar_tudo_confirm") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-    bot.editMessageText("💣 Apagando tudo...", { chat_id: chatId, message_id: msgId })
+    safeEdit(chatId, msgId, "💣 Apagando tudo...", { })
     try {
       // 1. Parar todos os bots
       for (const bid of Object.keys(activeBots)) {
@@ -1379,12 +1400,12 @@ bot.on("callback_query", async query => {
         { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
     } catch (err) {
-      return bot.editMessageText(`❌ Erro: ${err.message}`, { chat_id: chatId, message_id: msgId })
+      return safeEdit(chatId, msgId, `❌ Erro: ${err.message}`, { })
     }
   }
 
   if (action === "owner_limpar_cancel") {
-    return bot.editMessageText("❌ Limpeza cancelada.", { chat_id: chatId, message_id: msgId })
+    return safeEdit(chatId, msgId, "❌ Limpeza cancelada.", { })
   }
 
   if (action === "termo_check") {
@@ -1410,11 +1431,11 @@ bot.on("callback_query", async query => {
         [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
       ]
     }
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       `🚀 *ARES HOST*\n\n` +
       `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
       `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
-      { chat_id: chatId, message_id: msgId, parse_mode: "Markdown", reply_markup: keyboard }
+      { parse_mode: "Markdown", reply_markup: keyboard }
     ).catch(() => {})
   }
   if (action === "menu_new") {
@@ -1523,9 +1544,9 @@ process.on('uncaughtException', (err) => {
       )
     } catch (err) {
       console.error("❌ Erro ao criar bot do zero:", err)
-      return bot.editMessageText(
+      return safeEdit(chatId, msgId, 
         `❌ *Erro ao criar bot:*\n\n${err.message}`,
-        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
+        { parse_mode: "Markdown" }
       )
     }
   }
@@ -1533,10 +1554,10 @@ process.on('uncaughtException', (err) => {
     const folders = getUserBots(chatId)
     const s = getStats(chatId)
     if (folders.length === 0) {
-      return bot.editMessageText(
+      return safeEdit(chatId, msgId, 
         "📂 *Meus Bots*\n\nNenhum bot hospedado ainda.\nUse Novo Bot para fazer upload!",
         {
-          chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+          parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
               [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
@@ -1551,10 +1572,10 @@ process.on('uncaughtException', (err) => {
       callback_data: `manage:${f}`
     }])
     buttons.push([{ text: "⬅️ Voltar", callback_data: "menu_home" }])
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       `📂 *Meus Bots*\n\n🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*  |  Total: *${s.total}*\n\nEscolha um bot:`,
       {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+        parse_mode: "Markdown",
         reply_markup: { inline_keyboard: buttons }
       }
     )
@@ -1641,10 +1662,10 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🔴 Offline`,
       {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+        parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -1661,10 +1682,10 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🟢 Iniciando...`,
       {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+        parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -1681,10 +1702,10 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🟢 Reiniciando...`,
       {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+        parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
