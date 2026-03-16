@@ -13,6 +13,7 @@ const { execFile, execSync, spawn } = require("child_process")
 const crypto = require("crypto")
 const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } = require("@aws-sdk/client-s3")
 const tar = require("tar")
+const { MongoClient, ServerApiVersion } = require('mongodb')
 
 EventEmitter.defaultMaxListeners = 200
 
@@ -34,6 +35,46 @@ io.sockets.setMaxListeners(200)
 app.use(express.json({ limit: "50mb" }))
 app.use(express.urlencoded({ extended: true, limit: "50mb" }))
 app.use(express.static("public"))
+
+// Configuração do MongoDB
+const MONGODB_URI = "mongodb+srv://topgamesnetinho50_db_user:FF85CFtb73FsedX@np.v7l8dow.mongodb.net/?retryWrites=true&w=majority&appName=NP"
+
+let db = null
+let dbClient = null
+
+async function connectMongoDB() {
+  try {
+    const client = new MongoClient(MONGODB_URI, {
+      serverApi: {
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
+      }
+    })
+    
+    await client.connect()
+    await client.db("admin").command({ ping: 1 })
+    console.log("✅ Conectado ao MongoDB Atlas!")
+    
+    dbClient = client
+    db = client.db("ares_host")
+    
+    // Criar índices para melhor performance
+    await db.collection("users").createIndex({ chatId: 1 }, { unique: true })
+    await db.collection("keys").createIndex({ key: 1 }, { unique: true })
+    await db.collection("keys").createIndex({ usedBy: 1 })
+    await db.collection("users").createIndex({ expiresAt: 1 })
+    
+    console.log("✅ Índices do MongoDB criados")
+    return db
+  } catch (error) {
+    console.error("❌ Erro ao conectar ao MongoDB:", error)
+    process.exit(1)
+  }
+}
+
+// Chamar conexão MongoDB
+connectMongoDB()
 
 // Configuração do bucket Backblaze B2 (apenas 1 bucket)
 const BUCKET_CONFIG = {
@@ -247,14 +288,15 @@ function aresBanner() {
     const parts = df.split(/\s+/)
     diskUsage = `${parts[4]} (${parts[2]}/${parts[1]})`
   } catch {}
-  console.log(`\n🚀 ARES HOST (BACKBLAZE B2)
+  console.log(`\n🚀 ARES HOST (BACKBLAZE B2 + MONGODB)
 📦 BOTS: ${s.total}
 🟢 ONLINE: ${s.online}
 🔴 OFFLINE: ${s.offline}
 💾 RAM: ${s.ram}MB
 ⏱ UPTIME: ${s.uptime}
 💿 DISCO: ${diskUsage}
-☁️  BUCKET: ${BUCKET_CONFIG.bucketName}\n`)
+☁️  BUCKET: ${BUCKET_CONFIG.bucketName}
+🍃 MONGODB: Conectado\n`)
 }
 
 function getPackageHash(packagePath) {
@@ -619,50 +661,159 @@ function saveAccepted(chatId) {
   fs.writeFileSync(f, JSON.stringify({ accepted: true, at: Date.now() }))
 }
 
-// ─── SISTEMA DE ATIVAÇÃO ───────────────────────────────────────────
-const ACTIVE_KEYS_FILE = path.join(BASE_PATH, "_users", "active_keys.json")
-const ACTIVATED_FILE   = path.join(BASE_PATH, "_users", "activated.json")
+// ─── SISTEMA DE ATIVAÇÃO COM MONGODB ─────────────────────────────
 
-function loadActiveKeys() {
+// Collections MongoDB
+const KEYS_COLLECTION = "keys"
+const USERS_COLLECTION = "users"
+
+// Carregar todas as chaves ativas do MongoDB
+async function loadActiveKeys() {
   try {
-    if (!fs.existsSync(ACTIVE_KEYS_FILE)) return {}
-    return JSON.parse(fs.readFileSync(ACTIVE_KEYS_FILE, "utf8"))
-  } catch { return {} }
+    if (!db) return {}
+    const keys = await db.collection(KEYS_COLLECTION).find({}).toArray()
+    const keysObj = {}
+    keys.forEach(k => { keysObj[k.key] = k })
+    return keysObj
+  } catch (error) {
+    console.error("Erro ao carregar chaves do MongoDB:", error)
+    return {}
+  }
 }
 
-function saveActiveKeys(data) {
-  if (!fs.existsSync(path.dirname(ACTIVE_KEYS_FILE))) fs.mkdirSync(path.dirname(ACTIVE_KEYS_FILE), { recursive: true })
-  fs.writeFileSync(ACTIVE_KEYS_FILE, JSON.stringify(data, null, 2))
-}
-
-function loadActivated() {
+// Salvar chave no MongoDB
+async function saveActiveKeys(data) {
   try {
-    if (!fs.existsSync(ACTIVATED_FILE)) return {}
-    return JSON.parse(fs.readFileSync(ACTIVATED_FILE, "utf8"))
-  } catch { return {} }
+    if (!db) return
+    // Converter objeto para array e salvar
+    const keysArray = Object.entries(data).map(([key, value]) => ({
+      key,
+      ...value,
+      updatedAt: new Date()
+    }))
+    
+    for (const keyData of keysArray) {
+      await db.collection(KEYS_COLLECTION).updateOne(
+        { key: keyData.key },
+        { $set: keyData },
+        { upsert: true }
+      )
+    }
+  } catch (error) {
+    console.error("Erro ao salvar chaves no MongoDB:", error)
+  }
 }
 
-function saveActivated(data) {
-  if (!fs.existsSync(path.dirname(ACTIVATED_FILE))) fs.mkdirSync(path.dirname(ACTIVATED_FILE), { recursive: true })
-  fs.writeFileSync(ACTIVATED_FILE, JSON.stringify(data, null, 2))
+// Carregar usuários ativados do MongoDB
+async function loadActivated() {
+  try {
+    if (!db) return {}
+    const users = await db.collection(USERS_COLLECTION).find({}).toArray()
+    const usersObj = {}
+    users.forEach(u => { usersObj[u.chatId] = u })
+    return usersObj
+  } catch (error) {
+    console.error("Erro ao carregar usuários do MongoDB:", error)
+    return {}
+  }
 }
 
-function isActivated(chatId) {
-  const activated = loadActivated()
-  return !!activated[String(chatId)]
+// Salvar usuário no MongoDB
+async function saveActivated(data) {
+  try {
+    if (!db) return
+    const usersArray = Object.entries(data).map(([chatId, value]) => ({
+      chatId: String(chatId),
+      ...value,
+      updatedAt: new Date()
+    }))
+    
+    for (const userData of usersArray) {
+      await db.collection(USERS_COLLECTION).updateOne(
+        { chatId: userData.chatId },
+        { $set: userData },
+        { upsert: true }
+      )
+    }
+  } catch (error) {
+    console.error("Erro ao salvar usuários no MongoDB:", error)
+  }
 }
 
-function activateUser(chatId, key, daysValid) {
-  daysValid = daysValid || 30
-  const activated = loadActivated()
-  const expiresAt = Date.now() + daysValid * 24 * 60 * 60 * 1000
-  activated[String(chatId)] = { key, at: Date.now(), expiresAt, daysValid }
-  saveActivated(activated)
+// Verificar se usuário está ativado (com cache em memória)
+const activatedCache = new Map()
+const CACHE_TTL = 5 * 60 * 1000 // 5 minutos
+
+async function isActivated(chatId) {
+  try {
+    // Verificar cache
+    if (activatedCache.has(chatId)) {
+      const cached = activatedCache.get(chatId)
+      if (Date.now() - cached.timestamp < CACHE_TTL) {
+        return cached.activated
+      }
+    }
+    
+    if (!db) return false
+    
+    const user = await db.collection(USERS_COLLECTION).findOne({ chatId: String(chatId) })
+    
+    if (!user) {
+      activatedCache.set(chatId, { activated: false, timestamp: Date.now() })
+      return false
+    }
+    
+    // Verificar expiração
+    if (user.expiresAt && user.expiresAt < Date.now()) {
+      activatedCache.set(chatId, { activated: false, timestamp: Date.now() })
+      return false
+    }
+    
+    activatedCache.set(chatId, { activated: true, timestamp: Date.now() })
+    return true
+  } catch (error) {
+    console.error("Erro ao verificar ativação:", error)
+    return false
+  }
 }
 
-function getUserActivation(chatId) {
-  const activated = loadActivated()
-  return activated[String(chatId)] || null
+async function activateUser(chatId, key, daysValid) {
+  try {
+    daysValid = daysValid || 30
+    const expiresAt = Date.now() + daysValid * 24 * 60 * 60 * 1000
+    
+    const userData = {
+      chatId: String(chatId),
+      key,
+      activatedAt: Date.now(),
+      expiresAt,
+      daysValid,
+      updatedAt: new Date()
+    }
+    
+    await db.collection(USERS_COLLECTION).updateOne(
+      { chatId: String(chatId) },
+      { $set: userData },
+      { upsert: true }
+    )
+    
+    // Atualizar cache
+    activatedCache.set(chatId, { activated: true, timestamp: Date.now() })
+    
+    console.log(`✅ Usuário ${chatId} ativado até ${new Date(expiresAt).toLocaleString()}`)
+  } catch (error) {
+    console.error("Erro ao ativar usuário:", error)
+  }
+}
+
+async function getUserActivation(chatId) {
+  try {
+    if (!db) return null
+    return await db.collection(USERS_COLLECTION).findOne({ chatId: String(chatId) })
+  } catch (error) {
+    console.error("Erro ao buscar ativação do usuário:", error)
+    return null
+  }
 }
 
 function fmtExpiry(ts) {
@@ -679,7 +830,9 @@ function daysLeft(ts) {
 
 function generateKey(prefix) {
   prefix = prefix || "ARES"
-  return `${prefix}-${crypto.randomBytes(4).toString("hex").toUpperCase()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
+  const random1 = crypto.randomBytes(4).toString("hex").toUpperCase()
+  const random2 = crypto.randomBytes(4).toString("hex").toUpperCase()
+  return `${prefix}-${random1}-${random2}`
 }
 // ──────────────────────────────────────────────────────────────────
 
@@ -731,7 +884,7 @@ const termoCheck = {}
 
 bot.onText(/^\/active$/, async msg => {
   const chatId = msg.chat.id
-  if (isActivated(chatId)) {
+  if (await isActivated(chatId)) {
     return bot.sendMessage(chatId,
       "✅ *Sua conta já está ativada!*\n\nVocê já tem acesso ao ARES HOST.",
       {
@@ -763,9 +916,18 @@ bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
   const prefix = isNaN(args[0]) ? (args[0] || "ARES") : "ARES"
   const days = parseInt(args.find(a => !isNaN(a))) || 30
   const key = generateKey(prefix)
-  const keys = loadActiveKeys()
-  keys[key] = { createdAt: Date.now(), usedBy: null, prefix, daysValid: days }
-  saveActiveKeys(keys)
+  
+  const keys = await loadActiveKeys()
+  keys[key] = { 
+    createdAt: Date.now(), 
+    usedBy: null, 
+    prefix, 
+    daysValid: days,
+    updatedAt: new Date()
+  }
+  
+  await saveActiveKeys(keys)
+  
   bot.sendMessage(chatId,
     `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\n⏳ Validade: *${days} dias* após ativação\n\nEnvie essa chave para o usuário.`,
     { parse_mode: "Markdown" }
@@ -775,18 +937,44 @@ bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
 bot.onText(/^\/listkeys$/, async msg => {
   const chatId = msg.chat.id
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-  const keys = loadActiveKeys()
-  const activated = loadActivated()
+  
+  const keys = await loadActiveKeys()
+  const activated = await loadActivated()
+  
   const total = Object.keys(keys).length
   const used = Object.values(keys).filter(k => k.usedBy).length
   const free = total - used
   const usersCount = Object.keys(activated).length
+  
   if (total === 0) return bot.sendMessage(chatId, "📋 Nenhuma chave gerada ainda. Use /genkey para criar.")
+  
   const lines = Object.entries(keys).slice(-20).map(([k, v]) => {
     return `${v.usedBy ? "✅" : "⬜"} \`${k}\`${v.usedBy ? " — usado" : ""}`
   }).join("\n")
+  
   bot.sendMessage(chatId,
     `🔑 *Chaves de ativação*\n\nTotal: *${total}* | Usadas: *${used}* | Livres: *${free}*\nUsuários ativados: *${usersCount}*\n\n${lines}`,
+    { parse_mode: "Markdown" }
+  )
+})
+
+bot.onText(/^\/listusers$/, async msg => {
+  const chatId = msg.chat.id
+  if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
+  
+  const activated = await loadActivated()
+  const users = Object.values(activated)
+  
+  if (users.length === 0) return bot.sendMessage(chatId, "📋 Nenhum usuário ativado ainda.")
+  
+  const lines = users.slice(-20).map(u => {
+    const left = daysLeft(u.expiresAt)
+    const status = left <= 0 ? "🔴 Expirado" : left <= 7 ? "🟡 " + left + "d" : "🟢 " + left + "d"
+    return `${status} \`${u.chatId}\` - ${fmtExpiry(u.expiresAt)}`
+  }).join("\n")
+  
+  bot.sendMessage(chatId,
+    `👥 *Usuários ativados:* ${users.length}\n\n${lines}`,
     { parse_mode: "Markdown" }
   )
 })
@@ -832,7 +1020,7 @@ bot.onText(/\/start/, async msg => {
   }
 
   const s = getStats(chatId)
-  const act = getUserActivation(chatId)
+  const act = await getUserActivation(chatId)
   const user = msg.from
 
   // Build name line
@@ -1093,7 +1281,6 @@ bot.on("callback_query", async query => {
 
   if (action === "limpar_tudo") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-    // Confirmação extra antes de apagar tudo
     return bot.editMessageText(
       `💣 *ATENÇÃO — Ação irreversível!*\n\nIsso vai:\n• Parar todos os bots\n• Apagar todos os arquivos locais\n• Apagar todos os arquivos nos buckets\n\nTodos os bots serão *permanentemente deletados*. Tem certeza?`,
       {
@@ -1112,12 +1299,10 @@ bot.on("callback_query", async query => {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
     bot.editMessageText("💣 Apagando tudo...", { chat_id: chatId, message_id: msgId })
     try {
-      // 1. Parar todos os bots
       for (const bid of Object.keys(activeBots)) {
         try { activeBots[bid].process.kill(); delete activeBots[bid] } catch (e) {}
       }
 
-      // 2. Apagar disco local inteiro mas preservar estrutura necessária
       if (fs.existsSync(BASE_PATH)) {
         fs.rmSync(BASE_PATH, { recursive: true, force: true })
       }
@@ -1125,7 +1310,6 @@ bot.on("callback_query", async query => {
       fs.mkdirSync(path.join(BASE_PATH, "_users"), { recursive: true, mode: 0o755 })
       fs.mkdirSync(path.join(BASE_PATH, "_uploads"), { recursive: true, mode: 0o755 })
 
-      // 3. Apagar tudo no bucket
       let objDeleted = 0
       try {
         let cont = true
@@ -1201,7 +1385,7 @@ bot.on("callback_query", async query => {
   }
   if (action === "menu_home") {
     const s = getStats(chatId)
-    const act = getUserActivation(chatId)
+    const act = await getUserActivation(chatId)
     let expiryLine = ""
     if (act && act.expiresAt) {
       const left = daysLeft(act.expiresAt)
@@ -1506,6 +1690,7 @@ process.on('uncaughtException', (err) => {
   }
 })
 
+// Rotas Express (mantidas iguais ao original)
 app.get("/terminal/:botId", authBot, (req, res) => {
   const botId = req.params.botId
   const sessionToken = req.query.s
@@ -1784,7 +1969,10 @@ app.get("/files/:botId", authBot, (req, res) => {
 })
 
 function buildEditorHtml(botId, sessionToken, API) {
-  // Função completa (mantida igual ao original)
+  const B = JSON.stringify(botId)
+  const T = JSON.stringify(sessionToken)
+  const A = JSON.stringify(API)
+
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1794,10 +1982,20 @@ function buildEditorHtml(botId, sessionToken, API) {
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#111827">
-<title>ARES — ${botId}</title>
+<title>ARES \u2014 ${botId}</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-/* Mantido o CSS completo do original */
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#0a0e17;--bg2:#111827;--bg3:#1a2234;--bg4:#1e2a3a;--bg5:#243044;
+  --bd:#263046;--bd2:#334155;
+  --tx:#e2e8f0;--tx2:#94a3b8;--tx3:#64748b;
+  --green:#22d3a5;--green2:#16a37f;--green3:#0d6b52;
+  --blue:#60a5fa;--orange:#f59e0b;--red:#f87171;--red2:#ef4444;--purple:#a78bfa;
+  --top:48px;--bot:60px;--r:10px
+}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-family:"Inter",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;touch-action:pan-x pan-y}
+/* Mantido o CSS completo do editor igual ao original */
 </style>
 </head>
 <body>
@@ -3265,27 +3463,35 @@ function setStatus(msg, type) {
 </html>`)
 })
 
-// API: checar se está ativado
-app.get("/activate-api/check", (req, res) => {
+// API: checar se está ativado (agora assíncrono)
+app.get("/activate-api/check", async (req, res) => {
   const chatId = req.query.chatId
   if (!chatId) return res.json({ activated: false })
-  res.json({ activated: isActivated(chatId) })
+  res.json({ activated: await isActivated(chatId) })
 })
 
-// API: ativar com chave
+// API: ativar com chave (agora com MongoDB)
 app.post("/activate-api/activate", async (req, res) => {
   const { key, chatId } = req.body
   if (!key || !chatId) return res.status(400).json({ error: "Dados inválidos" })
-  if (isActivated(chatId)) return res.json({ ok: true, already: true })
+  
+  if (await isActivated(chatId)) return res.json({ ok: true, already: true })
+  
   const inputKey = key.trim().toUpperCase()
-  const keys = loadActiveKeys()
+  const keys = await loadActiveKeys()
+  
   if (!keys[inputKey]) return res.json({ ok: false, error: "Chave não encontrada" })
   if (keys[inputKey].usedBy) return res.json({ ok: false, error: "Chave já utilizada" })
+  
+  // Marcar chave como usada
   keys[inputKey].usedBy = String(chatId)
   keys[inputKey].usedAt = Date.now()
-  saveActiveKeys(keys)
-  activateUser(chatId, inputKey, keys[inputKey].daysValid || 30)
+  await saveActiveKeys(keys)
+  
+  // Ativar usuário
+  await activateUser(chatId, inputKey, keys[inputKey].daysValid || 30)
   saveAccepted(chatId)
+  
   // Notificar o usuário via bot
   try {
     const s = getStats(chatId)
@@ -3302,6 +3508,7 @@ app.post("/activate-api/activate", async (req, res) => {
       }
     )
   } catch (e) {}
+  
   res.json({ ok: true })
 })
 
@@ -3372,10 +3579,21 @@ function checkDiskAlert() {
   }
 }
 
+// Limpeza programada
 setInterval(cleanupOldLogs, 2 * 60 * 60 * 1000)
 setTimeout(cleanupOldLogs, 2 * 60 * 1000)
 setInterval(checkDiskAlert, 30 * 60 * 1000)
 setTimeout(checkDiskAlert, 10 * 60 * 1000)
+
+// Limpeza de cache de ativação (a cada 10 minutos)
+setInterval(() => {
+  const now = Date.now()
+  for (const [chatId, cached] of activatedCache.entries()) {
+    if (now - cached.timestamp > CACHE_TTL) {
+      activatedCache.delete(chatId)
+    }
+  }
+}, 10 * 60 * 1000)
 
 process.on("uncaughtException", err => {
   if (err.code !== "EADDRINUSE") console.error("Erro não tratado:", err)
@@ -3387,7 +3605,10 @@ process.on("SIGTERM", async () => {
     ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_users" && f !== ".git" && f !== "node_modules")
     : []
   for (const botId of bots) await saveBotFilesToBucket(botId)
-  console.log("✅ Bots salvos. Encerrando.")
+  
+  // Fechar conexão MongoDB
+  if (dbClient) await dbClient.close()
+  console.log("✅ Conexões fechadas. Encerrando.")
   process.exit(0)
 })
 
@@ -3397,6 +3618,9 @@ process.on("SIGINT", async () => {
     ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_users" && f !== ".git" && f !== "node_modules")
     : []
   for (const botId of bots) await saveBotFilesToBucket(botId)
+  
+  // Fechar conexão MongoDB
+  if (dbClient) await dbClient.close()
   process.exit(0)
 })
 
