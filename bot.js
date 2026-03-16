@@ -660,10 +660,29 @@ function isActivated(chatId) {
   return !!activated[String(chatId)]
 }
 
-function activateUser(chatId, key) {
+function activateUser(chatId, key, daysValid) {
+  daysValid = daysValid || 30
   const activated = loadActivated()
-  activated[String(chatId)] = { key, at: Date.now() }
+  const expiresAt = Date.now() + daysValid * 24 * 60 * 60 * 1000
+  activated[String(chatId)] = { key, at: Date.now(), expiresAt, daysValid }
   saveActivated(activated)
+}
+
+function getUserActivation(chatId) {
+  const activated = loadActivated()
+  return activated[String(chatId)] || null
+}
+
+function fmtExpiry(ts) {
+  if (!ts) return "Sem expiração"
+  const d = new Date(ts)
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })
+}
+
+function daysLeft(ts) {
+  if (!ts) return null
+  const diff = Math.ceil((ts - Date.now()) / (1000 * 60 * 60 * 24))
+  return diff
 }
 
 function generateKey(prefix) {
@@ -743,18 +762,20 @@ bot.onText(/^\/active$/, async msg => {
   )
 })
 
-bot.onText(/^\/genkey(?:\s+(\S+))?$/, async msg => {
+bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
   const chatId = msg.chat.id
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) {
     return bot.sendMessage(chatId, "❌ Sem permissão.")
   }
-  const prefix = msg.text.split(" ")[1] || "ARES"
+  const args = (msg.text.split(" ").slice(1))
+  const prefix = isNaN(args[0]) ? (args[0] || "ARES") : "ARES"
+  const days = parseInt(args.find(a => !isNaN(a))) || 30
   const key = generateKey(prefix)
   const keys = loadActiveKeys()
-  keys[key] = { createdAt: Date.now(), usedBy: null, prefix }
+  keys[key] = { createdAt: Date.now(), usedBy: null, prefix, daysValid: days }
   saveActiveKeys(keys)
   bot.sendMessage(chatId,
-    `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\nEnvie essa chave para o usuário. Ela pode ser usada uma vez.`,
+    `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\n⏳ Validade: *${days} dias* após ativação\n\nEnvie essa chave para o usuário.`,
     { parse_mode: "Markdown" }
   )
 })
@@ -817,21 +838,63 @@ bot.onText(/\/start/, async msg => {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
   }
+
   const s = getStats(chatId)
-  bot.sendMessage(chatId,
-    `🚀 *ARES HOST*\n\n` +
-    `🤖 Seus Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
-    `💾 RAM: *${s.ram}MB*  |  ⏱ Uptime: *${s.uptime}*`,
-    {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-          [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-          [{ text: "📊 Estatisticas", callback_data: "menu_stats" }],
-        ]
-      }
+  const act = getUserActivation(chatId)
+  const user = msg.from
+
+  // Build name line
+  const firstName = user.first_name || ""
+  const lastName = user.last_name || ""
+  const fullName = (firstName + " " + lastName).trim()
+  const username = user.username ? `@${user.username}` : `ID: ${chatId}`
+
+  // Build expiry line
+  let expiryLine = ""
+  if (act && act.expiresAt) {
+    const left = daysLeft(act.expiresAt)
+    if (left <= 0) {
+      expiryLine = `⛔ Expirado em ${fmtExpiry(act.expiresAt)}`
+    } else if (left <= 7) {
+      expiryLine = `⚠️ Expira em *${left} dias* (${fmtExpiry(act.expiresAt)})`
+    } else {
+      expiryLine = `📅 Válido até *${fmtExpiry(act.expiresAt)}* (${left}d)`
     }
+  }
+
+  const caption =
+    `*${fullName}*\n` +
+    `${username}\n` +
+    (expiryLine ? expiryLine + "\n" : "") +
+    `\n` +
+    `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
+      [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
+      [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
+    ]
+  }
+
+  // Try to get user profile photo
+  try {
+    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
+    if (photos && photos.total_count > 0) {
+      const fileId = photos.photos[0][photos.photos[0].length - 1].file_id
+      return bot.sendPhoto(chatId, fileId, {
+        caption,
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      })
+    }
+  } catch (e) {}
+
+  // Fallback sem foto
+  bot.sendMessage(chatId,
+    `🚀 *ARES HOST*\n\n` + caption,
+    { parse_mode: "Markdown", reply_markup: keyboard }
   )
 })
 
@@ -1148,17 +1211,25 @@ bot.on("callback_query", async query => {
   }
   if (action === "menu_home") {
     const s = getStats(chatId)
+    const act = getUserActivation(chatId)
+    let expiryLine = ""
+    if (act && act.expiresAt) {
+      const left = daysLeft(act.expiresAt)
+      if (left <= 0) expiryLine = `\n⛔ Acesso expirado`
+      else if (left <= 7) expiryLine = `\n⚠️ Expira em *${left} dias*`
+      else expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
+    }
     return bot.editMessageText(
-      `🚀 *ARES HOST*\n\n` +
-      `🤖 Seus Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
-      `💾 RAM: *${s.ram}MB*  |  ⏱ Uptime: *${s.uptime}*`,
+      `🚀 *ARES HOST*${expiryLine}\n\n` +
+      `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
       {
         chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
             [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-            [{ text: "📊 Estatisticas", callback_data: "menu_stats" }],
+            [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
           ]
         }
       }
@@ -3619,7 +3690,7 @@ app.post("/activate-api/activate", async (req, res) => {
   keys[inputKey].usedBy = String(chatId)
   keys[inputKey].usedAt = Date.now()
   saveActiveKeys(keys)
-  activateUser(chatId, inputKey)
+  activateUser(chatId, inputKey, keys[inputKey].daysValid || 30)
   saveAccepted(chatId)
   // Notificar o usuário via bot
   try {
