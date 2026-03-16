@@ -11,7 +11,7 @@ const { EventEmitter } = require("events")
 const multer = require("multer")
 const { execFile, execSync, spawn } = require("child_process")
 const crypto = require("crypto")
-const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3")
+const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } = require("@aws-sdk/client-s3")
 const tar = require("tar")
 
 EventEmitter.defaultMaxListeners = 200
@@ -678,17 +678,17 @@ bot.onText(/^\/meuid$/, msg => {
 
 bot.onText(/^\/(limpar|limpeza)$/, async msg => {
   const chatId = msg.chat.id
-  console.log(`🧹 /limpar recebido de chatId=${chatId}, OWNER_ID="${OWNER_ID}"`)
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) {
     return bot.sendMessage(chatId, "❌ Sem permissão.")
   }
   bot.sendMessage(chatId,
-    "⚠️ *Limpar instâncias locais?*\n\nRemove node\\_modules e logs de todos os bots.\nOs arquivos no bucket continuam intactos.",
+    "🗑️ *O que deseja limpar?*",
     {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "🗑️ Sim, limpar", callback_data: "owner_limpar_confirm:" + chatId }],
+          [{ text: "🧹 Disco local (node_modules + logs)", callback_data: "limpar_local:" + chatId }],
+          [{ text: "💣 Tudo — disco + bucket (apaga todos os bots)", callback_data: "limpar_tudo:" + chatId }],
           [{ text: "❌ Cancelar", callback_data: "owner_limpar_cancel" }]
         ]
       }
@@ -879,32 +879,18 @@ bot.on("callback_query", async query => {
   const colonIdx = data.indexOf(":")
   const action = colonIdx === -1 ? data : data.slice(0, colonIdx)
   const id = colonIdx === -1 ? null : data.slice(colonIdx + 1)
-  console.log(`📲 callback: action="${action}" id="${id}" chatId="${chatId}"`)
   bot.answerCallbackQuery(query.id)
 
-  if (action === "owner_limpar_confirm") {
-    console.log(`🧹 limpar confirmado por ${chatId}, OWNER_ID="${OWNER_ID}"`)
-    if (OWNER_ID && String(chatId) !== String(OWNER_ID)) {
-      console.log(`❌ chatId ${chatId} !== OWNER_ID ${OWNER_ID}, bloqueado`)
-      return
-    }
-
-    bot.editMessageText("🧹 Parando bots e limpando...", { chat_id: chatId, message_id: msgId })
-
+  if (action === "limpar_local" || action === "owner_limpar_confirm") {
+    if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
+    bot.editMessageText("🧹 Parando bots e limpando disco...", { chat_id: chatId, message_id: msgId })
     try {
-      // 1. Parar todos os bots ativos
       const botIds = Object.keys(activeBots)
       let stopped = 0
       for (const bid of botIds) {
-        try {
-          activeBots[bid].process.kill()
-          delete activeBots[bid]
-          stopped++
-        } catch (e) {}
+        try { activeBots[bid].process.kill(); delete activeBots[bid]; stopped++ } catch (e) {}
       }
-
-      // 2. Limpar arquivos em disco
-      let count = 0, nmCount = 0, logCount = 0, tmpCount = 0
+      let nmCount = 0, logCount = 0, tmpCount = 0
       if (fs.existsSync(BASE_PATH)) {
         const entries = fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_users" && f !== ".git")
         for (const entry of entries) {
@@ -917,36 +903,99 @@ bot.on("callback_query", async query => {
             if (fs.existsSync(nmPath)) { fs.rmSync(nmPath, { recursive: true, force: true }); nmCount++ }
             if (fs.existsSync(logPath)) { fs.unlinkSync(logPath); logCount++ }
             if (fs.existsSync(botZip)) { fs.unlinkSync(botZip); tmpCount++ }
-            count++
-          } catch (e) {
-            console.error("Erro ao limpar", entry, e.message)
-          }
+          } catch (e) { console.error("Erro ao limpar", entry, e.message) }
         }
       }
-
-      // 3. Reiniciar os bots que estavam rodando
       let restarted = 0
       for (const bid of botIds) {
         const instancePath = path.join(BASE_PATH, bid)
         if (fs.existsSync(instancePath)) {
-          setTimeout(() => {
-            spawnBot(bid, instancePath)
-          }, restarted * 2000)
+          setTimeout(() => spawnBot(bid, instancePath), restarted * 2000)
           restarted++
+        }
+      }
+      const diskAfter = getDiskPercent()
+      const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
+      return bot.editMessageText(
+        `✅ *Disco limpo!*\n\n` +
+        `🛑 Bots parados: *${stopped}*\n` +
+        `📦 node\\_modules: *${nmCount}*\n` +
+        `📋 Logs: *${logCount}*\n` +
+        `♻️ Reiniciando: *${restarted}* bots\n\n` +
+        `💿 Disco: *${diskAfter}%*  |  💾 RAM: *${ramAfter}MB*`,
+        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
+      )
+    } catch (err) {
+      return bot.editMessageText(`❌ Erro: ${err.message}`, { chat_id: chatId, message_id: msgId })
+    }
+  }
+
+  if (action === "limpar_tudo") {
+    if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
+    // Confirmação extra antes de apagar tudo
+    return bot.editMessageText(
+      `💣 *ATENÇÃO — Ação irreversível!*\n\nIsso vai:\n• Parar todos os bots\n• Apagar todos os arquivos locais\n• Apagar todos os arquivos nos buckets\n\nTodos os bots serão *permanentemente deletados*. Tem certeza?`,
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "💣 Sim, apagar TUDO", callback_data: "limpar_tudo_confirm:" + chatId }],
+            [{ text: "❌ Cancelar", callback_data: "owner_limpar_cancel" }]
+          ]
+        }
+      }
+    )
+  }
+
+  if (action === "limpar_tudo_confirm") {
+    if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
+    bot.editMessageText("💣 Apagando tudo...", { chat_id: chatId, message_id: msgId })
+    try {
+      // 1. Parar todos os bots
+      for (const bid of Object.keys(activeBots)) {
+        try { activeBots[bid].process.kill(); delete activeBots[bid] } catch (e) {}
+      }
+
+      // 2. Apagar disco local inteiro
+      if (fs.existsSync(BASE_PATH)) {
+        fs.rmSync(BASE_PATH, { recursive: true, force: true })
+        fs.mkdirSync(BASE_PATH, { recursive: true, mode: 0o755 })
+      }
+
+      // 3. Apagar tudo nos buckets
+      let objDeleted = 0
+      for (const { client, bucketName } of s3Clients) {
+        try {
+          let cont = true
+          let token = undefined
+          while (cont) {
+            const listRes = await client.send(new ListObjectsV2Command({
+              Bucket: bucketName,
+              MaxKeys: 1000,
+              ContinuationToken: token
+            }))
+            const objs = (listRes.Contents || []).map(o => ({ Key: o.Key }))
+            if (objs.length > 0) {
+              await client.send(new DeleteObjectsCommand({
+                Bucket: bucketName,
+                Delete: { Objects: objs, Quiet: true }
+              }))
+              objDeleted += objs.length
+            }
+            cont = listRes.IsTruncated
+            token = listRes.NextContinuationToken
+          }
+        } catch (e) {
+          console.error("Erro ao apagar bucket", bucketName, e.message)
         }
       }
 
       const diskAfter = getDiskPercent()
       const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
-      console.log(`✅ Limpeza: parou ${stopped}, nmCount=${nmCount}, logs=${logCount}, zips=${tmpCount}, reiniciando=${restarted}, disco=${diskAfter}%, ram=${ramAfter}MB`)
-
       return bot.editMessageText(
-        `✅ *Limpeza concluída!*\n\n` +
-        `🛑 Bots parados: *${stopped}*\n` +
-        `📦 node\\_modules: *${nmCount}*\n` +
-        `📋 Logs: *${logCount}*\n` +
-        `🗜️ ZIPs: *${tmpCount}*\n` +
-        `♻️ Reiniciando: *${restarted}* bots\n\n` +
+        `✅ *Tudo apagado!*\n\n` +
+        `🗑️ Disco local: limpo\n` +
+        `☁️ Objetos no bucket: *${objDeleted}* deletados\n\n` +
         `💿 Disco: *${diskAfter}%*  |  💾 RAM: *${ramAfter}MB*`,
         { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
