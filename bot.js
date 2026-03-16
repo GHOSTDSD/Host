@@ -628,62 +628,107 @@ function saveAccepted(chatId) {
 }
 
 // ─── SISTEMA DE ATIVAÇÃO ───────────────────────────────────────────
-const ACTIVE_KEYS_FILE = path.join(BASE_PATH, "_users", "active_keys.json")
-const ACTIVATED_FILE   = path.join(BASE_PATH, "_users", "activated.json")
+const ACTIVE_KEYS_S3  = "system/active_keys.json"
+const ACTIVATED_S3    = "system/activated.json"
 
-function loadActiveKeys() {
+async function loadActiveKeys() {
   try {
-    if (!fs.existsSync(ACTIVE_KEYS_FILE)) return {}
-    return JSON.parse(fs.readFileSync(ACTIVE_KEYS_FILE, "utf8"))
+    const { client, bucketName } = s3Clients[0]
+    const res = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: ACTIVE_KEYS_S3 }))
+    const chunks = []
+    for await (const chunk of res.Body) chunks.push(chunk)
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
   } catch { return {} }
 }
 
-function saveActiveKeys(data) {
-  if (!fs.existsSync(path.dirname(ACTIVE_KEYS_FILE))) fs.mkdirSync(path.dirname(ACTIVE_KEYS_FILE), { recursive: true })
-  fs.writeFileSync(ACTIVE_KEYS_FILE, JSON.stringify(data, null, 2))
+async function saveActiveKeys(data) {
+  try {
+    const { client, bucketName } = s3Clients[0]
+    await client.send(new PutObjectCommand({
+      Bucket: bucketName, Key: ACTIVE_KEYS_S3,
+      Body: JSON.stringify(data), ContentType: "application/json"
+    }))
+  } catch (e) { console.error("saveActiveKeys error:", e.message) }
 }
 
-function loadActivated() {
+async function loadActivated() {
   try {
-    if (!fs.existsSync(ACTIVATED_FILE)) return {}
-    return JSON.parse(fs.readFileSync(ACTIVATED_FILE, "utf8"))
+    const { client, bucketName } = s3Clients[0]
+    const res = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: ACTIVATED_S3 }))
+    const chunks = []
+    for await (const chunk of res.Body) chunks.push(chunk)
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
   } catch { return {} }
 }
 
-function saveActivated(data) {
-  if (!fs.existsSync(path.dirname(ACTIVATED_FILE))) fs.mkdirSync(path.dirname(ACTIVATED_FILE), { recursive: true })
-  fs.writeFileSync(ACTIVATED_FILE, JSON.stringify(data, null, 2))
+async function saveActivated(data) {
+  try {
+    const { client, bucketName } = s3Clients[0]
+    await client.send(new PutObjectCommand({
+      Bucket: bucketName, Key: ACTIVATED_S3,
+      Body: JSON.stringify(data), ContentType: "application/json"
+    }))
+  } catch (e) { console.error("saveActivated error:", e.message) }
 }
 
-function isActivated(chatId) {
-  const activated = loadActivated()
-  return !!activated[String(chatId)]
+// Cache em memória para evitar chamadas repetidas ao bucket
+const _keysCache  = { data: null, ts: 0 }
+const _actCache   = { data: null, ts: 0 }
+const CACHE_TTL   = 30 * 1000 // 30s
+
+async function getActiveKeys() {
+  if (_keysCache.data && Date.now() - _keysCache.ts < CACHE_TTL) return _keysCache.data
+  _keysCache.data = await loadActiveKeys()
+  _keysCache.ts = Date.now()
+  return _keysCache.data
 }
 
-function activateUser(chatId, key, daysValid) {
+async function getActivated() {
+  if (_actCache.data && Date.now() - _actCache.ts < CACHE_TTL) return _actCache.data
+  _actCache.data = await loadActivated()
+  _actCache.ts = Date.now()
+  return _actCache.data
+}
+
+async function isActivated(chatId) {
+  const activated = await getActivated()
+  const entry = activated[String(chatId)]
+  if (!entry) return false
+  if (entry.expiresAt && entry.expiresAt < Date.now()) return false
+  return true
+}
+
+async function activateUser(chatId, key, daysValid) {
   daysValid = daysValid || 30
-  const activated = loadActivated()
+  const activated = await loadActivated()
   const expiresAt = Date.now() + daysValid * 24 * 60 * 60 * 1000
   activated[String(chatId)] = { key, at: Date.now(), expiresAt, daysValid }
-  saveActivated(activated)
+  _actCache.data = activated
+  _actCache.ts = Date.now()
+  await saveActivated(activated)
 }
 
-function getUserActivation(chatId) {
-  const activated = loadActivated()
+async function getUserActivation(chatId) {
+  const activated = await getActivated()
   return activated[String(chatId)] || null
 }
 
 function fmtExpiry(ts) {
   if (!ts) return "Sem expiração"
-  const d = new Date(ts)
-  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })
+  return new Date(ts).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })
 }
 
 function daysLeft(ts) {
   if (!ts) return null
-  const diff = Math.ceil((ts - Date.now()) / (1000 * 60 * 60 * 24))
-  return diff
+  return Math.ceil((ts - Date.now()) / (1000 * 60 * 60 * 24))
 }
+
+function generateKey(prefix) {
+  prefix = (prefix || "ARES").toUpperCase().slice(0, 6)
+  const block = () => crypto.randomBytes(2).toString("hex").toUpperCase()
+  return `${prefix}-${block()}-${block()}-${block()}`
+}
+// ──────────────────────────────────────────────────────────────────
 
 function generateKey(prefix) {
   prefix = (prefix || "ARES").toUpperCase().slice(0, 6)
@@ -740,7 +785,7 @@ const termoCheck = {}
 
 bot.onText(/^\/active$/, async msg => {
   const chatId = msg.chat.id
-  if (isActivated(chatId)) {
+  if (await isActivated(chatId)) {
     return bot.sendMessage(chatId,
       "✅ *Sua conta já está ativada!*\n\nVocê já tem acesso ao ARES HOST.",
       {
@@ -772,9 +817,9 @@ bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
   const prefix = isNaN(args[0]) ? (args[0] || "ARES") : "ARES"
   const days = parseInt(args.find(a => !isNaN(a))) || 30
   const key = generateKey(prefix)
-  const keys = loadActiveKeys()
+  const keys = await loadActiveKeys()
   keys[key] = { createdAt: Date.now(), usedBy: null, prefix, daysValid: days }
-  saveActiveKeys(keys)
+  await saveActiveKeys(keys)
   bot.sendMessage(chatId,
     `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\n⏳ Validade: *${days} dias* após ativação\n\nEnvie essa chave para o usuário.`,
     { parse_mode: "Markdown" }
@@ -784,8 +829,8 @@ bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
 bot.onText(/^\/listkeys$/, async msg => {
   const chatId = msg.chat.id
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-  const keys = loadActiveKeys()
-  const activated = loadActivated()
+  const keys = await loadActiveKeys()
+  const activated = await loadActivated()
   const total = Object.keys(keys).length
   const used = Object.values(keys).filter(k => k.usedBy).length
   const free = total - used
@@ -987,7 +1032,7 @@ bot.on("message", async msg => {
 
 async function sendStartMessage(chatId, msgId, mode, fromUser) {
   const s = getStats(chatId)
-  const act = getUserActivation(chatId)
+  const act = await getUserActivation(chatId)
 
   let expiryLine = ""
   if (act && act.expiresAt) {
@@ -3654,25 +3699,28 @@ function setStatus(msg, type) {
 })
 
 // API: checar se está ativado
-app.get("/activate-api/check", (req, res) => {
+app.get("/activate-api/check", async (req, res) => {
   const chatId = req.query.chatId
   if (!chatId) return res.json({ activated: false })
-  res.json({ activated: isActivated(chatId) })
+  const actCheck = await isActivated(chatId)
+  res.json({ activated: actCheck })
 })
 
 // API: ativar com chave
 app.post("/activate-api/activate", async (req, res) => {
   const { key, chatId } = req.body
   if (!key || !chatId) return res.status(400).json({ error: "Dados inválidos" })
-  if (isActivated(chatId)) return res.json({ ok: true, already: true })
+  if (await isActivated(chatId)) return res.json({ ok: true, already: true })
   const inputKey = key.trim().toUpperCase()
-  const keys = loadActiveKeys()
+  const keys = await loadActiveKeys()
   if (!keys[inputKey]) return res.json({ ok: false, error: "Chave não encontrada" })
   if (keys[inputKey].usedBy) return res.json({ ok: false, error: "Chave já utilizada" })
+  const keyDays = keys[inputKey].daysValid || 30
   keys[inputKey].usedBy = String(chatId)
   keys[inputKey].usedAt = Date.now()
-  saveActiveKeys(keys)
-  activateUser(chatId, inputKey, keys[inputKey].daysValid || 30)
+  _keysCache.data = null
+  await saveActiveKeys(keys)
+  await activateUser(chatId, inputKey, keyDays)
   saveAccepted(chatId)
   // Notificar o usuário via bot
   try {
