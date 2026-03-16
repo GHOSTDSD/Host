@@ -129,15 +129,11 @@ function getMeta(botId) {
 }
 
 function updateMetaAccess(botId) {
-  setImmediate(() => {
-    try {
-      const meta = getMeta(botId)
-      if (meta) {
-        meta.lastAccessed = Date.now()
-        fs.writeFileSync(path.join(BASE_PATH, botId, "meta.json"), JSON.stringify(meta))
-      }
-    } catch (e) {}
-  })
+  const meta = getMeta(botId)
+  if (meta) {
+    meta.lastAccessed = Date.now()
+    fs.writeFileSync(path.join(BASE_PATH, botId, "meta.json"), JSON.stringify(meta))
+  }
 }
 
 function updateNodeModulesHash(botId, hash) {
@@ -331,15 +327,6 @@ async function downloadNodeModulesFromBucket(botId, targetPath, packageHash) {
   } finally {
     try { fs.unlinkSync(tarballPath) } catch {}
   }
-}
-
-const _saveDebounce = {}
-function saveBotFilesToBucketDebounced(botId) {
-  clearTimeout(_saveDebounce[botId])
-  _saveDebounce[botId] = setTimeout(() => {
-    delete _saveDebounce[botId]
-    saveBotFilesToBucketDebounced(botId)
-  }, 10000) // wait 10s of inactivity before saving
 }
 
 async function saveBotFilesToBucket(botId) {
@@ -627,25 +614,17 @@ io.on("connection", socket => {
 const USERS_PATH = path.join(BASE_PATH, "_users")
 if (!fs.existsSync(USERS_PATH)) fs.mkdirSync(USERS_PATH, { recursive: true })
 
-const _acceptedCache = new Set()
-
 function hasAccepted(chatId) {
-  const cid = String(chatId)
-  if (_acceptedCache.has(cid)) return true
   try {
-    const f = path.join(USERS_PATH, `${cid}.json`)
-    const ok = fs.existsSync(f) && JSON.parse(fs.readFileSync(f, "utf8")).accepted === true
-    if (ok) _acceptedCache.add(cid)
-    return ok
+    const f = path.join(USERS_PATH, `${chatId}.json`)
+    return fs.existsSync(f) && JSON.parse(fs.readFileSync(f, "utf8")).accepted === true
   } catch { return false }
 }
 
 function saveAccepted(chatId) {
-  const cid = String(chatId)
   if (!fs.existsSync(USERS_PATH)) fs.mkdirSync(USERS_PATH, { recursive: true })
-  const f = path.join(USERS_PATH, `${cid}.json`)
+  const f = path.join(USERS_PATH, `${chatId}.json`)
   fs.writeFileSync(f, JSON.stringify({ accepted: true, at: Date.now() }))
-  _acceptedCache.add(cid)
 }
 
 // ─── SISTEMA DE ATIVAÇÃO ───────────────────────────────────────────
@@ -695,9 +674,7 @@ async function saveActivated(data) {
 // Cache em memória para evitar chamadas repetidas ao bucket
 const _keysCache  = { data: null, ts: 0 }
 const _actCache   = { data: null, ts: 0 }
-const CACHE_TTL   = 5 * 60 * 1000 // 5 min
-// Fast in-memory set for activation check (populated on first load)
-const _activatedSet = new Set()
+const CACHE_TTL   = 30 * 1000 // 30s
 
 async function getActiveKeys() {
   if (_keysCache.data && Date.now() - _keysCache.ts < CACHE_TTL) return _keysCache.data
@@ -710,15 +687,7 @@ async function getActivated() {
   if (_actCache.data && Date.now() - _actCache.ts < CACHE_TTL) return _actCache.data
   _actCache.data = await loadActivated()
   _actCache.ts = Date.now()
-  // populate fast set
-  _activatedSet.clear()
-  for (const k of Object.keys(_actCache.data)) _activatedSet.add(k)
   return _actCache.data
-}
-
-// Fast sync check (uses in-memory set, no S3) — use for non-critical paths
-function isActivatedSync(chatId) {
-  return _activatedSet.has(String(chatId))
 }
 
 async function isActivated(chatId) {
@@ -736,7 +705,6 @@ async function activateUser(chatId, key, daysValid) {
   activated[String(chatId)] = { key, at: Date.now(), expiresAt, daysValid }
   _actCache.data = activated
   _actCache.ts = Date.now()
-  _activatedSet.add(String(chatId))  // instant update
   await saveActivated(activated)
 }
 
@@ -1062,212 +1030,74 @@ bot.on("message", async msg => {
   }
 })
 
-async function downloadBuffer(url) {
-  return new Promise((resolve, reject) => {
-    const mod = url.startsWith("https") ? require("https") : require("http")
-    const chunks = []
-    mod.get(url, res => {
-      if (res.statusCode === 301 || res.statusCode === 302)
-        return downloadBuffer(res.headers.location).then(resolve).catch(reject)
-      res.on("data", c => chunks.push(c))
-      res.on("end", () => resolve(Buffer.concat(chunks)))
-      res.on("error", reject)
-    }).on("error", reject)
-  })
-}
-
-async function buildStartCard(user, stats, act, chatId) {
-  const sharp = require("sharp")
-
-  const W = 900, H = 280
-  const AV = 96  // avatar size
-  const AX = 48, AY = (H - AV) / 2  // avatar position
-
-  // ── helpers ──
-  const xe = s => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
-
-  const fn   = user ? (((user.first_name||"") + " " + (user.last_name||"")).trim() || "Usuário") : "Usuário"
-  const un   = user?.username ? `@${user.username}` : `ID: ${chatId}`
-  const initials = fn.split(" ").map(w=>w[0]||"").join("").slice(0,2).toUpperCase()
-
-  // expiry
-  let expText = "", expColor = "#4e5a6e"
-  if (act && act.expiresAt) {
-    const left = daysLeft(act.expiresAt)
-    if (left <= 0)      { expText = "Acesso expirado";                    expColor = "#ef4444" }
-    else if (left <= 7) { expText = `Expira em ${left}d · ${fmtExpiry(act.expiresAt)}`; expColor = "#f5a623" }
-    else                { expText = `Válido até ${fmtExpiry(act.expiresAt)}`;          expColor = "#34d17a" }
-  }
-
-  const TX = "#e4e8f0", TX2 = "#8a95a8", TX3 = "#4e5a6e"
-  const GREEN = "#34d17a", RED = "#ef4444", BLUE = "#4d8ef5"
-  const BG = "#111318", BG2 = "#181c27", BORDER = "#1e2535"
-
-  // text X start (after avatar)
-  const TX0 = AX + AV + 30
-
-  // ── avatar ──
-  let avatarBuf = null
-  try {
-    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
-    if (photos && photos.total_count > 0) {
-      const fileId  = photos.photos[0][photos.photos[0].length - 1].file_id
-      const fileObj = await bot.getFile(fileId)
-      const raw = await downloadBuffer(`https://api.telegram.org/file/bot${TOKEN}/${fileObj.file_path}`)
-      const mask = Buffer.from(`<svg width="${AV}" height="${AV}"><circle cx="${AV/2}" cy="${AV/2}" r="${AV/2}" fill="white"/></svg>`)
-      avatarBuf = await sharp(raw)
-        .resize(AV, AV, { fit: "cover" })
-        .composite([{ input: mask, blend: "dest-in" }])
-        .png().toBuffer()
-    }
-  } catch (e) { /* no avatar */ }
-
-  // ── SVG card ──
-  const svg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <clipPath id="card"><rect width="${W}" height="${H}" rx="22" ry="22"/></clipPath>
-    <linearGradient id="topgrad" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#1a2540"/>
-      <stop offset="100%" stop-color="${BG}"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="${BLUE}"/>
-      <stop offset="100%" stop-color="#7c4dff"/>
-    </linearGradient>
-  </defs>
-
-  <!-- bg -->
-  <rect width="${W}" height="${H}" rx="22" ry="22" fill="${BG}"/>
-  <!-- top gradient zone -->
-  <rect width="${W}" height="${H}" rx="22" ry="22" fill="url(#topgrad)" clip-path="url(#card)"/>
-  <!-- accent left strip -->
-  <rect x="0" y="0" width="4" height="${H}" rx="0" fill="url(#accent)" clip-path="url(#card)"/>
-  <!-- subtle grid texture -->
-  <rect width="${W}" height="${H}" rx="22" ry="22" fill="none" stroke="${BORDER}" stroke-width="1"/>
-
-  <!-- avatar placeholder circle (will be replaced if photo exists) -->
-  ${!avatarBuf ? `
-  <circle cx="${AX + AV/2}" cy="${AY + AV/2}" r="${AV/2 + 2}" fill="${BG2}" stroke="${BORDER}" stroke-width="1.5"/>
-  <text x="${AX + AV/2}" y="${AY + AV/2 + 12}" font-family="sans-serif" font-size="32" font-weight="bold" fill="${TX2}" text-anchor="middle">${xe(initials)}</text>
-  ` : `
-  <!-- avatar ring -->
-  <circle cx="${AX + AV/2}" cy="${AY + AV/2}" r="${AV/2 + 3}" fill="none" stroke="url(#accent)" stroke-width="2.5"/>
-  `}
-
-  <!-- name -->
-  <text x="${TX0}" y="${AY + 30}" font-family="sans-serif" font-size="28" font-weight="bold" fill="${TX}" letter-spacing="-0.5">${xe(fn)}</text>
-  <!-- username -->
-  <text x="${TX0}" y="${AY + 58}" font-family="sans-serif" font-size="16" fill="${TX2}">${xe(un)}</text>
-  <!-- expiry -->
-  ${expText ? `<text x="${TX0}" y="${AY + 84}" font-family="sans-serif" font-size="14" fill="${expColor}">${xe(expText)}</text>` : ""}
-
-  <!-- divider -->
-  <line x1="${TX0}" y1="${H - 74}" x2="${W - 32}" y2="${H - 74}" stroke="${BORDER}" stroke-width="1"/>
-
-  <!-- stat blocks -->
-  <!-- Bots -->
-  <text x="${TX0}" y="${H - 46}" font-family="sans-serif" font-size="11" fill="${TX3}" letter-spacing="1">BOTS</text>
-  <text x="${TX0}" y="${H - 24}" font-family="sans-serif" font-size="22" font-weight="bold" fill="${TX}">${xe(String(stats.total))}</text>
-  <!-- Online -->
-  <text x="${TX0 + 90}" y="${H - 46}" font-family="sans-serif" font-size="11" fill="${TX3}" letter-spacing="1">ONLINE</text>
-  <circle cx="${TX0 + 89}" cy="${H - 49}" r="4" fill="${GREEN}"/>
-  <text x="${TX0 + 90}" y="${H - 24}" font-family="sans-serif" font-size="22" font-weight="bold" fill="${GREEN}">${xe(String(stats.online))}</text>
-  <!-- Offline -->
-  <text x="${TX0 + 190}" y="${H - 46}" font-family="sans-serif" font-size="11" fill="${TX3}" letter-spacing="1">OFFLINE</text>
-  <circle cx="${TX0 + 189}" cy="${H - 49}" r="4" fill="${RED}"/>
-  <text x="${TX0 + 190}" y="${H - 24}" font-family="sans-serif" font-size="22" font-weight="bold" fill="${RED}">${xe(String(stats.offline))}</text>
-  <!-- RAM -->
-  <text x="${TX0 + 310}" y="${H - 46}" font-family="sans-serif" font-size="11" fill="${TX3}" letter-spacing="1">RAM</text>
-  <text x="${TX0 + 310}" y="${H - 24}" font-family="sans-serif" font-size="22" font-weight="bold" fill="${TX}">${xe(stats.ram)}<tspan font-size="13" fill="${TX3}">MB</tspan></text>
-  <!-- Uptime -->
-  <text x="${TX0 + 420}" y="${H - 46}" font-family="sans-serif" font-size="11" fill="${TX3}" letter-spacing="1">UPTIME</text>
-  <text x="${TX0 + 420}" y="${H - 24}" font-family="sans-serif" font-size="22" font-weight="bold" fill="${TX}">${xe(stats.uptime)}</text>
-
-  <!-- ARES badge top-right -->
-  <rect x="${W - 90}" y="18" width="68" height="22" rx="11" fill="${BG2}" stroke="${BORDER}" stroke-width="1"/>
-  <text x="${W - 56}" y="33" font-family="sans-serif" font-size="10" font-weight="bold" fill="${TX3}" text-anchor="middle" letter-spacing="2">ARES</text>
-</svg>`
-
-  let cardBuf = await sharp(Buffer.from(svg)).png().toBuffer()
-
-  if (avatarBuf) {
-    cardBuf = await sharp(cardBuf)
-      .composite([{ input: avatarBuf, left: AX, top: AY }])
-      .png().toBuffer()
-  }
-
-  return cardBuf
-}
-
 async function sendStartMessage(chatId, msgId, mode, fromUser) {
-  const s   = getStats(chatId)
+  const s = getStats(chatId)
   const act = await getUserActivation(chatId)
-
-  const fn = fromUser ? (((fromUser.first_name||"") + " " + (fromUser.last_name||"")).trim()) : ""
-  const un = fromUser?.username ? `@${fromUser.username}` : ""
 
   let expiryLine = ""
   if (act && act.expiresAt) {
     const left = daysLeft(act.expiresAt)
-    if (left <= 0)      expiryLine = `\n⛔ Acesso expirado`
-    else if (left <= 7) expiryLine = `\n⚠️ Expira em *${left} dias* — ${fmtExpiry(act.expiresAt)}`
-    else                expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
+    if (left <= 0) expiryLine = `\n⛔ Acesso expirado`
+    else if (left <= 7) expiryLine = `\n⚠️ Expira em *${left} dias* (${fmtExpiry(act.expiresAt)})`
+    else expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
   }
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: "➕ Novo Bot",     callback_data: "menu_new"   }],
-      [{ text: "📂 Meus Bots",    callback_data: "menu_list"  }],
+      [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
+      [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
       [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
     ]
   }
 
+  // mode "edit" = editMessageText (sem foto, vindo de botão)
   if (mode === "edit") {
     return bot.editMessageText(
-      (fn ? `👤 *${fn}*` + (un ? `  ${un}` : "") + "\n" : "") +
-      expiryLine + (expiryLine ? "\n" : "") +
-      `\n🤖 *${s.total}* bots  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-      `💾 RAM *${s.ram}MB*  ⏱ *${s.uptime}*`,
+      `🚀 *ARES HOST*${expiryLine}\n\n` +
+      `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
       { chat_id: chatId, message_id: msgId, parse_mode: "Markdown", reply_markup: keyboard }
     ).catch(() => {})
   }
 
-  try {
-    const cardBuf = await buildStartCard(fromUser, s, act, chatId)
-    return bot.sendPhoto(chatId, cardBuf, { reply_markup: keyboard })
-  } catch (e) {
-    console.error("buildStartCard error:", e.message)
+  // mode null = envio novo com foto
+  const user = fromUser || null
+  let nameLine = "ARES HOST"
+  let userLine = ""
+  if (user) {
+    const fn = ((user.first_name || "") + " " + (user.last_name || "")).trim()
+    nameLine = fn || "ARES HOST"
+    userLine = user.username ? `@${user.username}` : `ID: ${chatId}`
   }
 
-  // fallback text
-  return bot.sendMessage(chatId,
-    (fn ? `👤 *${fn}*` + (un ? `  ${un}` : "") + "\n" : "") +
+  const caption =
+    (nameLine ? `*${nameLine}*\n` : "") +
+    (userLine ? `${userLine}\n` : "") +
     expiryLine + (expiryLine ? "\n" : "") +
-    `\n🤖 *${s.total}* bots  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-    `💾 RAM *${s.ram}MB*  ⏱ *${s.uptime}*`,
-    { parse_mode: "Markdown", reply_markup: keyboard }
-  )
-}
+    `\n🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`
 
-// Edita texto OU caption (para mensagens de foto do card /start)
-async function safeEdit(chatId, msgId, text, opts) {
-  const options = { parse_mode: "Markdown", ...opts }
+  // Try send with profile photo
   try {
-    return await bot.editMessageText(text, options)
-  } catch (e) {
-    if (e.message && e.message.includes("there is no text in the message")) {
-      // É uma mensagem de foto — edita o caption e remove a foto
-      // Telegram não permite editar foto->texto, então deletamos e mandamos novo
-      try {
-        await bot.deleteMessage(chatId, msgId)
-      } catch (e2) {}
-      return bot.sendMessage(chatId, text, {
+    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
+    if (photos && photos.total_count > 0) {
+      const fileId = photos.photos[0][photos.photos[0].length - 1].file_id
+      return bot.sendPhoto(chatId, fileId, {
+        caption,
         parse_mode: "Markdown",
-        reply_markup: opts?.reply_markup
+        reply_markup: keyboard
       })
     }
-    // outros erros: ignora silenciosamente
-  }
+  } catch (e) {}
+
+  // Fallback sem foto
+  return bot.sendMessage(chatId,
+    `🚀 *${nameLine}*\n` + (userLine ? userLine + "\n" : "") +
+    expiryLine + (expiryLine ? "\n" : "") +
+    `\n🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
+    { parse_mode: "Markdown", reply_markup: keyboard }
+  )
 }
 
 bot.on("callback_query", async query => {
@@ -1281,7 +1111,7 @@ bot.on("callback_query", async query => {
 
   if (action === "limpar_local" || action === "owner_limpar_confirm") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-    safeEdit(chatId, msgId, "🧹 Parando bots e limpando disco...", { })
+    bot.editMessageText("🧹 Parando bots e limpando disco...", { chat_id: chatId, message_id: msgId })
     try {
       const botIds = Object.keys(activeBots)
       let stopped = 0
@@ -1314,27 +1144,27 @@ bot.on("callback_query", async query => {
       }
       const diskAfter = getDiskPercent()
       const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
-      return safeEdit(chatId, msgId, 
+      return bot.editMessageText(
         `✅ *Disco limpo!*\n\n` +
         `🛑 Bots parados: *${stopped}*\n` +
         `📦 node\\_modules: *${nmCount}*\n` +
         `📋 Logs: *${logCount}*\n` +
         `♻️ Reiniciando: *${restarted}* bots\n\n` +
         `💿 Disco: *${diskAfter}%*  |  💾 RAM: *${ramAfter}MB*`,
-        { parse_mode: "Markdown" }
+        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
     } catch (err) {
-      return safeEdit(chatId, msgId, `❌ Erro: ${err.message}`, { })
+      return bot.editMessageText(`❌ Erro: ${err.message}`, { chat_id: chatId, message_id: msgId })
     }
   }
 
   if (action === "limpar_tudo") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
     // Confirmação extra antes de apagar tudo
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `💣 *ATENÇÃO — Ação irreversível!*\n\nIsso vai:\n• Parar todos os bots\n• Apagar todos os arquivos locais\n• Apagar todos os arquivos nos buckets\n\nTodos os bots serão *permanentemente deletados*. Tem certeza?`,
       {
-        parse_mode: "Markdown",
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "💣 Sim, apagar TUDO", callback_data: "limpar_tudo_confirm:" + chatId }],
@@ -1347,7 +1177,7 @@ bot.on("callback_query", async query => {
 
   if (action === "limpar_tudo_confirm") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-    safeEdit(chatId, msgId, "💣 Apagando tudo...", { })
+    bot.editMessageText("💣 Apagando tudo...", { chat_id: chatId, message_id: msgId })
     try {
       // 1. Parar todos os bots
       for (const bid of Object.keys(activeBots)) {
@@ -1392,20 +1222,20 @@ bot.on("callback_query", async query => {
 
       const diskAfter = getDiskPercent()
       const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
-      return safeEdit(chatId, msgId, 
+      return bot.editMessageText(
         `✅ *Tudo apagado!*\n\n` +
         `🗑️ Disco local: limpo\n` +
         `☁️ Objetos no bucket: *${objDeleted}* deletados\n\n` +
         `💿 Disco: *${diskAfter}%*  |  💾 RAM: *${ramAfter}MB*`,
-        { parse_mode: "Markdown" }
+        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
     } catch (err) {
-      return safeEdit(chatId, msgId, `❌ Erro: ${err.message}`, { })
+      return bot.editMessageText(`❌ Erro: ${err.message}`, { chat_id: chatId, message_id: msgId })
     }
   }
 
   if (action === "owner_limpar_cancel") {
-    return safeEdit(chatId, msgId, "❌ Limpeza cancelada.", { })
+    return bot.editMessageText("❌ Limpeza cancelada.", { chat_id: chatId, message_id: msgId })
   }
 
   if (action === "termo_check") {
@@ -1423,30 +1253,18 @@ bot.on("callback_query", async query => {
     return sendStartMessage(chatId, null, null)
   }
   if (action === "menu_home") {
-    const s = getStats(chatId)
-    const keyboard = {
-      inline_keyboard: [
-        [{ text: "➕ Novo Bot",     callback_data: "menu_new"   }],
-        [{ text: "📂 Meus Bots",    callback_data: "menu_list"  }],
-        [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
-      ]
-    }
-    return safeEdit(chatId, msgId, 
-      `🚀 *ARES HOST*\n\n` +
-      `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
-      { parse_mode: "Markdown", reply_markup: keyboard }
-    ).catch(() => {})
+    return sendStartMessage(chatId, msgId, "edit")
   }
   if (action === "menu_new") {
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       "➕ *Novo Bot*\n\n" +
       "Escolha como criar seu bot:\n\n" +
       "📎 Envie um arquivo .zip (ate 20MB)\n" +
       "🔗 Envie um link publico do ZIP\n" +
       "🌐 Use a pagina de upload (sem limite)\n" +
       "🆕 Crie um bot do zero com editor",
-      { parse_mode: "Markdown",
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🌐 Upload via Web", callback_data: "gen_upload" }],
@@ -1462,11 +1280,12 @@ bot.on("callback_query", async query => {
     uploadTokens[token] = { chatId, createdAt: Date.now() }
     setTimeout(() => { delete uploadTokens[token] }, 15 * 60 * 1000)
     const uploadUrl = `${DOMAIN}/upload/${token}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🌐 *Link de Upload Gerado*\n\n` +
       `Acesse a pagina abaixo, escolha o .zip e o nome do bot:\n\n` +
       `⏳ Expira em *15 minutos*`,
-      { parse_mode: "Markdown",
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🌐 Abrir pagina de upload", url: uploadUrl }],
@@ -1520,7 +1339,7 @@ process.on('uncaughtException', (err) => {
       const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
       const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
       console.log("✅ Bot criado com sucesso:", botId)
-      return safeEdit(chatId, msgId, 
+      return bot.editMessageText(
         `✅ *Bot criado do zero!*\n\n` +
         `🆔 ID: \`${botId}\`\n` +
         `📁 Estrutura básica criada:\n` +
@@ -1528,7 +1347,8 @@ process.on('uncaughtException', (err) => {
         `• index.js\n` +
         `• README.md\n\n` +
         `Agora edite os arquivos e depois inicie o bot.`,
-        { parse_mode: "Markdown",
+        {
+          chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
               [{ text: "📁 Abrir Editor", url: editorUrl }],
@@ -1541,9 +1361,9 @@ process.on('uncaughtException', (err) => {
       )
     } catch (err) {
       console.error("❌ Erro ao criar bot do zero:", err)
-      return safeEdit(chatId, msgId, 
+      return bot.editMessageText(
         `❌ *Erro ao criar bot:*\n\n${err.message}`,
-        { parse_mode: "Markdown" }
+        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
       )
     }
   }
@@ -1551,10 +1371,10 @@ process.on('uncaughtException', (err) => {
     const folders = getUserBots(chatId)
     const s = getStats(chatId)
     if (folders.length === 0) {
-      return safeEdit(chatId, msgId, 
+      return bot.editMessageText(
         "📂 *Meus Bots*\n\nNenhum bot hospedado ainda.\nUse Novo Bot para fazer upload!",
         {
-          parse_mode: "Markdown",
+          chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
               [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
@@ -1569,24 +1389,25 @@ process.on('uncaughtException', (err) => {
       callback_data: `manage:${f}`
     }])
     buttons.push([{ text: "⬅️ Voltar", callback_data: "menu_home" }])
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `📂 *Meus Bots*\n\n🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*  |  Total: *${s.total}*\n\nEscolha um bot:`,
       {
-        parse_mode: "Markdown",
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: { inline_keyboard: buttons }
       }
     )
   }
   if (action === "menu_stats") {
     const s = getStats(chatId)
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `📊 *Estatisticas*\n\n` +
       `🤖 Total: *${s.total}*\n` +
       `🟢 Online: *${s.online}*\n` +
       `🔴 Offline: *${s.offline}*\n` +
       `💾 RAM: *${s.ram}MB*\n` +
       `⏱ Uptime: *${s.uptime}*`,
-      { parse_mode: "Markdown",
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🔄 Atualizar", callback_data: "menu_stats" }],
@@ -1599,13 +1420,14 @@ process.on('uncaughtException', (err) => {
   if (false && action === "menu_market_disabled") {
     const sessionToken = genWebSession(chatId)
     const url = `${DOMAIN}/marketplace?s=${sessionToken}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🛒 *Marketplace de Bases*\n\n` +
       `Explore bases de bots de WhatsApp prontas criadas pela comunidade ARES!\n\n` +
       `✅ Gratuito e open source\n` +
       `📦 Instale com 1 clique\n` +
       `🤝 Contribua publicando a sua base`,
-      { parse_mode: "Markdown",
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🛒 Abrir Marketplace", url }],
@@ -1628,12 +1450,13 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\n` +
       `ID: \`${id}\`\n` +
       `Status: ${isRunning ? "🟢 Online" : "🔴 Offline"}\n` +
       `Log: ${logSize}`,
-      { parse_mode: "Markdown",
+      {
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -1656,10 +1479,10 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🔴 Offline`,
       {
-        parse_mode: "Markdown",
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -1676,10 +1499,10 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🟢 Iniciando...`,
       {
-        parse_mode: "Markdown",
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -1696,10 +1519,10 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return safeEdit(chatId, msgId, 
+    return bot.editMessageText(
       `🛠 *Gerenciar Bot*\n\nID: \`${id}\`\nStatus: 🟢 Reiniciando...`,
       {
-        parse_mode: "Markdown",
+        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -3576,7 +3399,7 @@ app.use("/files-api", authBot, (req, res, next) => {
         fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
       }
       fs.writeFileSync(fp, body.content !== undefined ? body.content : "", "utf8")
-      saveBotFilesToBucketDebounced(botId)
+      saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
     } catch (err) {
       return res.status(500).send("Erro ao escrever: " + err.message)
@@ -3590,7 +3413,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     if (!fs.existsSync(fp)) return res.status(404).send("Não encontrado")
     try {
       fs.statSync(fp).isDirectory() ? fs.rmSync(fp, { recursive: true, force: true }) : fs.unlinkSync(fp)
-      saveBotFilesToBucketDebounced(botId)
+      saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
     } catch (err) { return res.status(500).send("Erro ao deletar: " + err.message) }
   }
@@ -3601,7 +3424,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     if (!dp) return res.status(400).send("Caminho inválido")
     try {
       fs.mkdirSync(dp, { recursive: true, mode: 0o755 })
-      saveBotFilesToBucketDebounced(botId)
+      saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
     } catch (err) { return res.status(500).send("Erro ao criar pasta: " + err.message) }
   }
@@ -3615,7 +3438,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     try {
       fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o755 })
       fs.renameSync(from, to)
-      saveBotFilesToBucketDebounced(botId)
+      saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
     } catch (err) { return res.status(500).send("Erro ao renomear: " + err.message) }
   }
@@ -3644,7 +3467,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     child.stderr.on("data", d => res.write(d.toString()))
     child.on("close", (code) => {
       if (code !== 0) res.write(`\nProcesso encerrado com código ${code}`)
-      saveBotFilesToBucketDebounced(botId)
+      saveBotFilesToBucket(botId).catch(() => {})
       res.end()
     })
     child.on("error", err => { res.write("\nErro: " + err.message); res.end() })
@@ -4663,9 +4486,7 @@ setInterval(checkDiskAlert, 30 * 60 * 1000)
 setTimeout(checkDiskAlert, 10 * 60 * 1000)
 
 process.on("uncaughtException", err => {
-  if (err.code === "EADDRINUSE") return
-  if (err.code === "ETELEGRAM") return  // Telegram API errors são tratados localmente
-  console.error("Erro não tratado:", err.message || err)
+  if (err.code !== "EADDRINUSE") console.error("Erro não tratado:", err)
 })
 
 process.on("SIGTERM", async () => {
@@ -4696,13 +4517,6 @@ server.listen(PORT, async () => {
     if (err.code === "ETELEGRAM" && err.message.includes("409")) return
     console.error("polling_error:", err.message)
   })
-  // Warm caches in background (don't await — don't block startup)
-  getActivated().then(d => {
-    console.log(`✅ Cache de ativação aquecido: ${Object.keys(d).length} usuários`)
-  }).catch(() => {})
-  getActiveKeys().then(d => {
-    console.log(`✅ Cache de chaves aquecido: ${Object.keys(d).length} chaves`)
-  }).catch(() => {})
   await restoreAllBotsFromBucket()
   if (fs.existsSync(BASE_PATH)) {
     const bots = fs.readdirSync(BASE_PATH).filter(f => {
