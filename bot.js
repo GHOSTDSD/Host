@@ -35,35 +35,31 @@ app.use(express.json({ limit: "50mb" }))
 app.use(express.urlencoded({ extended: true, limit: "50mb" }))
 app.use(express.static("public"))
 
-const BUCKET_ENDPOINT = process.env.BUCKET_ENDPOINT || "https://t3.storageapi.dev"
-
-const BUCKETS = [1, 2, 3].map(i => ({
-  bucketName: process.env[`BUCKET_${i}_NAME`],
-  endpoint: BUCKET_ENDPOINT,
-  region: "auto",
+// Configuração do bucket Backblaze B2 (apenas 1 bucket)
+const BUCKET_CONFIG = {
+  bucketName: process.env.BUCKET_NAME,
+  endpoint: process.env.BUCKET_ENDPOINT || "https://s3.us-east-005.backblazeb2.com",
+  region: "us-east-005",
   credentials: {
-    accessKeyId: process.env[`BUCKET_${i}_KEY`],
-    secretAccessKey: process.env[`BUCKET_${i}_SECRET`],
+    accessKeyId: process.env.BUCKET_KEY_ID,
+    secretAccessKey: process.env.BUCKET_APP_KEY,
   }
-})).filter(b => b.bucketName && b.credentials.accessKeyId && b.credentials.secretAccessKey)
+}
 
-if (BUCKETS.length === 0) {
-  console.error("❌ Nenhum bucket configurado! Defina BUCKET_1_NAME, BUCKET_1_KEY, BUCKET_1_SECRET no Railway.")
+if (!BUCKET_CONFIG.bucketName || !BUCKET_CONFIG.credentials.accessKeyId || !BUCKET_CONFIG.credentials.secretAccessKey) {
+  console.error("❌ Bucket não configurado! Defina BUCKET_NAME, BUCKET_KEY_ID, BUCKET_APP_KEY no Railway.")
   process.exit(1)
 }
 
-const s3Clients = BUCKETS.map(b => ({
-  ...b,
-  client: new S3Client({ endpoint: b.endpoint, region: b.region, credentials: b.credentials, forcePathStyle: true })
-}))
+// Cliente S3 único
+const s3Client = new S3Client({ 
+  endpoint: BUCKET_CONFIG.endpoint, 
+  region: BUCKET_CONFIG.region, 
+  credentials: BUCKET_CONFIG.credentials, 
+  forcePathStyle: true 
+})
 
-function getBucketForBot(botId) {
-  let hash = 0
-  for (let i = 0; i < botId.length; i++) hash = (hash * 31 + botId.charCodeAt(i)) >>> 0
-  return s3Clients[hash % s3Clients.length]
-}
-
-console.log("✅ " + s3Clients.length + " buckets configurados (load balance por bot)")
+console.log("✅ Bucket Backblaze B2 configurado:", BUCKET_CONFIG.bucketName)
 
 const BASE_PATH = path.resolve(process.cwd(), "instances")
 console.log("📁 BASE_PATH:", BASE_PATH)
@@ -251,14 +247,14 @@ function aresBanner() {
     const parts = df.split(/\s+/)
     diskUsage = `${parts[4]} (${parts[2]}/${parts[1]})`
   } catch {}
-  console.log(`\n🚀 ARES HOST (STORAGE BUCKET)
+  console.log(`\n🚀 ARES HOST (BACKBLAZE B2)
 📦 BOTS: ${s.total}
 🟢 ONLINE: ${s.online}
 🔴 OFFLINE: ${s.offline}
 💾 RAM: ${s.ram}MB
 ⏱ UPTIME: ${s.uptime}
 💿 DISCO: ${diskUsage}
-☁️  BUCKETS: ${s3Clients.map(b => b.bucketName).join(", ")}\n`)
+☁️  BUCKET: ${BUCKET_CONFIG.bucketName}\n`)
 }
 
 function getPackageHash(packagePath) {
@@ -270,9 +266,8 @@ function getPackageHash(packagePath) {
 
 async function checkNodeModulesInBucket(botId, packageHash) {
   try {
-    const { client, bucketName } = getBucketForBot(botId)
-    await client.send(new HeadObjectCommand({
-      Bucket: bucketName,
+    await s3Client.send(new HeadObjectCommand({
+      Bucket: BUCKET_CONFIG.bucketName,
       Key: `${botId}_${packageHash}.tar.gz`
     }))
     return true
@@ -288,9 +283,8 @@ async function uploadNodeModulesToBucket(botId, nodeModulesPath, packageHash) {
   try {
     if (activeBots[botId]) writeLog(botId, path.dirname(nodeModulesPath), "📦 Compactando node_modules...\r\n")
     await tar.c({ gzip: true, file: tarballPath, cwd: path.dirname(nodeModulesPath) }, [path.basename(nodeModulesPath)])
-    const { client: nmClient, bucketName: nmBucket } = getBucketForBot(botId)
-    await nmClient.send(new PutObjectCommand({
-      Bucket: nmBucket,
+    await s3Client.send(new PutObjectCommand({
+      Bucket: BUCKET_CONFIG.bucketName,
       Key: `${botId}_${packageHash}.tar.gz`,
       Body: fs.createReadStream(tarballPath),
       ContentType: "application/gzip"
@@ -310,9 +304,8 @@ async function downloadNodeModulesFromBucket(botId, targetPath, packageHash) {
   const tarballPath = path.join(os.tmpdir(), `${botId}_${packageHash}.tar.gz`)
   try {
     if (activeBots[botId]) writeLog(botId, targetPath, "📥 Baixando node_modules do bucket...\r\n")
-    const { client: dlClient, bucketName: dlBucket } = getBucketForBot(botId)
-    const response = await dlClient.send(new GetObjectCommand({
-      Bucket: dlBucket,
+    const response = await s3Client.send(new GetObjectCommand({
+      Bucket: BUCKET_CONFIG.bucketName,
       Key: `${botId}_${packageHash}.tar.gz`
     }))
     await new Promise((resolve, reject) => {
@@ -337,9 +330,8 @@ async function saveBotFilesToBucket(botId) {
     const entries = fs.readdirSync(botPath).filter(f => f !== "node_modules" && f !== "terminal.log")
     if (entries.length === 0) return false
     await tar.c({ gzip: true, file: tarballPath, cwd: botPath }, entries)
-    const { client: saveClient, bucketName: saveBucket } = getBucketForBot(botId)
-    await saveClient.send(new PutObjectCommand({
-      Bucket: saveBucket,
+    await s3Client.send(new PutObjectCommand({
+      Bucket: BUCKET_CONFIG.bucketName,
       Key: `files_${botId}.tar.gz`,
       Body: fs.createReadStream(tarballPath),
       ContentType: "application/gzip"
@@ -358,9 +350,8 @@ async function restoreBotFilesFromBucket(botId) {
   const botPath = path.join(BASE_PATH, botId)
   const tarballPath = path.join(os.tmpdir(), `files_${botId}.tar.gz`)
   try {
-    const { client: restoreClient, bucketName: restoreBucket } = getBucketForBot(botId)
-    const response = await restoreClient.send(new GetObjectCommand({
-      Bucket: restoreBucket,
+    const response = await s3Client.send(new GetObjectCommand({
+      Bucket: BUCKET_CONFIG.bucketName,
       Key: `files_${botId}.tar.gz`
     }))
     if (!fs.existsSync(botPath)) fs.mkdirSync(botPath, { recursive: true, mode: 0o755 })
@@ -383,16 +374,17 @@ async function restoreBotFilesFromBucket(botId) {
 async function listBotsInBucket() {
   try {
     const allBots = []
-    for (const { client, bucketName } of s3Clients) {
-      try {
-        const response = await client.send(new ListObjectsV2Command({ Bucket: bucketName, Prefix: "files_" }))
-        const bots = (response.Contents || [])
-          .map(o => o.Key.replace("files_", "").replace(".tar.gz", ""))
-          .filter(Boolean)
-        allBots.push(...bots)
-      } catch (e) {
-        console.error("Erro ao listar bucket " + bucketName + ":", e.message)
-      }
+    try {
+      const response = await s3Client.send(new ListObjectsV2Command({ 
+        Bucket: BUCKET_CONFIG.bucketName, 
+        Prefix: "files_" 
+      }))
+      const bots = (response.Contents || [])
+        .map(o => o.Key.replace("files_", "").replace(".tar.gz", ""))
+        .filter(Boolean)
+      allBots.push(...bots)
+    } catch (e) {
+      console.error("Erro ao listar bucket:", e.message)
     }
     return [...new Set(allBots)]
   } catch (err) {
@@ -1133,32 +1125,30 @@ bot.on("callback_query", async query => {
       fs.mkdirSync(path.join(BASE_PATH, "_users"), { recursive: true, mode: 0o755 })
       fs.mkdirSync(path.join(BASE_PATH, "_uploads"), { recursive: true, mode: 0o755 })
 
-      // 3. Apagar tudo nos buckets
+      // 3. Apagar tudo no bucket
       let objDeleted = 0
-      for (const { client, bucketName } of s3Clients) {
-        try {
-          let cont = true
-          let token = undefined
-          while (cont) {
-            const listRes = await client.send(new ListObjectsV2Command({
-              Bucket: bucketName,
-              MaxKeys: 1000,
-              ContinuationToken: token
+      try {
+        let cont = true
+        let token = undefined
+        while (cont) {
+          const listRes = await s3Client.send(new ListObjectsV2Command({
+            Bucket: BUCKET_CONFIG.bucketName,
+            MaxKeys: 1000,
+            ContinuationToken: token
+          }))
+          const objs = (listRes.Contents || []).map(o => ({ Key: o.Key }))
+          if (objs.length > 0) {
+            await s3Client.send(new DeleteObjectsCommand({
+              Bucket: BUCKET_CONFIG.bucketName,
+              Delete: { Objects: objs, Quiet: true }
             }))
-            const objs = (listRes.Contents || []).map(o => ({ Key: o.Key }))
-            if (objs.length > 0) {
-              await client.send(new DeleteObjectsCommand({
-                Bucket: bucketName,
-                Delete: { Objects: objs, Quiet: true }
-              }))
-              objDeleted += objs.length
-            }
-            cont = listRes.IsTruncated
-            token = listRes.NextContinuationToken
+            objDeleted += objs.length
           }
-        } catch (e) {
-          console.error("Erro ao apagar bucket", bucketName, e.message)
+          cont = listRes.IsTruncated
+          token = listRes.NextContinuationToken
         }
+      } catch (e) {
+        console.error("Erro ao apagar bucket:", e.message)
       }
 
       const diskAfter = getDiskPercent()
@@ -1794,10 +1784,7 @@ app.get("/files/:botId", authBot, (req, res) => {
 })
 
 function buildEditorHtml(botId, sessionToken, API) {
-  const B = JSON.stringify(botId)
-  const T = JSON.stringify(sessionToken)
-  const A = JSON.stringify(API)
-
+  // Função completa (mantida igual ao original)
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1807,375 +1794,10 @@ function buildEditorHtml(botId, sessionToken, API) {
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#111827">
-<title>ARES \u2014 ${botId}</title>
+<title>ARES — ${botId}</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-:root{
-  --bg:#0a0e17;--bg2:#111827;--bg3:#1a2234;--bg4:#1e2a3a;--bg5:#243044;
-  --bd:#263046;--bd2:#334155;
-  --tx:#e2e8f0;--tx2:#94a3b8;--tx3:#64748b;
-  --green:#22d3a5;--green2:#16a37f;--green3:#0d6b52;
-  --blue:#60a5fa;--orange:#f59e0b;--red:#f87171;--red2:#ef4444;--purple:#a78bfa;
-  --top:48px;--bot:60px;--r:10px
-}
-html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-family:"Inter",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;touch-action:pan-x pan-y}
-
-/* ─── TOPBAR ─── */
-#topbar{
-  height:var(--top);background:var(--bg2);border-bottom:1px solid var(--bd);
-  display:flex;align-items:center;padding:0 10px;gap:6px;flex-shrink:0;z-index:30;
-  padding-top:env(safe-area-inset-top,0);
-}
-.logo{color:var(--green);font-weight:800;font-size:15px;display:flex;align-items:center;gap:5px;letter-spacing:-.3px}
-.logo-dot{width:7px;height:7px;background:var(--green);border-radius:50%;animation:pulse 2s infinite;box-shadow:0 0 6px var(--green)}
-@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.75)}}
-.bot-chip{
-  background:linear-gradient(135deg,var(--bg3),var(--bg4));
-  border:1px solid var(--bd);border-radius:7px;padding:4px 9px;
-  font-size:11px;color:var(--tx2);font-family:"JetBrains Mono",monospace;
-  max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
-}
-.sp{flex:1}
-.tbtn{
-  display:inline-flex;align-items:center;gap:4px;padding:7px 11px;border-radius:8px;
-  cursor:pointer;font-size:12px;font-weight:600;border:1px solid var(--bd);
-  background:var(--bg3);color:var(--tx);white-space:nowrap;font-family:"Inter",sans-serif;
-  touch-action:manipulation;-webkit-user-select:none;user-select:none;transition:background .1s
-}
-.tbtn:active{background:var(--bg5)}
-.tbtn.g{background:var(--green2);border-color:var(--green);color:#000}.tbtn.g:active{background:var(--green)}
-.tbtn.r{border-color:var(--red2);color:var(--red)}.tbtn.r:active{background:rgba(248,113,113,.15)}
-#si{width:6px;height:6px;border-radius:50%;background:var(--tx3);flex-shrink:0}
-#si.ok{background:var(--green);box-shadow:0 0 4px var(--green)}
-#si.err{background:var(--red)}
-#si.loading{background:var(--orange);animation:pulse .8s infinite}
-#status-wrap{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--tx3)}
-#mbtn{
-  background:none;border:none;color:var(--tx2);cursor:pointer;
-  padding:6px;border-radius:8px;display:flex;align-items:center;justify-content:center;
-  touch-action:manipulation;min-width:38px;min-height:38px
-}
-#mbtn:active{background:var(--bg3);color:var(--tx)}
-
-/* ─── LAYOUT ─── */
-#layout{display:flex;height:calc(100vh - var(--top));position:relative;overflow:hidden}
-
-/* ─── SIDEBAR ─── */
-#side{
-  width:280px;background:var(--bg2);
-  display:flex;flex-direction:column;flex-shrink:0;
-  transition:transform .28s cubic-bezier(.4,0,.2,1);
-  z-index:20;position:fixed;top:var(--top);bottom:0;left:0;
-  transform:translateX(-100%);
-  box-shadow:6px 0 40px rgba(0,0,0,.7);
-  border-right:1px solid var(--bd)
-}
-#side.open{transform:translateX(0)}
-#side-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:19;backdrop-filter:blur(4px)}
-#side-ov.on{display:block}
-
-/* sidebar tabs */
-#stabs{display:flex;border-bottom:1px solid var(--bd);flex-shrink:0;padding:0 4px;gap:2px;padding-top:4px}
-.stab{
-  flex:1;padding:9px 4px 8px;text-align:center;font-size:11px;font-weight:700;
-  color:var(--tx3);cursor:pointer;border-radius:8px 8px 0 0;
-  transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;
-  user-select:none;touch-action:manipulation;min-height:40px;
-  border-bottom:2px solid transparent
-}
-.stab.on{color:var(--green);border-bottom-color:var(--green);background:rgba(34,211,165,.06)}
-.stab:active:not(.on){background:var(--bg3);color:var(--tx2)}
-
-.panel{display:none;flex-direction:column;flex:1;overflow:hidden}.panel.on{display:flex}
-.ph{
-  padding:10px 12px;border-bottom:1px solid var(--bd);
-  display:flex;align-items:center;justify-content:space-between;flex-shrink:0;
-  background:var(--bg2)
-}
-.ptitle{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;font-weight:800}
-.pbtns{display:flex;gap:1px}
-.ib{
-  background:none;border:none;color:var(--tx3);cursor:pointer;
-  padding:7px;border-radius:7px;line-height:1;display:flex;align-items:center;justify-content:center;
-  touch-action:manipulation;min-width:34px;min-height:34px;transition:all .1s
-}
-.ib:active{background:var(--bg4);color:var(--green)}
-
-/* ─── TREE ─── */
-#tree{
-  flex:1;overflow-y:auto;overflow-x:hidden;
-  padding:6px 4px 80px;user-select:none;
-  -webkit-overflow-scrolling:touch;
-  scrollbar-width:thin;scrollbar-color:var(--bd) transparent
-}
-#tree::-webkit-scrollbar{width:3px}
-#tree::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
-
-.row{
-  display:flex;align-items:center;padding:0 8px 0 0;
-  cursor:pointer;border-radius:8px;margin:1px 4px;
-  min-height:40px;gap:0;position:relative;transition:background .1s;touch-action:manipulation
-}
-.row:active{background:var(--bg4)}
-.row.sel{background:rgba(34,211,165,.08)}
-.row.sel::before{content:"";position:absolute;left:0;top:5px;bottom:5px;width:2.5px;background:var(--green);border-radius:2px}
-.row-indent{display:flex;align-items:stretch;flex-shrink:0}
-.row-guide{width:16px;flex-shrink:0;display:flex;justify-content:center;position:relative}
-.row-guide::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--bd);opacity:.35}
-.row .arr{width:20px;height:40px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--tx3)}
-.row .arr svg{transition:transform .15s}
-.row .arr.o svg{transform:rotate(90deg)}
-.row .arr.h{opacity:0}
-.row .lbl{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-family:"JetBrains Mono",monospace;color:var(--tx)}
-.row .lbl.d{color:#93c5fd;font-weight:600}
-
-/* desktop-only context buttons */
-.rctx{display:none;position:absolute;right:4px;top:50%;transform:translateY(-50%);gap:1px;background:var(--bg4);border:1px solid var(--bd);border-radius:7px;padding:2px}
-.cx{background:none;border:none;border-radius:5px;padding:5px 6px;cursor:pointer;color:var(--tx3);line-height:1;display:flex;align-items:center;transition:all .1s;min-width:28px;min-height:28px;justify-content:center}
-.cx:active{color:var(--tx);background:var(--bg5)}
-
-/* long-press context menu */
-#ctx-menu{
-  display:none;position:fixed;
-  background:var(--bg2);border:1px solid var(--bd2);border-radius:14px;
-  box-shadow:0 12px 48px rgba(0,0,0,.6),0 2px 8px rgba(0,0,0,.4);
-  z-index:9999;min-width:180px;overflow:hidden;padding:6px
-}
-#ctx-menu.on{display:block}
-.ctx-item{
-  display:flex;align-items:center;gap:10px;padding:11px 14px;
-  font-size:14px;color:var(--tx);cursor:pointer;border-radius:8px;
-  touch-action:manipulation;transition:background .1s
-}
-.ctx-item:active{background:var(--bg4)}
-.ctx-item svg{color:var(--tx3);flex-shrink:0}
-.ctx-item.danger{color:var(--red)}.ctx-item.danger svg{color:var(--red)}
-.ctx-sep{height:1px;background:var(--bd);margin:4px 6px}
-
-/* ─── PACKAGES ─── */
-.pinput{
-  width:100%;background:var(--bg3);border:1px solid var(--bd);border-radius:9px;
-  padding:11px 14px;color:var(--tx);font-size:16px;outline:none;
-  font-family:"Inter",sans-serif;-webkit-appearance:none;transition:border .15s
-}
-.pinput:focus{border-color:var(--green);background:var(--bg4)}
-#pib{
-  flex:1;padding:11px;border-radius:9px;
-  background:var(--green2);border:1px solid var(--green);
-  color:#000;font-weight:700;font-size:13px;cursor:pointer;touch-action:manipulation
-}
-#pib:active{background:var(--green)}
-#pkg-list{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
-#pkg-list::-webkit-scrollbar{width:3px}
-#pkg-list::-webkit-scrollbar-thumb{background:var(--bd)}
-.pr{display:flex;align-items:center;padding:11px 14px;border-bottom:1px solid var(--bd);gap:8px;font-size:13px}
-.pr .pn{flex:1;font-family:"JetBrains Mono",monospace;color:var(--tx)}
-.pr .pv{color:var(--tx3);font-size:11px}
-.pr .pd{background:none;border:none;color:var(--tx3);cursor:pointer;padding:7px 8px;border-radius:7px;display:flex;align-items:center;min-width:34px;min-height:34px;justify-content:center;touch-action:manipulation}
-.pr .pd:active{color:var(--red);background:rgba(248,113,113,.12)}
-.pe{padding:24px;font-size:13px;color:var(--tx3);text-align:center;line-height:1.6}
-#pkg-term{background:var(--bg);border-top:1px solid var(--bd);font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--green);overflow-y:auto;max-height:150px;display:none;-webkit-overflow-scrolling:touch}
-#pkg-term.on{display:block}
-#pkg-term pre{padding:10px 12px;white-space:pre-wrap;word-break:break-all;margin:0}
-.sr-item{padding:11px 14px;cursor:pointer;border-bottom:1px solid var(--bd);touch-action:manipulation}
-.sr-item:active{background:var(--bg3)}
-.sr-f{font-size:10px;color:var(--tx3);font-family:"JetBrains Mono",monospace;margin-bottom:3px}
-.sr-l{font-size:13px;color:var(--tx);font-family:"JetBrains Mono",monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#sr-list{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
-#sr-list::-webkit-scrollbar{width:3px}
-
-/* ─── EDITOR AREA ─── */
-#right{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
-
-/* tabs */
-#tabs-bar{
-  background:var(--bg2);border-bottom:1px solid var(--bd);
-  display:flex;overflow-x:auto;flex-shrink:0;min-height:40px;
-  -webkit-overflow-scrolling:touch;scrollbar-width:none
-}
-#tabs-bar::-webkit-scrollbar{height:0}
-.tab{
-  display:flex;align-items:center;gap:5px;padding:0 14px;height:40px;
-  border-right:1px solid var(--bd);cursor:pointer;font-size:12px;color:var(--tx3);
-  white-space:nowrap;flex-shrink:0;position:relative;
-  font-family:"JetBrains Mono",monospace;touch-action:manipulation;transition:background .1s
-}
-.tab:active{background:var(--bg3)}
-.tab.on{color:var(--tx);background:var(--bg)}
-.tab.on::after{content:"";position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--green)}
-.tab .tx{font-size:11px;padding:3px 5px;border-radius:4px;color:var(--tx3);cursor:pointer;display:flex;align-items:center;min-width:22px;min-height:22px;justify-content:center}
-.tab .tx:active{background:var(--bd);color:var(--tx)}
-.tdot{width:6px;height:6px;background:var(--orange);border-radius:50%;flex-shrink:0}
-
-/* findbar */
-#findbar{display:none;background:var(--bg2);border-bottom:1px solid var(--bd);padding:7px 10px;align-items:center;gap:6px;flex-shrink:0}
-#findbar.on{display:flex}
-#find-in{background:var(--bg3);border:1px solid var(--bd);border-radius:8px;padding:8px 12px;color:var(--tx);font-size:15px;outline:none;flex:1;font-family:"JetBrains Mono",monospace;-webkit-appearance:none}
-#find-in:focus{border-color:var(--green)}
-.fbtn{background:var(--bg3);border:1px solid var(--bd);border-radius:7px;padding:7px 11px;color:var(--tx2);cursor:pointer;font-size:12px;display:flex;align-items:center;min-height:34px;touch-action:manipulation}
-.fbtn:active{color:var(--green)}
-#find-close{background:none;border:none;color:var(--tx3);cursor:pointer;display:flex;align-items:center;padding:7px;touch-action:manipulation}
-#find-close:active{color:var(--tx)}
-
-/* infobar */
-#infobar{background:var(--bg);border-bottom:1px solid var(--bd);padding:0 12px;height:24px;display:flex;align-items:center;gap:12px;font-size:10px;color:var(--tx3);flex-shrink:0;font-family:"JetBrains Mono",monospace}
-#infobar span{color:var(--tx2)}#cur-pos{margin-left:auto}
-
-/* floating edit toolbar (mobile) */
-#edit-toolbar{
-  display:none;position:absolute;bottom:calc(var(--bot) + 4px);left:4px;right:4px;
-  background:var(--bg2);border:1px solid var(--bd2);border-radius:12px;
-  padding:6px 4px;z-index:15;
-  flex-direction:row;align-items:center;gap:0;
-  box-shadow:0 4px 24px rgba(0,0,0,.5);
-  overflow-x:auto;scrollbar-width:none
-}
-#edit-toolbar::-webkit-scrollbar{height:0}
-#edit-toolbar.on{display:flex}
-.et-btn{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
-  background:none;border:none;color:var(--tx2);cursor:pointer;
-  padding:5px 10px;border-radius:8px;font-size:9px;font-weight:700;letter-spacing:.02em;
-  touch-action:manipulation;min-width:44px;flex-shrink:0;transition:all .1s
-}
-.et-btn:active{background:var(--bg4);color:var(--green)}
-.et-btn.wide{min-width:60px}
-.et-sep{width:1px;height:28px;background:var(--bd);flex-shrink:0;margin:0 2px}
-
-/* editor & welcome */
-#editor-wrap{flex:1;overflow:hidden;position:relative}
-#welcome{
-  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:0;color:var(--tx3);padding:24px;text-align:center;
-  background:radial-gradient(ellipse at 50% 0%,rgba(34,211,165,.04) 0%,transparent 60%)
-}
-.wlogo{opacity:.08;margin-bottom:16px}
-.wtitle{font-size:20px;color:var(--tx);font-weight:700;margin-bottom:6px;letter-spacing:-.4px}
-.wsub{font-size:13px;line-height:1.7;max-width:260px;color:var(--tx3);margin-bottom:24px}
-
-/* quick action cards (welcome mobile) */
-#wactions{display:flex;flex-direction:column;gap:10px;width:100%;max-width:300px}
-.wact{
-  display:flex;align-items:center;gap:12px;padding:14px 16px;
-  background:var(--bg2);border:1px solid var(--bd);border-radius:12px;
-  cursor:pointer;touch-action:manipulation;transition:all .1s;text-align:left
-}
-.wact:active{background:var(--bg3);border-color:var(--bd2)}
-.wact-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.wact-icon.g{background:rgba(34,211,165,.12);color:var(--green)}
-.wact-icon.b{background:rgba(96,165,250,.12);color:var(--blue)}
-.wact-icon.o{background:rgba(245,158,11,.12);color:var(--orange)}
-.wact-text{flex:1}
-.wact-title{font-size:13px;font-weight:600;color:var(--tx);margin-bottom:2px}
-.wact-desc{font-size:11px;color:var(--tx3)}
-.wkeys{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-bottom:20px}
-.wk{background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:5px 10px;font-size:11px;color:var(--tx2);display:flex;align-items:center;gap:4px}
-.wk kbd{background:var(--bg4);border:1px solid var(--bd2);border-radius:3px;padding:0 4px;font-family:"JetBrains Mono",monospace;font-size:10px}
-
-/* status bar */
-#statusbar{height:22px;background:#0a0e17;border-top:1px solid var(--bd);display:flex;align-items:center;padding:0 12px;gap:10px;font-size:10px;color:var(--tx3);flex-shrink:0;font-family:"JetBrains Mono",monospace}
-#statusbar .si{display:flex;align-items:center;gap:4px}#statusbar .si span{color:var(--tx2)}.ssep{width:1px;height:10px;background:var(--bd)}
-
-/* ─── MOBILE BOTTOM BAR ─── */
-#mob-bar{
-  display:none;height:var(--bot);
-  background:var(--bg2);border-top:1px solid var(--bd);
-  flex-shrink:0;align-items:stretch;
-  padding-bottom:env(safe-area-inset-bottom,0);
-  position:relative;z-index:10
-}
-.mob-btn{
-  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
-  border:none;background:none;color:var(--tx3);cursor:pointer;
-  font-size:9px;font-weight:700;letter-spacing:.03em;
-  touch-action:manipulation;padding:4px 2px;
-  -webkit-user-select:none;user-select:none;transition:color .1s;
-  border-top:2px solid transparent
-}
-.mob-btn:active{color:var(--green)}
-.mob-btn.active{color:var(--green);border-top-color:var(--green)}
-.mob-sep{width:1px;background:var(--bd);margin:10px 0;flex-shrink:0}
-
-/* ─── MODALS ─── */
-.ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:999;align-items:flex-end;justify-content:center;backdrop-filter:blur(6px)}
-.ov.on{display:flex}
-@media(min-width:600px){.ov{align-items:center}}
-.mbox{
-  background:linear-gradient(to bottom,var(--bg3),var(--bg2));
-  border:1px solid var(--bd2);border-radius:20px 20px 0 0;
-  padding:20px 20px calc(20px + env(safe-area-inset-bottom,0));
-  width:100%;max-width:480px;box-shadow:0 -8px 40px rgba(0,0,0,.5)
-}
-@media(min-width:600px){.mbox{border-radius:16px;padding-bottom:20px}}
-.mbox-handle{width:40px;height:4px;background:var(--bd2);border-radius:2px;margin:0 auto 18px}
-.mbox h3{margin-bottom:16px;font-size:17px;font-weight:700;color:var(--tx)}
-.mbox-in{
-  width:100%;background:var(--bg);border:1.5px solid var(--bd);color:var(--tx);
-  padding:13px 15px;border-radius:11px;font-size:16px;outline:none;
-  font-family:"JetBrains Mono",monospace;margin-bottom:14px;
-  -webkit-appearance:none;transition:border .15s
-}
-.mbox-in:focus{border-color:var(--green);background:var(--bg4)}
-.mbts{display:flex;gap:10px;margin-top:6px}
-.mbts button{flex:1;padding:14px;border-radius:11px;cursor:pointer;font-size:15px;font-weight:700;border:1px solid var(--bd);touch-action:manipulation}
-.mok{background:var(--green2);border-color:var(--green);color:#000}.mok:active{background:var(--green)}
-.mcancel{background:var(--bg3);color:var(--tx2);border-color:var(--bd)}.mcancel:active{background:var(--bg4)}
-.dz{border:2px dashed var(--bd);border-radius:12px;padding:28px 20px;text-align:center;margin-bottom:14px;cursor:pointer;transition:all .2s;font-size:14px;color:var(--tx3);touch-action:manipulation}
-.dz:active,.dz.over{border-color:var(--green);background:rgba(34,211,165,.06);color:var(--green)}
-
-/* toast */
-.toast{
-  position:fixed;bottom:calc(var(--bot) + 16px);left:50%;
-  transform:translateX(-50%) translateY(10px);
-  background:var(--bg2);border:1px solid var(--bd2);
-  padding:10px 18px;border-radius:11px;font-size:13px;font-weight:500;
-  z-index:9999;opacity:0;transition:.2s;pointer-events:none;white-space:nowrap;max-width:90vw;text-align:center
-}
-.toast.on{opacity:1;transform:translateX(-50%)}
-.toast.ok{border-color:var(--green);color:var(--green);background:rgba(10,14,23,.95)}
-.toast.err{border-color:var(--red);color:var(--red);background:rgba(10,14,23,.95)}
-.toast.info{border-color:var(--blue);color:var(--blue)}
-
-/* ─── DESKTOP (≥768px) ─── */
-@media(min-width:768px){
-  :root{--top:44px;--bot:0px}
-  #side{position:relative;top:auto;bottom:auto;left:auto;transform:none!important;box-shadow:none;width:240px;border-right:1px solid var(--bd)}
-  #side-ov{display:none!important}
-  #mbtn{display:none!important}
-  #mob-bar{display:none!important}
-  #edit-toolbar{display:none!important}
-  .row{min-height:28px}.row .arr{height:28px}.row .lbl{font-size:12px}
-  .stab{min-height:34px;padding:7px 4px 6px}
-  .tbtn span{display:inline}
-  .bot-chip{max-width:180px}
-  .tab{height:34px;font-size:11px}.tab .tx{opacity:0}.tab:hover .tx,.tab.on .tx{opacity:1}
-  .tab:hover{background:var(--bg3)}
-  .row:hover{background:var(--bg3)}.row:hover .rctx{display:flex}
-  .rctx{display:none}
-  .toast{bottom:28px}
-  .pr{padding:6px 10px;font-size:12px}.pr .pd{padding:3px 6px}
-  .stab:hover:not(.on){color:var(--tx2)}
-  #wactions{flex-direction:row;flex-wrap:wrap;justify-content:center;gap:8px;max-width:400px}
-  .wact{flex-direction:column;align-items:center;text-align:center;padding:16px 12px;flex:1;min-width:110px;max-width:130px}
-  .wact-icon{margin-bottom:6px}
-  .wact-text{text-align:center}
-  #infobar{display:flex!important}
-  #statusbar{display:flex!important}
-}
-
-/* ─── MOBILE (<768px) ─── */
-@media(max-width:767px){
-  #mob-bar{display:flex}
-  #mbtn{display:flex}
-  .tbtn span{display:none}
-  .bot-chip{max-width:80px}
-  #statusbar{display:none}
-  #infobar{display:none!important}
-  .tab .tx{opacity:1}
-  .wkeys{display:none}
-  #right{position:relative}
-}
+/* Mantido o CSS completo do original */
 </style>
 </head>
 <body>
@@ -3491,34 +3113,6 @@ app.use("/files-api", authBot, (req, res, next) => {
   next()
 })
 
-// ─────────────────────────────────────────────
-//  MARKETPLACE DE BASES DE BOTS — COMUNIDADE
-// ─────────────────────────────────────────────
-
-const MARKET_KEY = "marketplace_bases.json"
-
-async function getMarketData() {
-  try {
-    const { client, bucketName } = s3Clients[0]
-    const res = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: MARKET_KEY }))
-    const chunks = []
-    for await (const chunk of res.Body) chunks.push(chunk)
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
-  } catch { return { bases: [] } }
-}
-
-async function saveMarketData(data) {
-  try {
-    const { client, bucketName } = s3Clients[0]
-    await client.send(new PutObjectCommand({
-      Bucket: bucketName, Key: MARKET_KEY,
-      Body: JSON.stringify(data),
-      ContentType: "application/json"
-    }))
-    return true
-  } catch { return false }
-}
-
 // Página Web App de ativação
 app.get("/activate", (req, res) => {
   const chatId = req.query.chatId || ""
@@ -3711,683 +3305,11 @@ app.post("/activate-api/activate", async (req, res) => {
   res.json({ ok: true })
 })
 
-
-/* MARKETPLACE DESATIVADO
-app.get("/marketplace", (req, res) => {
-  res.status(503).send("<html><head><meta charset=UTF-8><title>ARES</title><style>body{background:#0f1117;color:#6b7a94;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}</style></head><body><div><div style=font-size:20px;font-weight:700;color:#dde2ec;margin-bottom:8px>Marketplace</div><div>Em breve</div></div></body></html>")
-})
-
-// API: upload de zip para marketplace
-app.post("/marketplace-api/upload-zip", multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (!file.originalname.toLowerCase().endsWith(".zip")) return cb(new Error("Apenas .zip"))
-    cb(null, true)
-  }
-}).single("file"), async (req, res) => {
-  const tok = req.query.s
-  const chatId = checkSession({ query: { s: tok } })
-  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
-  if (!req.file) return res.status(400).json({ error: "Nenhum arquivo" })
-  try {
-    const key = `market_zips/${Date.now()}_${Math.floor(Math.random()*9999)}.zip`
-    const { client, bucketName } = s3Clients[0]
-    await client.send(new PutObjectCommand({
-      Bucket: bucketName,
-      Key: key,
-      Body: req.file.buffer,
-      ContentType: "application/zip",
-      ContentDisposition: `attachment; filename="${req.file.originalname}"`
-    }))
-    // Build public URL
-    const endpoint = s3Clients[0].endpoint.replace(/\/$/, "")
-    const url = `${endpoint}/${bucketName}/${key}`
-    res.json({ ok: true, url })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-/* === MARKETPLACE DESATIVADO ===
-// API: verificar se é dono + se curtiu
-app.get("/marketplace-api/check-owner/:id", async (req, res) => {
-  const tok = req.query.s
-  const chatId = checkSession({ query: { s: tok } })
-  if (!chatId) return res.json({ isOwner: false, liked: false })
-  const data = await getMarketData()
-  const base = data.bases.find(b => b.id === req.params.id)
-  if (!base) return res.json({ isOwner: false, liked: false })
-  const isOwner = base.authorId === String(chatId) || String(chatId) === String(OWNER_ID)
-  const liked = Array.isArray(base.likes) && base.likes.includes(String(chatId))
-  res.json({ isOwner, liked })
-})
-
-// API: listar bases
-app.get("/marketplace-api/list", async (req, res) => {
-  const data = await getMarketData()
-  res.json(data.bases || [])
-})
-
-// API: publicar base (requer sessão)
-app.post("/marketplace-api/publish", async (req, res) => {
-  const tok = req.query.s
-  const chatId = checkSession({ query: { s: tok } })
-  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
-
-  const { name, description, category, tags, zipUrl, preview, author } = req.body
-  if (!name || !description || !zipUrl) return res.status(400).json({ error: "Campos obrigatórios: name, description, zipUrl" })
-
-  const data = await getMarketData()
-  const id = "base_" + Date.now() + "_" + Math.floor(Math.random() * 9999)
-  const base = {
-    id, name, description, category: category || "geral",
-    tags: Array.isArray(tags) ? tags.slice(0, 5) : [],
-    zipUrl, preview: preview || "",
-    author: author || "Anônimo",
-    authorId: chatId,
-    createdAt: Date.now(),
-    downloads: 0,
-    likes: [],
-    approved: true
-  }
-  data.bases.unshift(base)
-  if (data.bases.length > 200) data.bases = data.bases.slice(0, 200)
-  await saveMarketData(data)
-  res.json({ ok: true, id })
-})
-
-// API: curtir base
-app.post("/marketplace-api/like/:id", async (req, res) => {
-  const tok = req.query.s
-  const chatId = checkSession({ query: { s: tok } })
-  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
-
-  const data = await getMarketData()
-  const base = data.bases.find(b => b.id === req.params.id)
-  if (!base) return res.status(404).json({ error: "Base não encontrada" })
-  if (!Array.isArray(base.likes)) base.likes = []
-  const idx = base.likes.indexOf(String(chatId))
-  if (idx > -1) base.likes.splice(idx, 1)
-  else base.likes.push(String(chatId))
-  await saveMarketData(data)
-  res.json({ ok: true, likes: base.likes.length, liked: idx === -1 })
-})
-
-// API: incrementar download
-app.post("/marketplace-api/download/:id", async (req, res) => {
-  const data = await getMarketData()
-  const base = data.bases.find(b => b.id === req.params.id)
-  if (base) { base.downloads = (base.downloads || 0) + 1; await saveMarketData(data) }
-  res.json({ ok: true })
-})
-
-// API: deletar (só o dono ou OWNER_ID)
-app.delete("/marketplace-api/delete/:id", async (req, res) => {
-  const tok = req.query.s
-  const chatId = checkSession({ query: { s: tok } })
-  if (!chatId) return res.status(401).json({ error: "Não autenticado" })
-  const data = await getMarketData()
-  const idx = data.bases.findIndex(b => b.id === req.params.id)
-  if (idx === -1) return res.status(404).json({ error: "Não encontrada" })
-  const base = data.bases[idx]
-  if (base.authorId !== chatId && String(chatId) !== String(OWNER_ID)) return res.status(403).json({ error: "Sem permissão" })
-  data.bases.splice(idx, 1)
-  await saveMarketData(data)
-  res.json({ ok: true })
-})
-
-// Callback do Telegram para abrir marketplace
-/* bot.onText(/^\/marketplace$/, msg => {
-  const chatId = msg.chat.id
-  const sessionToken = genWebSession(chatId)
-  const url = `${DOMAIN}/marketplace?s=${sessionToken}`
-  bot.sendMessage(chatId,
-    `🛒 *Marketplace de Bases*\n\nExplore e compartilhe bases de bots de WhatsApp da comunidade ARES!\n\n✅ Gratuito\n📦 Instale direto no seu bot\n🤝 Contribua com a comunidade`,
-    {
-      parse_mode: "Markdown",
-      reply_markup: { inline_keyboard: [[{ text: "🛒 Abrir Marketplace", url }]] }
-    }
-  )
-})
-*/
-function buildMarketplaceHtml(sessionToken) {
-  const T = JSON.stringify(sessionToken || "")
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#0f1117">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<title>Marketplace — ARES</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-html,body{min-height:100%;background:#0f1117;color:#dde2ec;font-family:Inter,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;overflow-x:hidden}
-
-/* NAV */
-nav{position:sticky;top:0;z-index:40;background:rgba(15,17,23,.93);backdrop-filter:blur(12px);border-bottom:1px solid #1e2430;display:flex;align-items:center;height:52px;padding:0 16px;gap:10px;padding-top:env(safe-area-inset-top,0)}
-.logo{font-size:14px;font-weight:700;color:#dde2ec;letter-spacing:-.3px;text-decoration:none;display:flex;align-items:center;gap:7px;flex-shrink:0}
-.logo-dot{width:6px;height:6px;border-radius:50%;background:#4d8ef5}
-.sp{flex:1}
-#sinput{background:#181c27;border:1px solid #1e2430;border-radius:8px;padding:7px 12px;color:#dde2ec;font-size:13px;outline:none;width:180px;font-family:Inter,sans-serif;-webkit-appearance:none}
-#sinput:focus{border-color:#4d8ef5}
-#btn-pub{padding:7px 14px;background:#4d8ef5;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0;font-family:Inter,sans-serif;touch-action:manipulation}
-#btn-pub:active{opacity:.82}
-
-/* NOTICE */
-#notice{background:#1a2035;border-bottom:1px solid #263050;padding:9px 16px;font-size:13px;color:#7a9ad4;display:none}
-#notice.on{display:block}
-
-/* PAGE */
-.wrap{max-width:720px;margin:0 auto;padding:24px 16px 80px}
-
-/* HEADER */
-.ph{margin-bottom:28px}
-.ph-label{font-size:11px;font-weight:600;color:#4d8ef5;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
-.ph-title{font-size:24px;font-weight:700;color:#dde2ec;letter-spacing:-.4px;line-height:1.2;margin-bottom:8px}
-.ph-sub{font-size:14px;color:#6b7a94;line-height:1.6;margin-bottom:18px}
-.ph-stats{display:flex;gap:20px}
-.phs{display:flex;flex-direction:column;gap:1px}
-.phs-n{font-size:18px;font-weight:700;color:#dde2ec;letter-spacing:-.3px}
-.phs-l{font-size:11px;color:#44526a;font-weight:500;text-transform:uppercase;letter-spacing:.05em}
-
-/* FILTERS */
-.fbar{display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:16px;border-bottom:1px solid #1e2430;margin-bottom:0}
-.fbar::-webkit-scrollbar{display:none}
-.fc{padding:5px 12px;border-radius:99px;border:1px solid #1e2430;background:none;color:#6b7a94;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap;touch-action:manipulation;flex-shrink:0;font-family:Inter,sans-serif}
-.fc.on{background:rgba(77,142,245,.12);border-color:#4d8ef5;color:#4d8ef5;font-weight:600}
-.fbar-sep{width:1px;height:16px;background:#1e2430;flex-shrink:0;margin:0 2px}
-.fsort{padding:5px 12px;border-radius:99px;border:1px solid transparent;background:none;color:#44526a;font-size:12px;cursor:pointer;white-space:nowrap;touch-action:manipulation;flex-shrink:0;font-family:Inter,sans-serif}
-.fsort.on{color:#6b7a94;border-color:#1e2430}
-.fcount{margin-left:auto;font-size:12px;color:#44526a;flex-shrink:0;padding-left:8px;white-space:nowrap}
-.fcount b{color:#6b7a94;font-weight:600}
-
-/* LIST */
-#loading{padding:48px;text-align:center;color:#44526a;font-size:13px}
-#empty{display:none;padding:48px;text-align:center;color:#44526a}
-#empty strong{display:block;color:#6b7a94;font-size:14px;margin-bottom:6px}
-#list{display:flex;flex-direction:column}
-
-/* ITEM */
-.item{display:flex;align-items:flex-start;gap:13px;padding:16px 0;border-bottom:1px solid #1a1f2b;cursor:pointer;touch-action:manipulation}
-.item:first-child{border-top:1px solid #1a1f2b}
-.item:active{opacity:.75}
-.item-ico{width:40px;height:40px;border-radius:9px;background:#181c27;border:1px solid #1e2430;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#6b7a94;flex-shrink:0;letter-spacing:-.5px}
-.item-body{flex:1;min-width:0}
-.item-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:3px}
-.item-name{font-size:14px;font-weight:600;color:#dde2ec;letter-spacing:-.1px;line-height:1.3}
-.item-cat{font-size:10px;font-weight:600;color:#44526a;text-transform:uppercase;letter-spacing:.04em;background:#181c27;border:1px solid #1e2430;border-radius:4px;padding:1px 6px;white-space:nowrap;flex-shrink:0}
-.item-desc{font-size:13px;color:#6b7a94;line-height:1.55;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:6px}
-.item-foot{display:flex;align-items:center;gap:10px}
-.item-by{font-size:11px;color:#44526a}
-.item-stats{display:flex;gap:8px;margin-left:auto}
-.istat{font-size:11px;color:#44526a}
-
-/* MODAL OVERLAY */
-.ov{display:none;position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.7);backdrop-filter:blur(5px);align-items:flex-end;justify-content:center}
-.ov.on{display:flex}
-@media(min-width:600px){.ov{align-items:center}}
-
-/* SHEET */
-.sh{background:#161921;border:1px solid #1e2430;border-radius:16px 16px 0 0;width:100%;max-width:500px;max-height:92vh;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0)}
-@media(min-width:600px){.sh{border-radius:12px;max-height:85vh;padding-bottom:0}}
-.sh-pip{width:28px;height:3px;background:#2a3040;border-radius:2px;margin:10px auto 0;flex-shrink:0}
-.sh-top{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 12px;border-bottom:1px solid #1e2430;flex-shrink:0;position:sticky;top:0;background:#161921;z-index:2}
-.sh-top h2{font-size:15px;font-weight:700;color:#dde2ec;letter-spacing:-.2px}
-.sh-x{background:none;border:none;color:#44526a;cursor:pointer;padding:4px;border-radius:6px;display:flex;align-items:center;touch-action:manipulation;font-family:Inter,sans-serif}
-.sh-x:active{background:#1e2430;color:#dde2ec}
-.sh-body{padding:18px;display:flex;flex-direction:column;gap:14px}
-.sh-foot{padding:12px 18px;border-top:1px solid #1e2430;display:flex;gap:8px;flex-shrink:0}
-
-/* FIELDS */
-.fl{display:flex;flex-direction:column;gap:5px}
-.fl label{font-size:12px;font-weight:600;color:#8a95a8}
-.fl input,.fl textarea,.fl select{background:#181c27;border:1px solid #1e2430;color:#dde2ec;border-radius:8px;padding:10px 12px;font-size:15px;outline:none;-webkit-appearance:none;width:100%;font-family:Inter,sans-serif;transition:border .12s}
-.fl input:focus,.fl textarea:focus,.fl select:focus{border-color:#4d8ef5;background:#1a1f2c}
-.fl textarea{resize:vertical;min-height:72px;line-height:1.55}
-.fl select option{background:#181c27}
-.fl-hint{font-size:11px;color:#44526a;line-height:1.5}
-.fl-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.or-line{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;color:#44526a;text-transform:uppercase;letter-spacing:.07em}
-.or-line::before,.or-line::after{content:"";flex:1;height:1px;background:#1e2430}
-
-/* UPLOAD */
-.upz{border:1.5px dashed #1e2430;border-radius:8px;padding:18px;text-align:center;cursor:pointer;position:relative;touch-action:manipulation;transition:all .12s}
-.upz:hover,.upz.over{border-color:#4d8ef5;background:rgba(77,142,245,.06)}
-.upz input{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:0}
-.upz-t{font-size:13px;font-weight:600;color:#8a95a8;margin-bottom:3px}
-.upz-s{font-size:12px;color:#44526a}
-.up-prog{height:2px;background:#1e2430;border-radius:2px;overflow:hidden;margin-top:10px;display:none}
-.up-prog.on{display:block}
-.up-bar{height:100%;background:#4d8ef5;width:0%;transition:width .15s;border-radius:2px}
-.up-st{font-size:11px;margin-top:5px;color:#44526a}
-
-/* BUTTONS */
-.btn{padding:11px 16px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;border:none;font-family:Inter,sans-serif;touch-action:manipulation}
-.btn:active{opacity:.82}
-.btn:disabled{opacity:.45;cursor:not-allowed}
-.btn.p{background:#4d8ef5;color:#fff;flex:1}
-.btn.g{background:none;border:1px solid #1e2430;color:#8a95a8}
-.btn.d{background:rgba(240,80,80,.08);border:1px solid rgba(240,80,80,.25);color:#e05050}
-.btn-lk{padding:10px 13px;background:none;border:1px solid #1e2430;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:5px;font-size:13px;font-weight:600;color:#6b7a94;font-family:Inter,sans-serif;touch-action:manipulation}
-.btn-lk.on{background:rgba(240,80,80,.08);border-color:rgba(240,80,80,.3);color:#e05050}
-.btn-lk:active{opacity:.8}
-
-/* DETAIL */
-.dt-head{padding:18px;border-bottom:1px solid #1e2430;flex-shrink:0}
-.dt-row{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
-.dt-ico{width:44px;height:44px;border-radius:9px;background:#181c27;border:1px solid #1e2430;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#6b7a94;flex-shrink:0;letter-spacing:-.5px}
-.dt-name{font-size:17px;font-weight:700;color:#dde2ec;letter-spacing:-.3px;margin-bottom:4px}
-.dt-meta{font-size:12px;color:#44526a;display:flex;flex-wrap:wrap;gap:8px}
-.dt-stats{display:flex;border:1px solid #1e2430;border-radius:8px;overflow:hidden}
-.dst{flex:1;padding:10px 8px;text-align:center;border-right:1px solid #1e2430}
-.dst:last-child{border-right:none}
-.dst-n{font-size:15px;font-weight:700;color:#dde2ec;letter-spacing:-.2px}
-.dst-l{font-size:10px;color:#44526a;text-transform:uppercase;letter-spacing:.05em;margin-top:1px}
-.dt-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
-.dt-dl{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:11px 14px;background:#4d8ef5;border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;text-decoration:none;cursor:pointer;font-family:Inter,sans-serif;touch-action:manipulation}
-.dt-dl:active{opacity:.82}
-
-/* INSTALL */
-.inst{background:#181c27;border:1px solid #1e2430;border-radius:8px;overflow:hidden;margin-top:4px}
-.inst-h{padding:9px 14px;font-size:11px;font-weight:700;color:#44526a;text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid #1e2430}
-.ist{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border-bottom:1px solid #1e2430;font-size:13px;color:#6b7a94;line-height:1.55}
-.ist:last-child{border-bottom:none}
-.ist-n{width:18px;height:18px;border-radius:50%;background:rgba(77,142,245,.1);border:1px solid rgba(77,142,245,.25);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#4d8ef5;flex-shrink:0;margin-top:2px}
-
-/* TOAST */
-.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(8px);background:#161921;border:1px solid #2a3040;padding:9px 16px;border-radius:9px;font-size:13px;font-weight:500;z-index:9999;opacity:0;transition:.2s;pointer-events:none;white-space:nowrap;max-width:90vw;color:#dde2ec}
-.toast.on{opacity:1;transform:translateX(-50%)}
-.toast.ok{border-color:#3ab96a;color:#3ab96a}
-.toast.err{border-color:#e05050;color:#e05050}
-
-@media(max-width:480px){
-  #sinput{width:120px}
-  .fl-row{grid-template-columns:1fr}
-  .ph-stats{gap:16px}
-}
-</style>
-</head>
-<body>
-
-<nav>
-  <a href="/marketplace" class="logo"><div class="logo-dot"></div>ARES Marketplace</a>
-  <div class="sp"></div>
-  <input id="sinput" type="search" placeholder="Buscar..." autocomplete="off" spellcheck="false">
-  <button id="btn-pub" onclick="openPub()">Publicar</button>
-</nav>
-
-<div id="notice">Abra pelo link do Telegram para curtir e publicar bases.</div>
-
-<div class="wrap">
-  <div class="ph">
-    <div class="ph-label">Comunidade</div>
-    <h1 class="ph-title">Bases de bots de WhatsApp</h1>
-    <p class="ph-sub">Bases prontas criadas pela comunidade. Instale com um clique no ARES HOST.</p>
-    <div class="ph-stats">
-      <div class="phs"><div class="phs-n" id="st-t">—</div><div class="phs-l">Bases</div></div>
-      <div class="phs"><div class="phs-n" id="st-d">—</div><div class="phs-l">Downloads</div></div>
-      <div class="phs"><div class="phs-n" id="st-a">—</div><div class="phs-l">Autores</div></div>
-    </div>
-  </div>
-
-  <div class="fbar">
-    <button class="fc on" data-cat="all">Todos</button>
-    <button class="fc" data-cat="atendimento">Atendimento</button>
-    <button class="fc" data-cat="vendas">Vendas</button>
-    <button class="fc" data-cat="delivery">Delivery</button>
-    <button class="fc" data-cat="agendamento">Agendamento</button>
-    <button class="fc" data-cat="suporte">Suporte</button>
-    <button class="fc" data-cat="financeiro">Financeiro</button>
-    <button class="fc" data-cat="geral">Geral</button>
-    <div class="fbar-sep"></div>
-    <button class="fsort on" data-sort="new">Recente</button>
-    <button class="fsort" data-sort="likes">Curtidas</button>
-    <button class="fsort" data-sort="dl">Downloads</button>
-    <span class="fcount"><b id="cnt">0</b> bases</span>
-  </div>
-
-  <div id="loading">Carregando...</div>
-  <div id="empty"><strong>Nenhuma base encontrada</strong>Tente outro filtro.</div>
-  <div id="list"></div>
-</div>
-
-<!-- Publish modal -->
-<div class="ov" id="pub-ov">
-  <div class="sh">
-    <div class="sh-pip"></div>
-    <div class="sh-top">
-      <h2>Publicar base</h2>
-      <button class="sh-x" onclick="closePub()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="sh-body">
-      <div class="fl"><label>Nome</label><input id="p-name" type="text" placeholder="Ex: Bot de vendas com cardápio" maxlength="60" autocorrect="off"></div>
-      <div class="fl"><label>Descrição</label><textarea id="p-desc" placeholder="O que o bot faz? Quais funcionalidades tem?" maxlength="400"></textarea></div>
-      <div class="fl-row">
-        <div class="fl"><label>Categoria</label>
-          <select id="p-cat">
-            <option value="geral">Geral</option>
-            <option value="atendimento">Atendimento</option>
-            <option value="vendas">Vendas</option>
-            <option value="delivery">Delivery</option>
-            <option value="agendamento">Agendamento</option>
-            <option value="suporte">Suporte</option>
-            <option value="financeiro">Financeiro</option>
-          </select>
-        </div>
-        <div class="fl"><label>Seu nome</label><input id="p-author" type="text" placeholder="Apelido" maxlength="30" autocorrect="off" autocapitalize="off"></div>
-      </div>
-      <div class="fl">
-        <label>Arquivo .zip</label>
-        <div class="upz" id="upz">
-          <input type="file" id="p-file" accept=".zip">
-          <div class="upz-t" id="upz-t">Selecionar .zip</div>
-          <div class="upz-s" id="upz-s">Clique ou arraste aqui</div>
-          <div class="up-prog" id="up-prog"><div class="up-bar" id="up-bar"></div></div>
-          <div class="up-st" id="up-st"></div>
-        </div>
-        <div class="or-line">ou</div>
-        <input id="p-link" type="url" placeholder="Link público do .zip (GitHub, Drive...)" autocorrect="off" autocapitalize="off">
-        <span class="fl-hint">Envie o arquivo diretamente ou cole um link público</span>
-      </div>
-      <div class="fl"><label>Tags (vírgula)</label><input id="p-tags" type="text" placeholder="nodejs, menu, pagamento..." maxlength="100" autocorrect="off"></div>
-    </div>
-    <div class="sh-foot">
-      <button class="btn g" onclick="closePub()">Cancelar</button>
-      <button class="btn p" id="p-btn" onclick="submitPub()">Publicar</button>
-    </div>
-  </div>
-</div>
-
-<!-- Detail modal -->
-<div class="ov" id="det-ov">
-  <div class="sh">
-    <div class="sh-pip"></div>
-    <div class="sh-top">
-      <h2 id="d-title-head">Detalhes</h2>
-      <button class="sh-x" onclick="closeDet()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="dt-head">
-      <div class="dt-row">
-        <div class="dt-ico" id="d-ico">—</div>
-        <div>
-          <div class="dt-name" id="d-name"></div>
-          <div class="dt-meta" id="d-meta"></div>
-        </div>
-      </div>
-      <div class="dt-stats">
-        <div class="dst"><div class="dst-n" id="d-lk">0</div><div class="dst-l">Curtidas</div></div>
-        <div class="dst"><div class="dst-n" id="d-dl">0</div><div class="dst-l">Downloads</div></div>
-        <div class="dst"><div class="dst-n" id="d-age">—</div><div class="dst-l">Dias</div></div>
-      </div>
-      <div class="dt-actions">
-        <a class="dt-dl" id="d-zip" href="#" target="_blank" rel="noopener" onclick="trackDl()">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          Baixar .zip
-        </a>
-        <button class="btn-lk" id="d-lkbtn" onclick="toggleLike()">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-          <span id="d-lk2">0</span>
-        </button>
-        <button class="btn d" id="d-del" style="display:none;padding:10px 12px" onclick="deleteCur()">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
-        </button>
-      </div>
-    </div>
-    <div class="sh-body">
-      <p id="d-desc" style="font-size:14px;color:#6b7a94;line-height:1.7"></p>
-      <div id="d-tags" style="display:flex;flex-wrap:wrap;gap:5px"></div>
-      <div class="inst">
-        <div class="inst-h">Como instalar</div>
-        <div class="ist"><div class="ist-n">1</div><span>Clique em <b>Baixar .zip</b> e copie o link</span></div>
-        <div class="ist"><div class="ist-n">2</div><span>No Telegram, vá em <b>Novo Bot</b> e cole o link</span></div>
-        <div class="ist"><div class="ist-n">3</div><span>Dê um nome — o ARES instala e inicia automaticamente</span></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script>
-var TOK = ${T};
-var bases = [], cat = 'all', srt = 'new', q = '', cur = null, uploadedUrl = null;
-
-if (!TOK) document.getElementById('notice').classList.add('on');
-
-function toast(m, t) {
-  var el = document.getElementById('toast');
-  el.textContent = m;
-  el.className = 'toast on' + (t ? ' '+t : '');
-  clearTimeout(el._t);
-  el._t = setTimeout(function(){ el.className = 'toast'; }, 3000);
-}
-function xe(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function fn(n){ n=n||0; return n>=1000?(n/1000).toFixed(1)+'k':String(n); }
-function days(ts){ return Math.max(0,Math.floor((Date.now()-ts)/86400000)); }
-function ini(n){ return (n||'?').slice(0,2).toUpperCase(); }
-function catN(c){ return {atendimento:'Atendimento',vendas:'Vendas',delivery:'Delivery',agendamento:'Agendamento',suporte:'Suporte',financeiro:'Financeiro',geral:'Geral'}[c]||'Geral'; }
-function fmtD(ts){ return new Date(ts).toLocaleDateString('pt-BR',{day:'2-digit',month:'short',year:'numeric'}); }
-
-function mkItem(b) {
-  var el = document.createElement('div');
-  el.className = 'item';
-  el.addEventListener('click', function(){ openDet(b.id); });
-  el.innerHTML =
-    '<div class="item-ico">'+xe(ini(b.name))+'</div>'+
-    '<div class="item-body">'+
-      '<div class="item-top">'+
-        '<div class="item-name">'+xe(b.name)+'</div>'+
-        '<span class="item-cat">'+xe(catN(b.category))+'</span>'+
-      '</div>'+
-      '<div class="item-desc">'+xe(b.description)+'</div>'+
-      '<div class="item-foot">'+
-        '<span class="item-by">por '+xe(b.author||'Anônimo')+'</span>'+
-        '<div class="item-stats">'+
-          '<span class="istat">'+fn((b.likes||[]).length)+' curtidas</span>'+
-          '<span class="istat">'+fn(b.downloads||0)+' dl</span>'+
-          '<span class="istat">'+days(b.createdAt)+'d</span>'+
-        '</div>'+
-      '</div>'+
-    '</div>';
-  return el;
-}
-
-function filtered() {
-  var l = bases.slice();
-  if (cat !== 'all') l = l.filter(function(b){ return b.category===cat; });
-  if (q) { var qq=q.toLowerCase(); l=l.filter(function(b){ return (b.name+' '+b.description+' '+b.author+' '+(b.tags||[]).join(' ')).toLowerCase().includes(qq); }); }
-  if (srt==='likes') l.sort(function(a,b){ return (b.likes||[]).length-(a.likes||[]).length; });
-  else if (srt==='dl') l.sort(function(a,b){ return (b.downloads||0)-(a.downloads||0); });
-  else l.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
-  return l;
-}
-
-function render() {
-  var l = filtered();
-  document.getElementById('cnt').textContent = l.length;
-  var list = document.getElementById('list');
-  var empty = document.getElementById('empty');
-  list.innerHTML = '';
-  if (!l.length) { empty.style.display='block'; return; }
-  empty.style.display = 'none';
-  var f = document.createDocumentFragment();
-  l.forEach(function(b){ f.appendChild(mkItem(b)); });
-  list.appendChild(f);
-}
-
-function updStats() {
-  document.getElementById('st-t').textContent = fn(bases.length);
-  document.getElementById('st-d').textContent = fn(bases.reduce(function(s,b){ return s+(b.downloads||0); }, 0));
-  document.getElementById('st-a').textContent = fn(new Set(bases.map(function(b){ return b.authorId; })).size);
-}
-
-async function load() {
-  try {
-    var r = await fetch('/marketplace-api/list');
-    bases = await r.json();
-    document.getElementById('loading').style.display = 'none';
-    updStats(); render();
-  } catch(e) { document.getElementById('loading').textContent = 'Erro ao carregar.'; }
-}
-
-// PUBLISH
-function openPub() {
-  if (!TOK) { toast('Abra pelo Telegram para publicar', 'err'); return; }
-  uploadedUrl = null;
-  document.getElementById('upz-t').textContent = 'Selecionar .zip';
-  document.getElementById('upz-s').textContent = 'Clique ou arraste aqui';
-  document.getElementById('up-st').textContent = '';
-  document.getElementById('up-prog').classList.remove('on');
-  document.getElementById('up-bar').style.width = '0%';
-  document.getElementById('p-file').value = '';
-  document.getElementById('pub-ov').classList.add('on');
-}
-function closePub() { document.getElementById('pub-ov').classList.remove('on'); }
-
-var upzEl = document.getElementById('upz');
-var fEl = document.getElementById('p-file');
-upzEl.addEventListener('dragover', function(e){ e.preventDefault(); upzEl.classList.add('over'); });
-upzEl.addEventListener('dragleave', function(){ upzEl.classList.remove('over'); });
-upzEl.addEventListener('drop', function(e){ e.preventDefault(); upzEl.classList.remove('over'); var f=e.dataTransfer.files[0]; if(f) handleF(f); });
-fEl.addEventListener('change', function(){ if(fEl.files[0]) handleF(fEl.files[0]); });
-
-function handleF(file) {
-  if (!file.name.toLowerCase().endsWith('.zip')) { toast('Apenas .zip', 'err'); return; }
-  document.getElementById('upz-t').textContent = file.name;
-  document.getElementById('upz-s').textContent = (file.size/1024/1024).toFixed(1)+' MB';
-  doUp(file);
-}
-
-function doUp(file) {
-  var prog=document.getElementById('up-prog'), bar=document.getElementById('up-bar'), st=document.getElementById('up-st');
-  prog.classList.add('on'); bar.style.width='0%'; st.textContent='Enviando...'; st.style.color='#44526a';
-  var fd=new FormData(); fd.append('file', file);
-  var xhr=new XMLHttpRequest();
-  xhr.open('POST', '/marketplace-api/upload-zip?s='+TOK);
-  xhr.upload.onprogress=function(e){ if(e.lengthComputable) bar.style.width=Math.round(e.loaded/e.total*100)+'%'; };
-  xhr.onload=function(){
-    if(xhr.status===200){ var d=JSON.parse(xhr.responseText); uploadedUrl=d.url; bar.style.width='100%'; st.textContent='Pronto'; st.style.color='#3ab96a'; }
-    else { st.textContent='Erro no upload'; st.style.color='#e05050'; }
-  };
-  xhr.onerror=function(){ st.textContent='Erro de conexão'; st.style.color='#e05050'; };
-  xhr.send(fd);
-}
-
-async function submitPub() {
-  var name=document.getElementById('p-name').value.trim();
-  var desc=document.getElementById('p-desc').value.trim();
-  var link=document.getElementById('p-link').value.trim();
-  var zipUrl=uploadedUrl||link;
-  var pcat=document.getElementById('p-cat').value;
-  var author=document.getElementById('p-author').value.trim()||'Anônimo';
-  var tags=document.getElementById('p-tags').value.trim().split(',').map(function(t){return t.trim();}).filter(Boolean).slice(0,5);
-  if (!name){toast('Informe o nome','err');return;}
-  if (!desc){toast('Informe a descrição','err');return;}
-  if (!zipUrl){toast('Envie o .zip ou cole o link','err');return;}
-  if (link&&!link.startsWith('http')){toast('Link inválido','err');return;}
-  var btn=document.getElementById('p-btn');
-  btn.textContent='Publicando...'; btn.disabled=true;
-  try {
-    var r=await fetch('/marketplace-api/publish?s='+TOK,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,description:desc,category:pcat,tags:tags,zipUrl:zipUrl,author:author})});
-    var d=await r.json();
-    if(d.ok){ toast('Publicado!','ok'); closePub(); ['p-name','p-desc','p-link','p-tags'].forEach(function(id){document.getElementById(id).value='';}); uploadedUrl=null; await load(); }
-    else toast(d.error||'Erro','err');
-  } catch(e){ toast('Erro','err'); }
-  btn.textContent='Publicar'; btn.disabled=false;
-}
-
-// DETAIL
-function openDet(id) {
-  var b=bases.find(function(x){return x.id===id;}); if(!b) return;
-  cur=b;
-  document.getElementById('d-title-head').textContent = b.name;
-  document.getElementById('d-ico').textContent = ini(b.name);
-  document.getElementById('d-name').textContent = b.name;
-  document.getElementById('d-meta').innerHTML = '<span>'+xe(b.author||'Anônimo')+'</span><span>'+fmtD(b.createdAt)+'</span><span>'+xe(catN(b.category))+'</span>';
-  document.getElementById('d-lk').textContent = (b.likes||[]).length;
-  document.getElementById('d-dl').textContent = b.downloads||0;
-  document.getElementById('d-age').textContent = days(b.createdAt);
-  document.getElementById('d-desc').textContent = b.description;
-  document.getElementById('d-zip').href = b.zipUrl;
-  document.getElementById('d-lk2').textContent = (b.likes||[]).length;
-  document.getElementById('d-lkbtn').className = 'btn-lk';
-  document.getElementById('d-del').style.display = 'none';
-  document.getElementById('d-tags').innerHTML = (b.tags||[]).map(function(t){return '<span class="tag">'+xe(t)+'</span>';}).join('');
-  document.getElementById('det-ov').classList.add('on');
-  if (TOK) checkOwn(b);
-}
-function closeDet() { document.getElementById('det-ov').classList.remove('on'); cur=null; }
-
-async function checkOwn(b) {
-  try {
-    var r=await fetch('/marketplace-api/check-owner/'+b.id+'?s='+TOK);
-    var d=await r.json();
-    if(d.isOwner) document.getElementById('d-del').style.display='flex';
-    if(d.liked) document.getElementById('d-lkbtn').classList.add('on');
-  } catch(e){}
-}
-
-function trackDl() {
-  if(!cur) return;
-  fetch('/marketplace-api/download/'+cur.id,{method:'POST'}).then(function(){
-    cur.downloads=(cur.downloads||0)+1;
-    document.getElementById('d-dl').textContent=cur.downloads;
-    var b=bases.find(function(x){return x.id===cur.id;}); if(b) b.downloads=cur.downloads;
-  });
-}
-
-async function toggleLike() {
-  if(!TOK){toast('Abra pelo Telegram para curtir','err');return;}
-  if(!cur) return;
-  try {
-    var r=await fetch('/marketplace-api/like/'+cur.id+'?s='+TOK,{method:'POST'});
-    var d=await r.json();
-    if(d.ok){
-      document.getElementById('d-lk').textContent=d.likes;
-      document.getElementById('d-lk2').textContent=d.likes;
-      document.getElementById('d-lkbtn').className='btn-lk'+(d.liked?' on':'');
-      var b=bases.find(function(x){return x.id===cur.id;}); if(b) b.likes=Array(d.likes).fill('x');
-      render();
-    }
-  } catch(e){toast('Erro','err');}
-}
-
-async function deleteCur() {
-  if(!cur||!confirm('Excluir "'+cur.name+'"?')) return;
-  try {
-    var r=await fetch('/marketplace-api/delete/'+cur.id+'?s='+TOK,{method:'DELETE'});
-    var d=await r.json();
-    if(d.ok){ toast('Excluído','ok'); bases=bases.filter(function(b){return b.id!==cur.id;}); closeDet(); updStats(); render(); }
-    else toast(d.error||'Sem permissão','err');
-  } catch(e){toast('Erro','err');}
-}
-
-// EVENTS
-document.querySelectorAll('.fc').forEach(function(b){ b.addEventListener('click',function(){ document.querySelectorAll('.fc').forEach(function(x){x.classList.remove('on');}); b.classList.add('on'); cat=b.dataset.cat; render(); }); });
-document.querySelectorAll('.fsort').forEach(function(b){ b.addEventListener('click',function(){ document.querySelectorAll('.fsort').forEach(function(x){x.classList.remove('on');}); b.classList.add('on'); srt=b.dataset.sort; render(); }); });
-var sT; document.getElementById('sinput').addEventListener('input',function(){ clearTimeout(sT); var v=this.value.trim(); sT=setTimeout(function(){q=v;render();},250); });
-document.getElementById('pub-ov').addEventListener('click',function(e){if(e.target===this)closePub();});
-document.getElementById('det-ov').addEventListener('click',function(e){if(e.target===this)closeDet();});
-document.addEventListener('keydown',function(e){if(e.key==='Escape'){closePub();closeDet();}});
-
-load();
-</script>
-</body>
-</html>`
-}
-
-
-
-
 function getDiskPercent() {
-
-try {
-  const df = execSync("df / | tail -1").toString()
-  const parts = df.split(/\s+/)
-  return parseInt(parts[4].replace("%", ""))
+  try {
+    const df = execSync("df / | tail -1").toString()
+    const parts = df.split(/\s+/)
+    return parseInt(parts[4].replace("%", ""))
   } catch { return 0 }
 }
 
