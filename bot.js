@@ -622,9 +622,55 @@ function hasAccepted(chatId) {
 }
 
 function saveAccepted(chatId) {
+  if (!fs.existsSync(USERS_PATH)) fs.mkdirSync(USERS_PATH, { recursive: true })
   const f = path.join(USERS_PATH, `${chatId}.json`)
   fs.writeFileSync(f, JSON.stringify({ accepted: true, at: Date.now() }))
 }
+
+// ─── SISTEMA DE ATIVAÇÃO ───────────────────────────────────────────
+const ACTIVE_KEYS_FILE = path.join(BASE_PATH, "_users", "active_keys.json")
+const ACTIVATED_FILE   = path.join(BASE_PATH, "_users", "activated.json")
+
+function loadActiveKeys() {
+  try {
+    if (!fs.existsSync(ACTIVE_KEYS_FILE)) return {}
+    return JSON.parse(fs.readFileSync(ACTIVE_KEYS_FILE, "utf8"))
+  } catch { return {} }
+}
+
+function saveActiveKeys(data) {
+  if (!fs.existsSync(path.dirname(ACTIVE_KEYS_FILE))) fs.mkdirSync(path.dirname(ACTIVE_KEYS_FILE), { recursive: true })
+  fs.writeFileSync(ACTIVE_KEYS_FILE, JSON.stringify(data, null, 2))
+}
+
+function loadActivated() {
+  try {
+    if (!fs.existsSync(ACTIVATED_FILE)) return {}
+    return JSON.parse(fs.readFileSync(ACTIVATED_FILE, "utf8"))
+  } catch { return {} }
+}
+
+function saveActivated(data) {
+  if (!fs.existsSync(path.dirname(ACTIVATED_FILE))) fs.mkdirSync(path.dirname(ACTIVATED_FILE), { recursive: true })
+  fs.writeFileSync(ACTIVATED_FILE, JSON.stringify(data, null, 2))
+}
+
+function isActivated(chatId) {
+  const activated = loadActivated()
+  return !!activated[String(chatId)]
+}
+
+function activateUser(chatId, key) {
+  const activated = loadActivated()
+  activated[String(chatId)] = { key, at: Date.now() }
+  saveActivated(activated)
+}
+
+function generateKey(prefix) {
+  prefix = prefix || "ARES"
+  return `${prefix}-${crypto.randomBytes(4).toString("hex").toUpperCase()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
+}
+// ──────────────────────────────────────────────────────────────────
 
 const TERMOS_TEXTO = `📋 *Termos de Uso — ARES HOST*
 
@@ -671,6 +717,57 @@ function editTermos(chatId, msgId, checked) {
 }
 
 const termoCheck = {}
+
+bot.onText(/^\/active$/, async msg => {
+  const chatId = msg.chat.id
+  if (isActivated(chatId)) {
+    return bot.sendMessage(chatId, "✅ *Sua conta já está ativada!*", { parse_mode: "Markdown" })
+  }
+  bot.sendMessage(chatId,
+    "🔑 *Ativação necessária*\n\nPara usar o ARES HOST você precisa de uma chave de ativação.\n\nDigite sua chave abaixo ou pressione o botão para enviá-la:",
+    {
+      parse_mode: "Markdown",
+      reply_markup: { force_reply: true, selective: true }
+    }
+  ).then(sent => {
+    userState[chatId] = { waitingKey: true, keyMsgId: sent.message_id }
+  })
+})
+
+bot.onText(/^\/genkey(?:\s+(\S+))?$/, async msg => {
+  const chatId = msg.chat.id
+  if (OWNER_ID && String(chatId) !== String(OWNER_ID)) {
+    return bot.sendMessage(chatId, "❌ Sem permissão.")
+  }
+  const prefix = msg.text.split(" ")[1] || "ARES"
+  const key = generateKey(prefix)
+  const keys = loadActiveKeys()
+  keys[key] = { createdAt: Date.now(), usedBy: null, prefix }
+  saveActiveKeys(keys)
+  bot.sendMessage(chatId,
+    `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\nEnvie essa chave para o usuário. Ela pode ser usada uma vez.`,
+    { parse_mode: "Markdown" }
+  )
+})
+
+bot.onText(/^\/listkeys$/, async msg => {
+  const chatId = msg.chat.id
+  if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
+  const keys = loadActiveKeys()
+  const activated = loadActivated()
+  const total = Object.keys(keys).length
+  const used = Object.values(keys).filter(k => k.usedBy).length
+  const free = total - used
+  const usersCount = Object.keys(activated).length
+  if (total === 0) return bot.sendMessage(chatId, "📋 Nenhuma chave gerada ainda. Use /genkey para criar.")
+  const lines = Object.entries(keys).slice(-20).map(([k, v]) => {
+    return `${v.usedBy ? "✅" : "⬜"} \`${k}\`${v.usedBy ? " — usado" : ""}`
+  }).join("\n")
+  bot.sendMessage(chatId,
+    `🔑 *Chaves de ativação*\n\nTotal: *${total}* | Usadas: *${used}* | Livres: *${free}*\nUsuários ativados: *${usersCount}*\n\n${lines}`,
+    { parse_mode: "Markdown" }
+  )
+})
 
 bot.onText(/^\/meuid$/, msg => {
   bot.sendMessage(msg.chat.id, `🪪 *Seu Telegram ID:*\n\n\`${msg.chat.id}\``, { parse_mode: "Markdown" })
@@ -823,6 +920,41 @@ bot.on("document", async msg => {
 bot.on("message", async msg => {
   if (msg.document || msg.text?.startsWith("/")) return
   const chatId = msg.chat.id
+
+  // Verificar se está esperando chave de ativação
+  if (userState[chatId]?.waitingKey) {
+    delete userState[chatId]
+    const inputKey = msg.text?.trim().toUpperCase()
+    if (!inputKey) return bot.sendMessage(chatId, "❌ Chave inválida.")
+    const keys = loadActiveKeys()
+    if (!keys[inputKey]) {
+      return bot.sendMessage(chatId, "❌ *Chave não encontrada.*\n\nVerifique se digitou corretamente ou peça uma nova chave.", { parse_mode: "Markdown" })
+    }
+    if (keys[inputKey].usedBy) {
+      return bot.sendMessage(chatId, "❌ *Esta chave já foi utilizada.*\n\nPeça uma nova chave.", { parse_mode: "Markdown" })
+    }
+    // Ativar
+    keys[inputKey].usedBy = String(chatId)
+    keys[inputKey].usedAt = Date.now()
+    saveActiveKeys(keys)
+    activateUser(chatId, inputKey)
+    // Marcar também os termos como aceitos
+    saveAccepted(chatId)
+    const s = getStats(chatId)
+    return bot.sendMessage(chatId,
+      `✅ *Conta ativada com sucesso!*\n\nBem-vindo ao ARES HOST!\n\n` +
+      `🤖 Seus Bots: *${s.total}*  |  🟢 Online: *${s.online}*`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
+            [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
+          ]
+        }
+      }
+    )
+  }
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
@@ -956,11 +1088,13 @@ bot.on("callback_query", async query => {
         try { activeBots[bid].process.kill(); delete activeBots[bid] } catch (e) {}
       }
 
-      // 2. Apagar disco local inteiro
+      // 2. Apagar disco local inteiro mas preservar estrutura necessária
       if (fs.existsSync(BASE_PATH)) {
         fs.rmSync(BASE_PATH, { recursive: true, force: true })
-        fs.mkdirSync(BASE_PATH, { recursive: true, mode: 0o755 })
       }
+      fs.mkdirSync(BASE_PATH, { recursive: true, mode: 0o755 })
+      fs.mkdirSync(path.join(BASE_PATH, "_users"), { recursive: true, mode: 0o755 })
+      fs.mkdirSync(path.join(BASE_PATH, "_uploads"), { recursive: true, mode: 0o755 })
 
       // 3. Apagar tudo nos buckets
       let objDeleted = 0
