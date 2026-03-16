@@ -50,19 +50,15 @@ async function connectMongoDB() {
         deprecationErrors: true,
       }
     })
-    
     await client.connect()
     await client.db("admin").command({ ping: 1 })
     console.log("✅ Conectado ao MongoDB Atlas!")
-    
     dbClient = client
     db = client.db("ares_host")
-    
     await db.collection("users").createIndex({ chatId: 1 }, { unique: true })
     await db.collection("keys").createIndex({ key: 1 }, { unique: true })
     await db.collection("keys").createIndex({ usedBy: 1 })
     await db.collection("users").createIndex({ expiresAt: 1 })
-    
     console.log("✅ Índices do MongoDB criados")
     return db
   } catch (error) {
@@ -88,11 +84,11 @@ if (!BUCKET_CONFIG.bucketName || !BUCKET_CONFIG.credentials.accessKeyId || !BUCK
   process.exit(1)
 }
 
-const s3Client = new S3Client({ 
-  endpoint: BUCKET_CONFIG.endpoint, 
-  region: BUCKET_CONFIG.region, 
-  credentials: BUCKET_CONFIG.credentials, 
-  forcePathStyle: true 
+const s3Client = new S3Client({
+  endpoint: BUCKET_CONFIG.endpoint,
+  region: BUCKET_CONFIG.region,
+  credentials: BUCKET_CONFIG.credentials,
+  forcePathStyle: true
 })
 
 console.log("✅ Bucket Backblaze B2 configurado:", BUCKET_CONFIG.bucketName)
@@ -412,9 +408,9 @@ async function listBotsInBucket() {
   try {
     const allBots = []
     try {
-      const response = await s3Client.send(new ListObjectsV2Command({ 
-        Bucket: BUCKET_CONFIG.bucketName, 
-        Prefix: "files_" 
+      const response = await s3Client.send(new ListObjectsV2Command({
+        Bucket: BUCKET_CONFIG.bucketName,
+        Prefix: "files_"
       }))
       const bots = (response.Contents || [])
         .map(o => o.Key.replace("files_", "").replace(".tar.gz", ""))
@@ -680,7 +676,6 @@ async function saveActiveKeys(data) {
       ...value,
       updatedAt: new Date()
     }))
-    
     for (const keyData of keysArray) {
       await db.collection(KEYS_COLLECTION).updateOne(
         { key: keyData.key },
@@ -714,7 +709,6 @@ async function saveActivated(data) {
       ...value,
       updatedAt: new Date()
     }))
-    
     for (const userData of usersArray) {
       await db.collection(USERS_COLLECTION).updateOne(
         { chatId: userData.chatId },
@@ -738,21 +732,16 @@ async function isActivated(chatId) {
         return cached.activated
       }
     }
-    
     if (!db) return false
-    
     const user = await db.collection(USERS_COLLECTION).findOne({ chatId: String(chatId) })
-    
     if (!user) {
       activatedCache.set(chatId, { activated: false, timestamp: Date.now() })
       return false
     }
-    
     if (user.expiresAt && user.expiresAt < Date.now()) {
       activatedCache.set(chatId, { activated: false, timestamp: Date.now() })
       return false
     }
-    
     activatedCache.set(chatId, { activated: true, timestamp: Date.now() })
     return true
   } catch (error) {
@@ -765,7 +754,6 @@ async function activateUser(chatId, key, daysValid) {
   try {
     daysValid = daysValid || 30
     const expiresAt = Date.now() + daysValid * 24 * 60 * 60 * 1000
-    
     const userData = {
       chatId: String(chatId),
       key,
@@ -774,15 +762,12 @@ async function activateUser(chatId, key, daysValid) {
       daysValid,
       updatedAt: new Date()
     }
-    
     await db.collection(USERS_COLLECTION).updateOne(
       { chatId: String(chatId) },
       { $set: userData },
       { upsert: true }
     )
-    
     activatedCache.set(chatId, { activated: true, timestamp: Date.now() })
-    
     console.log(`✅ Usuário ${chatId} ativado até ${new Date(expiresAt).toLocaleString()}`)
     return true
   } catch (error) {
@@ -818,6 +803,63 @@ function generateKey(prefix) {
   const block1 = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
   const block2 = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
   return `${prefix}-${block1}-${block2}`
+}
+
+// ─────────────────────────────────────────────────────────────
+// HELPER CENTRAL: monta caption + teclado do menu principal
+// ─────────────────────────────────────────────────────────────
+async function buildHomeMenu(chatId, user) {
+  const activated = await isActivated(chatId)
+  const s = getStats(chatId)
+  const act = activated ? await getUserActivation(chatId) : null
+
+  const firstName = user ? (user.first_name || "") : ""
+  const lastName  = user ? (user.last_name  || "") : ""
+  const fullName  = (firstName + " " + lastName).trim() || "Usuário"
+  const username  = user?.username ? `@${user.username}` : `ID: ${chatId}`
+
+  let expiryLine = ""
+  if (act?.expiresAt) {
+    const left = daysLeft(act.expiresAt)
+    if (left <= 0)      expiryLine = `⛔ Expirado em ${fmtExpiry(act.expiresAt)}\n`
+    else if (left <= 7) expiryLine = `⚠️ Expira em *${left} dias* (${fmtExpiry(act.expiresAt)})\n`
+    else                expiryLine = `📅 Válido até *${fmtExpiry(act.expiresAt)}* (${left}d)\n`
+  }
+
+  if (activated) {
+    const caption =
+      `*${fullName}*\n${username}\n` +
+      (expiryLine ? expiryLine : "") +
+      `\n🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: "➕ Novo Bot",     callback_data: "menu_new"   }],
+        [{ text: "📂 Meus Bots",    callback_data: "menu_list"  }],
+        [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
+      ]
+    }
+    return { caption, keyboard, activated: true }
+  } else {
+    const activateUrl = `${DOMAIN}/activate?chatId=${chatId}`
+    const caption =
+      `*${fullName}*\n${username}\n\n` +
+      `🔒 *Conta não ativada*\n` +
+      `Ative sua conta para desbloquear todos os recursos do ARES HOST.`
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: "🔑 Ativar Conta", web_app: { url: activateUrl } }],
+        [
+          { text: "🔒 Novo Bot",    callback_data: "locked" },
+          { text: "🔒 Meus Bots",   callback_data: "locked" },
+        ],
+        [{ text: "🔒 Estatísticas", callback_data: "locked" }],
+      ]
+    }
+    return { caption, keyboard, activated: false }
+  }
 }
 
 const TERMOS_TEXTO = `📋 *Termos de Uso — ARES HOST*
@@ -866,29 +908,55 @@ function editTermos(chatId, msgId, checked) {
 
 const termoCheck = {}
 
+// ─────────────────────────────────────────────────────────────
+// /start — fluxo unificado
+// ─────────────────────────────────────────────────────────────
+bot.onText(/\/start/, async msg => {
+  const chatId = msg.chat.id
+
+  // Passo 1: se não aceitou termos, mostra termos primeiro
+  if (!hasAccepted(chatId)) {
+    termoCheck[chatId] = false
+    return sendTermos(chatId, false)
+  }
+
+  // Passo 2: termos ok — monta menu (ativado ou bloqueado)
+  const { caption, keyboard } = await buildHomeMenu(chatId, msg.from)
+  const fullCaption = `🚀 *ARES HOST*\n\n` + caption
+
+  try {
+    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
+    if (photos?.total_count > 0) {
+      const fileId = photos.photos[0][photos.photos[0].length - 1].file_id
+      return bot.sendPhoto(chatId, fileId, {
+        caption: fullCaption,
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      })
+    }
+  } catch {}
+
+  // Sem foto de perfil — envia só texto
+  bot.sendMessage(chatId, fullCaption, {
+    parse_mode: "Markdown",
+    reply_markup: keyboard
+  })
+})
+
+// /active — redireciona para o menu unificado
 bot.onText(/^\/active$/, async msg => {
   const chatId = msg.chat.id
-  if (await isActivated(chatId)) {
-    return bot.sendMessage(chatId,
-      "✅ *Sua conta já está ativada!*\n\nVocê já tem acesso ao ARES HOST.",
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [[{ text: "🚀 Abrir ARES HOST", callback_data: "menu_home" }]]
-        }
-      }
-    )
+
+  if (!hasAccepted(chatId)) {
+    termoCheck[chatId] = false
+    return sendTermos(chatId, false)
   }
-  const activateUrl = `${DOMAIN}/activate?chatId=${chatId}`
-  bot.sendMessage(chatId,
-    "🔑 *Ativação do ARES HOST*\n\nClique no botão abaixo para inserir sua chave de ativação.",
-    {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [[{ text: "🔑 Inserir chave", web_app: { url: activateUrl } }]]
-      }
-    }
-  )
+
+  const { caption, keyboard } = await buildHomeMenu(chatId, msg.from)
+  bot.sendMessage(chatId, `🚀 *ARES HOST*\n\n` + caption, {
+    parse_mode: "Markdown",
+    reply_markup: keyboard
+  })
 })
 
 bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
@@ -900,18 +968,15 @@ bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
   const prefix = isNaN(args[0]) ? (args[0] || "ARES") : "ARES"
   const days = parseInt(args.find(a => !isNaN(a))) || 30
   const key = generateKey(prefix)
-  
   const keys = await loadActiveKeys()
-  keys[key] = { 
-    createdAt: Date.now(), 
-    usedBy: null, 
-    prefix, 
+  keys[key] = {
+    createdAt: Date.now(),
+    usedBy: null,
+    prefix,
     daysValid: days,
     updatedAt: new Date()
   }
-  
   await saveActiveKeys(keys)
-  
   bot.sendMessage(chatId,
     `🔑 *Nova chave gerada:*\n\n\`${key}\`\n\n⏳ Validade: *${days} dias* após ativação\n\nEnvie essa chave para o usuário.`,
     { parse_mode: "Markdown" }
@@ -921,21 +986,16 @@ bot.onText(/^\/genkey(?:\s+(.+))?$/, async msg => {
 bot.onText(/^\/listkeys$/, async msg => {
   const chatId = msg.chat.id
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-  
   const keys = await loadActiveKeys()
   const activated = await loadActivated()
-  
   const total = Object.keys(keys).length
   const used = Object.values(keys).filter(k => k.usedBy).length
   const free = total - used
   const usersCount = Object.keys(activated).length
-  
   if (total === 0) return bot.sendMessage(chatId, "📋 Nenhuma chave gerada ainda. Use /genkey para criar.")
-  
   const lines = Object.entries(keys).slice(-20).map(([k, v]) => {
     return `${v.usedBy ? "✅" : "⬜"} \`${k}\`${v.usedBy ? " — usado" : ""}`
   }).join("\n")
-  
   bot.sendMessage(chatId,
     `🔑 *Chaves de ativação*\n\nTotal: *${total}* | Usadas: *${used}* | Livres: *${free}*\nUsuários ativados: *${usersCount}*\n\n${lines}`,
     { parse_mode: "Markdown" }
@@ -945,18 +1005,14 @@ bot.onText(/^\/listkeys$/, async msg => {
 bot.onText(/^\/listusers$/, async msg => {
   const chatId = msg.chat.id
   if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
-  
   const activated = await loadActivated()
   const users = Object.values(activated)
-  
   if (users.length === 0) return bot.sendMessage(chatId, "📋 Nenhum usuário ativado ainda.")
-  
   const lines = users.slice(-20).map(u => {
     const left = daysLeft(u.expiresAt)
     const status = left <= 0 ? "🔴 Expirado" : left <= 7 ? "🟡 " + left + "d" : "🟢 " + left + "d"
     return `${status} \`${u.chatId}\` - ${fmtExpiry(u.expiresAt)}`
   }).join("\n")
-  
   bot.sendMessage(chatId,
     `👥 *Usuários ativados:* ${users.length}\n\n${lines}`,
     { parse_mode: "Markdown" }
@@ -994,89 +1050,6 @@ bot.onText(/^\/reiniciar$/, async msg => {
   }
   bot.sendMessage(chatId, "🔄 Reiniciando processo...")
   setTimeout(() => process.exit(0), 1000)
-})
-
-bot.onText(/\/start/, async msg => {
-  const chatId = msg.chat.id
-  const activated = await isActivated(chatId)
-  
-  if (!activated && !hasAccepted(chatId)) {
-    termoCheck[chatId] = false
-    return sendTermos(chatId, false)
-  }
-  
-  if (!activated) {
-    return bot.sendMessage(chatId,
-      "🔑 *Acesso Restrito*\n\nVocê precisa ativar sua conta para usar o ARES HOST.\n\nUse /active para obter uma chave de ativação.",
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🔑 Ativar Conta", callback_data: "active" }]
-          ]
-        }
-      }
-    )
-  }
-  
-  if (!hasAccepted(chatId)) {
-    termoCheck[chatId] = false
-    return sendTermos(chatId, false)
-  }
-
-  const s = getStats(chatId)
-  const act = await getUserActivation(chatId)
-  const user = msg.from
-
-  const firstName = user.first_name || ""
-  const lastName = user.last_name || ""
-  const fullName = (firstName + " " + lastName).trim()
-  const username = user.username ? `@${user.username}` : `ID: ${chatId}`
-
-  let expiryLine = ""
-  if (act && act.expiresAt) {
-    const left = daysLeft(act.expiresAt)
-    if (left <= 0) {
-      expiryLine = `⛔ Expirado em ${fmtExpiry(act.expiresAt)}`
-    } else if (left <= 7) {
-      expiryLine = `⚠️ Expira em *${left} dias* (${fmtExpiry(act.expiresAt)})`
-    } else {
-      expiryLine = `📅 Válido até *${fmtExpiry(act.expiresAt)}* (${left}d)`
-    }
-  }
-
-  const caption =
-    `*${fullName}*\n` +
-    `${username}\n` +
-    (expiryLine ? expiryLine + "\n" : "") +
-    `\n` +
-    `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-    `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`
-
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-      [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-      [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
-    ]
-  }
-
-  try {
-    const photos = await bot.getUserProfilePhotos(chatId, { limit: 1 })
-    if (photos && photos.total_count > 0) {
-      const fileId = photos.photos[0][photos.photos[0].length - 1].file_id
-      return bot.sendPhoto(chatId, fileId, {
-        caption,
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      })
-    }
-  } catch (e) {}
-
-  bot.sendMessage(chatId,
-    `🚀 *ARES HOST*\n\n` + caption,
-    { parse_mode: "Markdown", reply_markup: keyboard }
-  )
 })
 
 function downloadFile(url, dest) {
@@ -1155,19 +1128,16 @@ function extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg) {
 
 bot.on("document", async msg => {
   const chatId = msg.chat.id
-  
   if (!await isActivated(chatId)) {
     return bot.sendMessage(chatId,
-      "🔑 *Acesso Restrito*\n\nVocê precisa ativar sua conta para usar o ARES HOST.\n\nUse /active para obter uma chave de ativação.",
+      "🔑 *Acesso Restrito*\n\nVocê precisa ativar sua conta para usar o ARES HOST.\n\nUse /start para ativar.",
       { parse_mode: "Markdown" }
     )
   }
-  
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
   }
-  
   if (!msg.document.file_name.toLowerCase().endsWith(".zip")) {
     return bot.sendMessage(chatId, "⚠️ *Arquivo invalido!*\n\nEnvie um arquivo .zip com o codigo do bot.", { parse_mode: "Markdown" })
   }
@@ -1182,16 +1152,11 @@ bot.on("document", async msg => {
 bot.on("message", async msg => {
   if (msg.document || msg.text?.startsWith("/")) return
   const chatId = msg.chat.id
-  
-  if (!await isActivated(chatId)) {
-    return
-  }
-  
+  if (!await isActivated(chatId)) return
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
   }
-  
   const state = userState[chatId]
   if (!state || (!state.fileId && !state.linkUrl)) {
     const text = msg.text?.trim() || ""
@@ -1246,23 +1211,49 @@ bot.on("callback_query", async query => {
   const id = colonIdx === -1 ? null : data.slice(colonIdx + 1)
   bot.answerCallbackQuery(query.id)
 
+  // ── Botão bloqueado (conta não ativada) ──
+  if (action === "locked") {
+    return bot.answerCallbackQuery(query.id, {
+      text: "🔒 Ative sua conta para usar este recurso.",
+      show_alert: true
+    })
+  }
+
+  // ── Termos ──
+  if (action === "termo_check") {
+    const nowChecked = id === "1"
+    termoCheck[chatId] = nowChecked
+    return editTermos(chatId, msgId, nowChecked)
+  }
+
+  if (action === "termo_confirmar") {
+    if (!termoCheck[chatId]) {
+      return bot.answerCallbackQuery(query.id, { text: "⚠️ Marque a caixa de confirmação primeiro!", show_alert: true })
+    }
+    saveAccepted(chatId)
+    delete termoCheck[chatId]
+    bot.deleteMessage(chatId, msgId).catch(() => {})
+
+    const { caption, keyboard } = await buildHomeMenu(chatId, query.from)
+    return bot.sendMessage(chatId,
+      `✅ *Termos aceitos! Bem-vindo ao ARES HOST.*\n\n🚀 *ARES HOST*\n\n` + caption,
+      { parse_mode: "Markdown", reply_markup: keyboard }
+    )
+  }
+
+  // ── A partir daqui, verifica ativação ──
   const activated = await isActivated(chatId)
 
-  if (action === "active") {
-    return bot.sendMessage(chatId,
-      "🔑 *Ativação do ARES HOST*\n\nUse /active para obter sua chave de ativação.",
-      { parse_mode: "Markdown" }
-    )
-  }
-
-  if (!activated && action !== "termo_check" && action !== "termo_confirmar") {
+  if (!activated) {
     bot.deleteMessage(chatId, msgId).catch(() => {})
+    const { caption, keyboard } = await buildHomeMenu(chatId, query.from)
     return bot.sendMessage(chatId,
-      "🔑 *Acesso Restrito*\n\nSua sessão expirou ou você não está ativado.\n\nUse /active para ativar sua conta.",
-      { parse_mode: "Markdown" }
+      `🚀 *ARES HOST*\n\n` + caption,
+      { parse_mode: "Markdown", reply_markup: keyboard }
     )
   }
 
+  // ── Limpeza (owner) ──
   if (action === "limpar_local" || action === "owner_limpar_confirm") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
     bot.editMessageText("🧹 Parando bots e limpando disco...", { chat_id: chatId, message_id: msgId })
@@ -1335,14 +1326,12 @@ bot.on("callback_query", async query => {
       for (const bid of Object.keys(activeBots)) {
         try { activeBots[bid].process.kill(); delete activeBots[bid] } catch (e) {}
       }
-
       if (fs.existsSync(BASE_PATH)) {
         fs.rmSync(BASE_PATH, { recursive: true, force: true })
       }
       fs.mkdirSync(BASE_PATH, { recursive: true, mode: 0o755 })
       fs.mkdirSync(path.join(BASE_PATH, "_users"), { recursive: true, mode: 0o755 })
       fs.mkdirSync(path.join(BASE_PATH, "_uploads"), { recursive: true, mode: 0o755 })
-
       let objDeleted = 0
       try {
         let cont = true
@@ -1367,7 +1356,6 @@ bot.on("callback_query", async query => {
       } catch (e) {
         console.error("Erro ao apagar bucket:", e.message)
       }
-
       const diskAfter = getDiskPercent()
       const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
       return bot.editMessageText(
@@ -1386,65 +1374,15 @@ bot.on("callback_query", async query => {
     return bot.editMessageText("❌ Limpeza cancelada.", { chat_id: chatId, message_id: msgId })
   }
 
-  if (action === "termo_check") {
-    const nowChecked = id === "1"
-    termoCheck[chatId] = nowChecked
-    return editTermos(chatId, msgId, nowChecked)
-  }
-  
-  if (action === "termo_confirmar") {
-    if (!termoCheck[chatId]) {
-      return bot.answerCallbackQuery(query.id, { text: "⚠️ Marque a caixa de confirmação primeiro!", show_alert: true })
-    }
-    saveAccepted(chatId)
-    delete termoCheck[chatId]
-    bot.deleteMessage(chatId, msgId).catch(() => {})
-    const s = getStats(chatId)
-    return bot.sendMessage(chatId,
-      `✅ *Termos aceitos! Bem-vindo ao ARES HOST.*\n\n` +
-      `🚀 *ARES HOST*\n\n` +
-      `🤖 Seus Bots: *${s.total}*  |  🟢 Online: *${s.online}*  |  🔴 Off: *${s.offline}*\n` +
-      `💾 RAM: *${s.ram}MB*  |  ⏱ Uptime: *${s.uptime}*`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-            [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-            [{ text: "📊 Estatisticas", callback_data: "menu_stats" }],
-          ]
-        }
-      }
-    )
-  }
-  
+  // ── Menu principal ──
   if (action === "menu_home") {
-    const s = getStats(chatId)
-    const act = await getUserActivation(chatId)
-    let expiryLine = ""
-    if (act && act.expiresAt) {
-      const left = daysLeft(act.expiresAt)
-      if (left <= 0) expiryLine = `\n⛔ Acesso expirado`
-      else if (left <= 7) expiryLine = `\n⚠️ Expira em *${left} dias*`
-      else expiryLine = `\n📅 Válido até *${fmtExpiry(act.expiresAt)}*`
-    }
+    const { caption, keyboard } = await buildHomeMenu(chatId, query.from)
     return bot.editMessageText(
-      `🚀 *ARES HOST*${expiryLine}\n\n` +
-      `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
-      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
-      {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "➕ Novo Bot", callback_data: "menu_new" }],
-            [{ text: "📂 Meus Bots", callback_data: "menu_list" }],
-            [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
-          ]
-        }
-      }
+      `🚀 *ARES HOST*\n\n` + caption,
+      { chat_id: chatId, message_id: msgId, parse_mode: "Markdown", reply_markup: keyboard }
     )
   }
-  
+
   if (action === "menu_new") {
     return bot.editMessageText(
       "➕ *Novo Bot*\n\n" +
@@ -1465,7 +1403,7 @@ bot.on("callback_query", async query => {
       }
     )
   }
-  
+
   if (action === "gen_upload") {
     const token = crypto.randomBytes(16).toString("hex")
     uploadTokens[token] = { chatId, createdAt: Date.now() }
@@ -1486,7 +1424,7 @@ bot.on("callback_query", async query => {
       }
     )
   }
-  
+
   if (action === "create_from_scratch") {
     try {
       console.log("🆕 Criando bot do zero para:", chatId)
@@ -1503,7 +1441,6 @@ bot.on("callback_query", async query => {
         dependencies: {}
       }
       fs.writeFileSync(path.join(instancePath, "package.json"), JSON.stringify(packageJson, null, 2))
-      console.log("✅ package.json criado")
       const indexJs = `console.log("🤖 Bot iniciado com sucesso!");
 
 const http = require('http');
@@ -1521,16 +1458,12 @@ process.on('uncaughtException', (err) => {
   console.error('Erro não tratado:', err);
 });`
       fs.writeFileSync(path.join(instancePath, "index.js"), indexJs)
-      console.log("✅ index.js criado")
       fs.writeFileSync(path.join(instancePath, "README.md"), "# Meu Bot\n\nBot criado do zero no ARES HOST.")
-      console.log("✅ README.md criado")
       saveMeta(botId, chatId, "meu-bot")
-      console.log("✅ Meta salva")
       await saveBotFilesToBucket(botId)
       const sessionToken = genWebSession(chatId)
       const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
       const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
-      console.log("✅ Bot criado com sucesso:", botId)
       return bot.editMessageText(
         `✅ *Bot criado do zero!*\n\n` +
         `🆔 ID: \`${botId}\`\n` +
@@ -1559,7 +1492,7 @@ process.on('uncaughtException', (err) => {
       )
     }
   }
-  
+
   if (action === "menu_list") {
     const folders = getUserBots(chatId)
     const s = getStats(chatId)
@@ -1590,7 +1523,7 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
-  
+
   if (action === "menu_stats") {
     const s = getStats(chatId)
     return bot.editMessageText(
@@ -1611,13 +1544,13 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
-  
+
   if (["manage", "stop", "start", "restart"].includes(action) && id) {
     if (getOwner(id) && getOwner(id) !== String(chatId)) {
       return bot.answerCallbackQuery(query.id, { text: "❌ Esse bot não é seu!", show_alert: true })
     }
   }
-  
+
   if (action === "manage" && id) {
     updateMetaAccess(id)
     const isRunning = !!activeBots[id]
@@ -1647,7 +1580,7 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
-  
+
   if (action === "stop" && id) {
     if (activeBots[id]) {
       activeBots[id].process.kill()
@@ -1671,7 +1604,7 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
-  
+
   if (action === "start" && id) {
     spawnBot(id, path.join(BASE_PATH, id))
     const sessionToken = genWebSession(chatId)
@@ -1692,7 +1625,7 @@ process.on('uncaughtException', (err) => {
       }
     )
   }
-  
+
   if (action === "restart" && id) {
     spawnBot(id, path.join(BASE_PATH, id))
     const sessionToken = genWebSession(chatId)
@@ -1715,10 +1648,10 @@ process.on('uncaughtException', (err) => {
   }
 })
 
-// Rotas Express
+// ─── Rotas Express (terminal, upload, files, activate) ───────
+
 app.get("/terminal/:botId", authBot, (req, res) => {
   const botId = req.params.botId
-  const sessionToken = req.query.s
   res.send(`<!DOCTYPE html>
 <html>
 <head>
@@ -1755,15 +1688,9 @@ app.get("/terminal/:botId", authBot, (req, res) => {
       term.clear();
       socket.emit('request-history', { botId });
     });
-    socket.on('history-' + botId, (data) => {
-      term.write(data);
-    });
-    socket.on('log-' + botId, (data) => {
-      term.write(data);
-    });
-    term.onData(data => {
-      socket.emit('input', { botId, data });
-    });
+    socket.on('history-' + botId, (data) => { term.write(data); });
+    socket.on('log-' + botId, (data) => { term.write(data); });
+    term.onData(data => { socket.emit('input', { botId, data }); });
   </script>
 </body>
 </html>`)
@@ -1772,16 +1699,10 @@ app.get("/terminal/:botId", authBot, (req, res) => {
 app.get("/upload/:token", (req, res) => {
   const info = uploadTokens[req.params.token]
   if (!info) {
-    return res.status(403).send(`
-      <!DOCTYPE html>
-      <html>
-      <head><meta charset="UTF-8"><title>ARES HOST</title>
-      <style>body{background:#0a0a0a;color:#fff;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-      .box{text-align:center;padding:40px;border:1px solid #333;border-radius:12px}
-      h2{color:#f44;margin:0 0 10px}</style></head>
-      <body><div class="box"><h2>❌ Link inválido ou expirado</h2><p>Gere um novo link pelo Telegram.</p></div></body>
-      </html>
-    `)
+    return res.status(403).send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>ARES HOST</title>
+<style>body{background:#0a0a0a;color:#fff;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.box{text-align:center;padding:40px;border:1px solid #333;border-radius:12px}h2{color:#f44;margin:0 0 10px}</style></head>
+<body><div class="box"><h2>❌ Link inválido ou expirado</h2><p>Gere um novo link pelo Telegram.</p></div></body></html>`)
   }
   res.send(`<!DOCTYPE html>
 <html>
@@ -2639,14 +2560,6 @@ function hEsc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function toast(m, t) {
-  var el = document.getElementById('toast');
-  el.textContent = m;
-  el.className = 'toast on ' + (t || '');
-  clearTimeout(el._t);
-  el._t = setTimeout(function() { el.className = 'toast'; }, 3000);
-}
-
 function fileIcon(n) {
   var e = xExt(n);
   var ico = {
@@ -2703,13 +2616,11 @@ function buildRows(items, depth, parentGuides) {
     var isLast = i === items.length - 1;
     var hp = hEsc(it.path);
     var hn = hEsc(it.name);
-
     var indentHtml = '';
     for (var g = 0; g < depth; g++) {
       var showGuide = parentGuides[g];
       indentHtml += '<span class="row-guide"' + (showGuide ? '' : ' style="opacity:0"') + '></span>';
     }
-
     if (it.type === 'dir') {
       var o = openDirs.has(it.path);
       h += '<div class="row" data-act="dir" data-p="' + hp + '">';
@@ -2752,9 +2663,7 @@ function renderTree() {
   var dirs = treeData.filter(function(x) { return x.type === 'dir'; });
   var files = treeData.filter(function(x) { return x.type === 'file'; });
   var html = '';
-  if (dirs.length) {
-    html += buildRows(dirs, 0, []);
-  }
+  if (dirs.length) html += buildRows(dirs, 0, []);
   if (files.length) {
     if (dirs.length) html += '<div style="height:1px;background:var(--bd);margin:4px 8px;opacity:.4"></div>';
     html += buildRows(files, 0, []);
@@ -2800,10 +2709,7 @@ function switchTo(p) {
 function closeTab(p) {
   if (dirty[p] && !confirm('Fechar sem salvar?')) return;
   tabs = tabs.filter(function(x) { return x !== p; });
-  if (models[p]) {
-    models[p].dispose();
-    delete models[p];
-  }
+  if (models[p]) { models[p].dispose(); delete models[p]; }
   delete dirty[p];
   if (curFile === p) {
     tabs.length ? openFile(tabs[tabs.length - 1]) : clearEditor();
@@ -2826,19 +2732,12 @@ function clearEditor() {
 }
 
 async function openFile(p) {
-  if (!ed) {
-    setTimeout(function() { openFile(p); }, 150);
-    return;
-  }
+  if (!ed) { setTimeout(function() { openFile(p); }, 150); return; }
   if (!models[p]) {
     try {
       setStatus('Abrindo...', 'loading');
       var r = await fetch(au('/read', 'path=' + encodeURIComponent(p)));
-      if (!r.ok) {
-        toast('Erro ao abrir (' + r.status + ')', 'err');
-        setStatus('Erro', 'err');
-        return;
-      }
+      if (!r.ok) { toast('Erro ao abrir (' + r.status + ')', 'err'); setStatus('Erro', 'err'); return; }
       var content = await r.text();
       models[p] = monaco.editor.createModel(content, getLang(p));
       dirty[p] = false;
@@ -2848,11 +2747,7 @@ async function openFile(p) {
         if (curFile === p) document.getElementById('unsaved').style.display = 'inline';
         renderTabs();
       });
-    } catch (e) {
-      toast('Erro: ' + e.message, 'err');
-      setStatus('Erro', 'err');
-      return;
-    }
+    } catch (e) { toast('Erro: ' + e.message, 'err'); setStatus('Erro', 'err'); return; }
   }
   curFile = p;
   ed.setModel(models[p]);
@@ -2900,41 +2795,27 @@ async function doSave() {
       toast('Erro ao salvar: ' + await r.text(), 'err');
       setStatus('Erro', 'err');
     }
-  } catch (e) {
-    toast('Erro: ' + e.message, 'err');
-    setStatus('Erro', 'err');
-  }
+  } catch (e) { toast('Erro: ' + e.message, 'err'); setStatus('Erro', 'err'); }
 }
 
 async function doDel() {
   if (!curFile || !confirm('Excluir "' + curFile + '"?')) return;
   var r = await fetch(au('/delete'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: curFile })
   });
-  if (r.ok) {
-    toast('Excluido', 'ok');
-    closeTab(curFile);
-    loadTree();
-  } else {
-    toast('Erro: ' + await r.text(), 'err');
-  }
+  if (r.ok) { toast('Excluido', 'ok'); closeTab(curFile); loadTree(); }
+  else toast('Erro: ' + await r.text(), 'err');
 }
 
 async function delFolder(p) {
   if (!confirm('Excluir pasta "' + p + '" e todo o conteudo?')) return;
   var r = await fetch(au('/delete'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: p })
   });
-  if (r.ok) {
-    toast('Pasta excluida', 'ok');
-    loadTree();
-  } else {
-    toast('Erro: ' + await r.text(), 'err');
-  }
+  if (r.ok) { toast('Pasta excluida', 'ok'); loadTree(); }
+  else toast('Erro: ' + await r.text(), 'err');
 }
 
 async function doRename() {
@@ -2954,28 +2835,19 @@ async function qRename(p) {
 
 async function renFile(from, to) {
   var r = await fetch(au('/rename'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ from: from, to: to })
   });
   if (r.ok) {
     var ti = tabs.indexOf(from);
     if (ti > -1) tabs[ti] = to;
-    if (models[from]) {
-      models[to] = models[from];
-      delete models[from];
-    }
-    if (dirty[from] !== undefined) {
-      dirty[to] = dirty[from];
-      delete dirty[from];
-    }
+    if (models[from]) { models[to] = models[from]; delete models[from]; }
+    if (dirty[from] !== undefined) { dirty[to] = dirty[from]; delete dirty[from]; }
     if (curFile === from) curFile = to;
     await loadTree();
     if (curFile === to) openFile(to);
     toast('Renomeado', 'ok');
-  } else {
-    toast('Erro: ' + await r.text(), 'err');
-  }
+  } else toast('Erro: ' + await r.text(), 'err');
 }
 
 async function dupFile(p) {
@@ -2987,16 +2859,11 @@ async function dupFile(p) {
   var rr = await fetch(au('/read', 'path=' + encodeURIComponent(p)));
   if (!rr.ok) return;
   var rw = await fetch(au('/write'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: np, content: await rr.text() })
   });
-  if (rw.ok) {
-    await loadTree();
-    toast('Duplicado', 'ok');
-  } else {
-    toast('Erro', 'err');
-  }
+  if (rw.ok) { await loadTree(); toast('Duplicado', 'ok'); }
+  else toast('Erro', 'err');
 }
 
 function dlFile(p) {
@@ -3013,17 +2880,11 @@ function doNewFile() {
   openModal('Novo arquivo', 'nome.js', async function(fn) {
     var fp = folder ? folder + '/' + fn : fn;
     var r = await fetch(au('/write'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: fp, content: getTpl(fn) })
     });
-    if (r.ok) {
-      await loadTree();
-      openFile(fp);
-      toast('Criado', 'ok');
-    } else {
-      toast('Erro: ' + await r.text(), 'err');
-    }
+    if (r.ok) { await loadTree(); openFile(fp); toast('Criado', 'ok'); }
+    else toast('Erro: ' + await r.text(), 'err');
   });
 }
 
@@ -3031,17 +2892,11 @@ function doNewFileIn(folder) {
   openModal('Novo arquivo em /' + folder, 'nome.js', async function(fn) {
     var fp = folder + '/' + fn;
     var r = await fetch(au('/write'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: fp, content: getTpl(fn) })
     });
-    if (r.ok) {
-      await loadTree();
-      openFile(fp);
-      toast('Criado', 'ok');
-    } else {
-      toast('Erro: ' + await r.text(), 'err');
-    }
+    if (r.ok) { await loadTree(); openFile(fp); toast('Criado', 'ok'); }
+    else toast('Erro: ' + await r.text(), 'err');
   });
 }
 
@@ -3050,18 +2905,11 @@ function doNewFolder() {
   openModal('Nova pasta', 'minha-pasta', async function(fn) {
     var fp = folder ? folder + '/' + fn : fn;
     var r = await fetch(au('/mkdir'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: fp })
     });
-    if (r.ok) {
-      await loadTree();
-      openDirs.add(fp);
-      renderTree();
-      toast('Pasta criada', 'ok');
-    } else {
-      toast('Erro: ' + await r.text(), 'err');
-    }
+    if (r.ok) { await loadTree(); openDirs.add(fp); renderTree(); toast('Pasta criada', 'ok'); }
+    else toast('Erro: ' + await r.text(), 'err');
   });
 }
 
@@ -3077,13 +2925,8 @@ function getTpl(n) {
   return '';
 }
 
-function openUploadModal() {
-  document.getElementById('modal-upload').classList.add('on');
-}
-
-function closeUploadModal() {
-  document.getElementById('modal-upload').classList.remove('on');
-}
+function openUploadModal() { document.getElementById('modal-upload').classList.add('on'); }
+function closeUploadModal() { document.getElementById('modal-upload').classList.remove('on'); }
 
 async function uploadFiles(files) {
   var prog = document.getElementById('upl-prog');
@@ -3094,13 +2937,9 @@ async function uploadFiles(files) {
     var folder = curFile ? curFile.split('/').slice(0, -1).join('/') : '';
     var fp = folder ? folder + '/' + f.name : f.name;
     var content = await f.text().catch(function() { return null; });
-    if (content === null) {
-      prog.textContent = 'Erro: ' + f.name + ' (binario)';
-      continue;
-    }
+    if (content === null) { prog.textContent = 'Erro: ' + f.name + ' (binario)'; continue; }
     var r = await fetch(au('/write'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: fp, content: content })
     });
     if (r.ok) ok++;
@@ -3114,25 +2953,17 @@ async function loadPkgs() {
   el.innerHTML = '<div class="pe">Carregando...</div>';
   try {
     var r = await fetch(au('/package-json'));
-    if (!r.ok) {
-      el.innerHTML = '<div class="pe">Sem package.json</div>';
-      return;
-    }
+    if (!r.ok) { el.innerHTML = '<div class="pe">Sem package.json</div>'; return; }
     var pkg = await r.json();
     var deps = Object.assign({}, pkg.dependencies || {}, pkg.devDependencies || {});
     var devs = new Set(Object.keys(pkg.devDependencies || {}));
     var keys = Object.keys(deps);
-    if (!keys.length) {
-      el.innerHTML = '<div class="pe">Sem dependencias</div>';
-      return;
-    }
+    if (!keys.length) { el.innerHTML = '<div class="pe">Sem dependencias</div>'; return; }
     el.innerHTML = keys.map(function(name) {
       var db = devs.has(name) ? '<span style="color:var(--purple);font-size:9px;margin-left:4px">dev</span>' : '';
       return '<div class="pr"><span class="pn">' + hEsc(name) + db + '</span><span class="pv">' + hEsc(deps[name]) + '</span><button class="pd" data-del="' + hEsc(name) + '" title="Desinstalar">✕</button></div>';
     }).join('');
-  } catch (e) {
-    el.innerHTML = '<div class="pe">Erro: ' + hEsc(e.message) + '</div>';
-  }
+  } catch (e) { el.innerHTML = '<div class="pe">Erro: ' + hEsc(e.message) + '</div>'; }
 }
 
 async function installPkg(type) {
@@ -3158,15 +2989,10 @@ async function runNpm(args, label) {
   setStatus(label, 'loading');
   try {
     var r = await fetch(au('/npm-run'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ args: args })
     });
-    if (!r.ok) {
-      out.textContent += '\\nErro: ' + await r.text();
-      setStatus('Erro', 'err');
-      return;
-    }
+    if (!r.ok) { out.textContent += '\\nErro: ' + await r.text(); setStatus('Erro', 'err'); return; }
     var reader = r.body.getReader();
     var dec = new TextDecoder();
     while (true) {
@@ -3179,56 +3005,27 @@ async function runNpm(args, label) {
     term.scrollTop = term.scrollHeight;
     setStatus('Pronto', 'ok');
     toast(label, 'ok');
-  } catch (e) {
-    out.textContent += '\\nErro: ' + e.message;
-    setStatus('Erro', 'err');
-    toast('Erro: ' + e.message, 'err');
-  }
+  } catch (e) { out.textContent += '\\nErro: ' + e.message; setStatus('Erro', 'err'); toast('Erro: ' + e.message, 'err'); }
 }
 
 async function doSearch(q) {
   var el = document.getElementById('sr-list');
   try {
     var r = await fetch(au('/search', 'q=' + encodeURIComponent(q)));
-    if (!r.ok) {
-      el.innerHTML = '<div class="pe">Erro na busca</div>';
-      return;
-    }
+    if (!r.ok) { el.innerHTML = '<div class="pe">Erro na busca</div>'; return; }
     var res = await r.json();
-    if (!res.length) {
-      el.innerHTML = '<div class="pe">Nenhum resultado</div>';
-      return;
-    }
+    if (!res.length) { el.innerHTML = '<div class="pe">Nenhum resultado</div>'; return; }
     el.innerHTML = res.slice(0, 50).map(function(it) {
       return '<div class="sr-item" data-sr="' + hEsc(it.file) + '"><div class="sr-f">' + hEsc(it.file) + ':' + it.line + '</div><div class="sr-l">' + hEsc(it.preview) + '</div></div>';
     }).join('');
-  } catch (e) {
-    el.innerHTML = '<div class="pe">Erro: ' + hEsc(e.message) + '</div>';
-  }
+  } catch (e) { el.innerHTML = '<div class="pe">Erro: ' + hEsc(e.message) + '</div>'; }
 }
 
-function openFindBar() {
-  document.getElementById('findbar').classList.add('on');
-  document.getElementById('find-in').focus();
-  document.getElementById('find-in').select();
-}
-
-function closeFindBar() {
-  document.getElementById('findbar').classList.remove('on');
-  if (ed) ed.focus();
-}
-
-function findNext() {
-  if (ed) ed.getAction('editor.action.nextMatchFindAction').run();
-}
-
-function findPrev() {
-  if (ed) ed.getAction('editor.action.previousMatchFindAction').run();
-}
-
-function findReplace() {
-  if (ed) ed.getAction('editor.action.startFindReplaceAction').run();
-}
+function openFindBar() { document.getElementById('findbar').classList.add('on'); document.getElementById('find-in').focus(); document.getElementById('find-in').select(); }
+function closeFindBar() { document.getElementById('findbar').classList.remove('on'); if (ed) ed.focus(); }
+function findNext() { if (ed) ed.getAction('editor.action.nextMatchFindAction').run(); }
+function findPrev() { if (ed) ed.getAction('editor.action.previousMatchFindAction').run(); }
+function findReplace() { if (ed) ed.getAction('editor.action.startFindReplaceAction').run(); }
 
 function openModal(title, ph, cb) {
   modalCb = cb;
@@ -3239,10 +3036,7 @@ function openModal(title, ph, cb) {
   setTimeout(function() { document.getElementById('modal-in').focus(); }, 80);
 }
 
-function closeModal() {
-  document.getElementById('modal').classList.remove('on');
-  modalCb = null;
-}
+function closeModal() { document.getElementById('modal').classList.remove('on'); modalCb = null; }
 
 function confirmModal() {
   var v = document.getElementById('modal-in').value.trim();
@@ -3256,8 +3050,7 @@ function initMonaco() {
   require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
   require(['vs/editor/editor.main'], function() {
     monaco.editor.defineTheme('ares', {
-      base: 'vs-dark',
-      inherit: true,
+      base: 'vs-dark', inherit: true,
       rules: [
         { token: 'comment', foreground: '4a5568', fontStyle: 'italic' },
         { token: 'keyword', foreground: 'f472b6' },
@@ -3386,11 +3179,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   document.getElementById('tabs-bar').addEventListener('click', function(e) {
     var c = e.target.closest('[data-tc]');
-    if (c) {
-      e.stopPropagation();
-      closeTab(c.dataset.tc);
-      return;
-    }
+    if (c) { e.stopPropagation(); closeTab(c.dataset.tc); return; }
     var o = e.target.closest('[data-to]');
     if (o) switchTo(o.dataset.to);
   });
@@ -3406,9 +3195,7 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
   document.getElementById('find-in').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-      e.shiftKey ? findPrev() : findNext();
-    }
+    if (e.key === 'Enter') { e.shiftKey ? findPrev() : findNext(); }
     if (e.key === 'Escape') closeFindBar();
   });
 
@@ -3434,10 +3221,7 @@ document.addEventListener('DOMContentLoaded', function() {
     clearTimeout(srT);
     var q = this.value.trim();
     var el = document.getElementById('sr-list');
-    if (!q) {
-      el.innerHTML = '<div class="pe">Digite para buscar...</div>';
-      return;
-    }
+    if (!q) { el.innerHTML = '<div class="pe">Digite para buscar...</div>'; return; }
     el.innerHTML = '<div class="pe">Buscando...</div>';
     srT = setTimeout(function() { doSearch(q); }, 300);
   });
@@ -3525,15 +3309,11 @@ app.use("/files-api", authBot, (req, res, next) => {
     if (!fp) return res.status(400).send("Caminho inválido. Recebido: " + JSON.stringify(body))
     try {
       const dir = path.dirname(fp)
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
-      }
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
       fs.writeFileSync(fp, body.content !== undefined ? body.content : "", "utf8")
       saveBotFilesToBucket(botId).catch(() => {})
       return res.send("ok")
-    } catch (err) {
-      return res.status(500).send("Erro ao escrever: " + err.message)
-    }
+    } catch (err) { return res.status(500).send("Erro ao escrever: " + err.message) }
   }
 
   if (action === "/delete") {
@@ -3577,8 +3357,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     const pkgPath = path.join(botPath, "package.json")
     if (!fs.existsSync(pkgPath)) return res.status(404).send("Sem package.json")
     try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"))
-      return res.json(pkg)
+      return res.json(JSON.parse(fs.readFileSync(pkgPath, "utf8")))
     } catch (err) { return res.status(500).send("Erro ao ler package.json: " + err.message) }
   }
 
@@ -3723,20 +3502,11 @@ h1{font-size:22px;font-weight:700;color:var(--tx);letter-spacing:-.4px;margin-bo
 </div>
 <script>
 var tg = window.Telegram && window.Telegram.WebApp;
-if (tg) {
-  tg.ready();
-  tg.expand();
-  tg.MainButton.hide();
-}
-
+if (tg) { tg.ready(); tg.expand(); tg.MainButton.hide(); }
 var chatId = "${chatId}";
-
 fetch('/activate-api/check?chatId=' + chatId)
   .then(function(r){ return r.json(); })
-  .then(function(d){
-    if (d.activated) showOk();
-  }).catch(function(){});
-
+  .then(function(d){ if (d.activated) showOk(); }).catch(function(){});
 var inp = document.getElementById('key-input');
 inp.addEventListener('input', function(){
   var v = this.value.replace(/[^A-Z0-9]/gi,'').toUpperCase();
@@ -3745,19 +3515,14 @@ inp.addEventListener('input', function(){
   this.value = v.slice(0,14);
 });
 inp.addEventListener('keydown', function(e){ if(e.key==='Enter') activate(); });
-
 function showOk() {
   document.getElementById('form-view').style.display = 'none';
   document.getElementById('ok-view').style.display = 'block';
   if (tg) setTimeout(function(){ tg.close(); }, 2000);
 }
-
 async function activate() {
   var key = inp.value.trim().toUpperCase();
-  if (!key || key.length < 14) {
-    setStatus('Chave inválida. Use o formato ARES-3425-8059', 'err');
-    return;
-  }
+  if (!key || key.length < 14) { setStatus('Chave inválida. Use o formato ARES-3425-8059', 'err'); return; }
   var btn = document.getElementById('btn-activate');
   btn.disabled = true; btn.textContent = 'Verificando...';
   setStatus('', '');
@@ -3768,18 +3533,13 @@ async function activate() {
       body: JSON.stringify({ key: key, chatId: chatId })
     });
     var d = await r.json();
-    if (d.ok) {
-      showOk();
-    } else {
-      setStatus(d.error || 'Chave inválida ou já utilizada.', 'err');
-      btn.disabled = false; btn.textContent = 'Ativar';
-    }
+    if (d.ok) { showOk(); }
+    else { setStatus(d.error || 'Chave inválida ou já utilizada.', 'err'); btn.disabled = false; btn.textContent = 'Ativar'; }
   } catch(e) {
     setStatus('Erro de conexão. Tente novamente.', 'err');
     btn.disabled = false; btn.textContent = 'Ativar';
   }
 }
-
 function setStatus(msg, type) {
   var el = document.getElementById('status');
   el.textContent = msg;
@@ -3799,22 +3559,16 @@ app.get("/activate-api/check", async (req, res) => {
 app.post("/activate-api/activate", async (req, res) => {
   const { key, chatId } = req.body
   if (!key || !chatId) return res.status(400).json({ error: "Dados inválidos" })
-  
   if (await isActivated(chatId)) return res.json({ ok: true, already: true })
-  
   const inputKey = key.trim().toUpperCase()
   const keys = await loadActiveKeys()
-  
   if (!keys[inputKey]) return res.json({ ok: false, error: "Chave não encontrada" })
   if (keys[inputKey].usedBy) return res.json({ ok: false, error: "Chave já utilizada" })
-  
   keys[inputKey].usedBy = String(chatId)
   keys[inputKey].usedAt = Date.now()
   await saveActiveKeys(keys)
-  
   await activateUser(chatId, inputKey, keys[inputKey].daysValid || 30)
   saveAccepted(chatId)
-  
   try {
     const s = getStats(chatId)
     bot.sendMessage(chatId,
@@ -3830,7 +3584,6 @@ app.post("/activate-api/activate", async (req, res) => {
       }
     )
   } catch (e) {}
-  
   res.json({ ok: true })
 })
 
@@ -3849,9 +3602,7 @@ function cleanupOldLogs() {
   const now = Date.now()
   const diskPct = getDiskPercent()
   const MAX_AGE = diskPct >= 85 ? 1 * 60 * 60 * 1000 : diskPct >= 75 ? 4 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000
-  let logsRemovidos = 0
-  let espacoLiberado = 0
-  let nmRemovidos = 0
+  let logsRemovidos = 0, espacoLiberado = 0, nmRemovidos = 0
   for (const botId of bots) {
     const logPath = path.join(BASE_PATH, botId, "terminal.log")
     if (fs.existsSync(logPath)) {
@@ -3867,9 +3618,7 @@ function cleanupOldLogs() {
           }
           logsRemovidos++
         }
-      } catch (err) {
-        console.error(`Erro ao processar log de ${botId}:`, err.message)
-      }
+      } catch (err) { console.error(`Erro ao processar log de ${botId}:`, err.message) }
     }
     const nmPath = path.join(BASE_PATH, botId, "node_modules")
     if (fs.existsSync(nmPath) && !activeBots[botId]) {
@@ -3909,9 +3658,7 @@ setTimeout(checkDiskAlert, 10 * 60 * 1000)
 setInterval(() => {
   const now = Date.now()
   for (const [chatId, cached] of activatedCache.entries()) {
-    if (now - cached.timestamp > CACHE_TTL) {
-      activatedCache.delete(chatId)
-    }
+    if (now - cached.timestamp > CACHE_TTL) activatedCache.delete(chatId)
   }
 }, 10 * 60 * 1000)
 
@@ -3925,7 +3672,6 @@ process.on("SIGTERM", async () => {
     ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_users" && f !== ".git" && f !== "node_modules")
     : []
   for (const botId of bots) await saveBotFilesToBucket(botId)
-  
   if (dbClient) await dbClient.close()
   console.log("✅ Conexões fechadas. Encerrando.")
   process.exit(0)
@@ -3937,7 +3683,6 @@ process.on("SIGINT", async () => {
     ? fs.readdirSync(BASE_PATH).filter(f => f !== "_uploads" && f !== "_users" && f !== ".git" && f !== "node_modules")
     : []
   for (const botId of bots) await saveBotFilesToBucket(botId)
-  
   if (dbClient) await dbClient.close()
   process.exit(0)
 })
