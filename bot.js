@@ -129,11 +129,15 @@ function getMeta(botId) {
 }
 
 function updateMetaAccess(botId) {
-  const meta = getMeta(botId)
-  if (meta) {
-    meta.lastAccessed = Date.now()
-    fs.writeFileSync(path.join(BASE_PATH, botId, "meta.json"), JSON.stringify(meta))
-  }
+  setImmediate(() => {
+    try {
+      const meta = getMeta(botId)
+      if (meta) {
+        meta.lastAccessed = Date.now()
+        fs.writeFileSync(path.join(BASE_PATH, botId, "meta.json"), JSON.stringify(meta))
+      }
+    } catch (e) {}
+  })
 }
 
 function updateNodeModulesHash(botId, hash) {
@@ -327,6 +331,15 @@ async function downloadNodeModulesFromBucket(botId, targetPath, packageHash) {
   } finally {
     try { fs.unlinkSync(tarballPath) } catch {}
   }
+}
+
+const _saveDebounce = {}
+function saveBotFilesToBucketDebounced(botId) {
+  clearTimeout(_saveDebounce[botId])
+  _saveDebounce[botId] = setTimeout(() => {
+    delete _saveDebounce[botId]
+    saveBotFilesToBucketDebounced(botId)
+  }, 10000) // wait 10s of inactivity before saving
 }
 
 async function saveBotFilesToBucket(botId) {
@@ -614,17 +627,25 @@ io.on("connection", socket => {
 const USERS_PATH = path.join(BASE_PATH, "_users")
 if (!fs.existsSync(USERS_PATH)) fs.mkdirSync(USERS_PATH, { recursive: true })
 
+const _acceptedCache = new Set()
+
 function hasAccepted(chatId) {
+  const cid = String(chatId)
+  if (_acceptedCache.has(cid)) return true
   try {
-    const f = path.join(USERS_PATH, `${chatId}.json`)
-    return fs.existsSync(f) && JSON.parse(fs.readFileSync(f, "utf8")).accepted === true
+    const f = path.join(USERS_PATH, `${cid}.json`)
+    const ok = fs.existsSync(f) && JSON.parse(fs.readFileSync(f, "utf8")).accepted === true
+    if (ok) _acceptedCache.add(cid)
+    return ok
   } catch { return false }
 }
 
 function saveAccepted(chatId) {
+  const cid = String(chatId)
   if (!fs.existsSync(USERS_PATH)) fs.mkdirSync(USERS_PATH, { recursive: true })
-  const f = path.join(USERS_PATH, `${chatId}.json`)
+  const f = path.join(USERS_PATH, `${cid}.json`)
   fs.writeFileSync(f, JSON.stringify({ accepted: true, at: Date.now() }))
+  _acceptedCache.add(cid)
 }
 
 // ─── SISTEMA DE ATIVAÇÃO ───────────────────────────────────────────
@@ -674,7 +695,9 @@ async function saveActivated(data) {
 // Cache em memória para evitar chamadas repetidas ao bucket
 const _keysCache  = { data: null, ts: 0 }
 const _actCache   = { data: null, ts: 0 }
-const CACHE_TTL   = 30 * 1000 // 30s
+const CACHE_TTL   = 5 * 60 * 1000 // 5 min
+// Fast in-memory set for activation check (populated on first load)
+const _activatedSet = new Set()
 
 async function getActiveKeys() {
   if (_keysCache.data && Date.now() - _keysCache.ts < CACHE_TTL) return _keysCache.data
@@ -687,7 +710,15 @@ async function getActivated() {
   if (_actCache.data && Date.now() - _actCache.ts < CACHE_TTL) return _actCache.data
   _actCache.data = await loadActivated()
   _actCache.ts = Date.now()
+  // populate fast set
+  _activatedSet.clear()
+  for (const k of Object.keys(_actCache.data)) _activatedSet.add(k)
   return _actCache.data
+}
+
+// Fast sync check (uses in-memory set, no S3) — use for non-critical paths
+function isActivatedSync(chatId) {
+  return _activatedSet.has(String(chatId))
 }
 
 async function isActivated(chatId) {
@@ -705,6 +736,7 @@ async function activateUser(chatId, key, daysValid) {
   activated[String(chatId)] = { key, at: Date.now(), expiresAt, daysValid }
   _actCache.data = activated
   _actCache.ts = Date.now()
+  _activatedSet.add(String(chatId))  // instant update
   await saveActivated(activated)
 }
 
@@ -1370,7 +1402,20 @@ bot.on("callback_query", async query => {
     return sendStartMessage(chatId, null, null)
   }
   if (action === "menu_home") {
-    return sendStartMessage(chatId, msgId, "edit")
+    const s = getStats(chatId)
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: "➕ Novo Bot",     callback_data: "menu_new"   }],
+        [{ text: "📂 Meus Bots",    callback_data: "menu_list"  }],
+        [{ text: "📊 Estatísticas", callback_data: "menu_stats" }],
+      ]
+    }
+    return bot.editMessageText(
+      `🚀 *ARES HOST*\n\n` +
+      `🤖 Bots: *${s.total}*  🟢 *${s.online}*  🔴 *${s.offline}*\n` +
+      `💾 RAM: *${s.ram}MB*  ⏱ *${s.uptime}*`,
+      { chat_id: chatId, message_id: msgId, parse_mode: "Markdown", reply_markup: keyboard }
+    ).catch(() => {})
   }
   if (action === "menu_new") {
     return bot.editMessageText(
@@ -3516,7 +3561,7 @@ app.use("/files-api", authBot, (req, res, next) => {
         fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
       }
       fs.writeFileSync(fp, body.content !== undefined ? body.content : "", "utf8")
-      saveBotFilesToBucket(botId).catch(() => {})
+      saveBotFilesToBucketDebounced(botId)
       return res.send("ok")
     } catch (err) {
       return res.status(500).send("Erro ao escrever: " + err.message)
@@ -3530,7 +3575,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     if (!fs.existsSync(fp)) return res.status(404).send("Não encontrado")
     try {
       fs.statSync(fp).isDirectory() ? fs.rmSync(fp, { recursive: true, force: true }) : fs.unlinkSync(fp)
-      saveBotFilesToBucket(botId).catch(() => {})
+      saveBotFilesToBucketDebounced(botId)
       return res.send("ok")
     } catch (err) { return res.status(500).send("Erro ao deletar: " + err.message) }
   }
@@ -3541,7 +3586,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     if (!dp) return res.status(400).send("Caminho inválido")
     try {
       fs.mkdirSync(dp, { recursive: true, mode: 0o755 })
-      saveBotFilesToBucket(botId).catch(() => {})
+      saveBotFilesToBucketDebounced(botId)
       return res.send("ok")
     } catch (err) { return res.status(500).send("Erro ao criar pasta: " + err.message) }
   }
@@ -3555,7 +3600,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     try {
       fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o755 })
       fs.renameSync(from, to)
-      saveBotFilesToBucket(botId).catch(() => {})
+      saveBotFilesToBucketDebounced(botId)
       return res.send("ok")
     } catch (err) { return res.status(500).send("Erro ao renomear: " + err.message) }
   }
@@ -3584,7 +3629,7 @@ app.use("/files-api", authBot, (req, res, next) => {
     child.stderr.on("data", d => res.write(d.toString()))
     child.on("close", (code) => {
       if (code !== 0) res.write(`\nProcesso encerrado com código ${code}`)
-      saveBotFilesToBucket(botId).catch(() => {})
+      saveBotFilesToBucketDebounced(botId)
       res.end()
     })
     child.on("error", err => { res.write("\nErro: " + err.message); res.end() })
@@ -4634,6 +4679,13 @@ server.listen(PORT, async () => {
     if (err.code === "ETELEGRAM" && err.message.includes("409")) return
     console.error("polling_error:", err.message)
   })
+  // Warm caches in background (don't await — don't block startup)
+  getActivated().then(d => {
+    console.log(`✅ Cache de ativação aquecido: ${Object.keys(d).length} usuários`)
+  }).catch(() => {})
+  getActiveKeys().then(d => {
+    console.log(`✅ Cache de chaves aquecido: ${Object.keys(d).length} chaves`)
+  }).catch(() => {})
   await restoreAllBotsFromBucket()
   if (fs.existsSync(BASE_PATH)) {
     const bots = fs.readdirSync(BASE_PATH).filter(f => {
