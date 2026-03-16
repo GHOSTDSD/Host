@@ -1251,7 +1251,7 @@ async function sendStartMessage(chatId, msgId, mode, fromUser) {
 
 // Edita texto OU caption (para mensagens de foto do card /start)
 async function safeEdit(chatId, msgId, text, opts) {
-  const options = { chat_id: chatId, message_id: msgId, parse_mode: "Markdown", ...opts }
+  const options = { parse_mode: "Markdown", ...opts }
   try {
     return await bot.editMessageText(text, options)
   } catch (e) {
@@ -1314,14 +1314,14 @@ bot.on("callback_query", async query => {
       }
       const diskAfter = getDiskPercent()
       const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
-      return bot.editMessageText(
+      return safeEdit(chatId, msgId, 
         `✅ *Disco limpo!*\n\n` +
         `🛑 Bots parados: *${stopped}*\n` +
         `📦 node\\_modules: *${nmCount}*\n` +
         `📋 Logs: *${logCount}*\n` +
         `♻️ Reiniciando: *${restarted}* bots\n\n` +
         `💿 Disco: *${diskAfter}%*  |  💾 RAM: *${ramAfter}MB*`,
-        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
+        { parse_mode: "Markdown" }
       )
     } catch (err) {
       return safeEdit(chatId, msgId, `❌ Erro: ${err.message}`, { })
@@ -1392,12 +1392,12 @@ bot.on("callback_query", async query => {
 
       const diskAfter = getDiskPercent()
       const ramAfter = (process.memoryUsage().rss / 1024 / 1024).toFixed(0)
-      return bot.editMessageText(
+      return safeEdit(chatId, msgId, 
         `✅ *Tudo apagado!*\n\n` +
         `🗑️ Disco local: limpo\n` +
         `☁️ Objetos no bucket: *${objDeleted}* deletados\n\n` +
         `💿 Disco: *${diskAfter}%*  |  💾 RAM: *${ramAfter}MB*`,
-        { chat_id: chatId, message_id: msgId, parse_mode: "Markdown" }
+        { parse_mode: "Markdown" }
       )
     } catch (err) {
       return safeEdit(chatId, msgId, `❌ Erro: ${err.message}`, { })
@@ -1439,15 +1439,14 @@ bot.on("callback_query", async query => {
     ).catch(() => {})
   }
   if (action === "menu_new") {
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       "➕ *Novo Bot*\n\n" +
       "Escolha como criar seu bot:\n\n" +
       "📎 Envie um arquivo .zip (ate 20MB)\n" +
       "🔗 Envie um link publico do ZIP\n" +
       "🌐 Use a pagina de upload (sem limite)\n" +
       "🆕 Crie um bot do zero com editor",
-      {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+      { parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🌐 Upload via Web", callback_data: "gen_upload" }],
@@ -1463,12 +1462,11 @@ bot.on("callback_query", async query => {
     uploadTokens[token] = { chatId, createdAt: Date.now() }
     setTimeout(() => { delete uploadTokens[token] }, 15 * 60 * 1000)
     const uploadUrl = `${DOMAIN}/upload/${token}`
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       `🌐 *Link de Upload Gerado*\n\n` +
       `Acesse a pagina abaixo, escolha o .zip e o nome do bot:\n\n` +
       `⏳ Expira em *15 minutos*`,
-      {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+      { parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🌐 Abrir pagina de upload", url: uploadUrl }],
@@ -1522,7 +1520,7 @@ process.on('uncaughtException', (err) => {
       const editorUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
       const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
       console.log("✅ Bot criado com sucesso:", botId)
-      return bot.editMessageText(
+      return safeEdit(chatId, msgId, 
         `✅ *Bot criado do zero!*\n\n` +
         `🆔 ID: \`${botId}\`\n` +
         `📁 Estrutura básica criada:\n` +
@@ -1530,8 +1528,7 @@ process.on('uncaughtException', (err) => {
         `• index.js\n` +
         `• README.md\n\n` +
         `Agora edite os arquivos e depois inicie o bot.`,
-        {
-          chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+        { parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
               [{ text: "📁 Abrir Editor", url: editorUrl }],
@@ -1582,15 +1579,14 @@ process.on('uncaughtException', (err) => {
   }
   if (action === "menu_stats") {
     const s = getStats(chatId)
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       `📊 *Estatisticas*\n\n` +
       `🤖 Total: *${s.total}*\n` +
       `🟢 Online: *${s.online}*\n` +
       `🔴 Offline: *${s.offline}*\n` +
       `💾 RAM: *${s.ram}MB*\n` +
       `⏱ Uptime: *${s.uptime}*`,
-      {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+      { parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🔄 Atualizar", callback_data: "menu_stats" }],
@@ -1603,14 +1599,13 @@ process.on('uncaughtException', (err) => {
   if (false && action === "menu_market_disabled") {
     const sessionToken = genWebSession(chatId)
     const url = `${DOMAIN}/marketplace?s=${sessionToken}`
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       `🛒 *Marketplace de Bases*\n\n` +
       `Explore bases de bots de WhatsApp prontas criadas pela comunidade ARES!\n\n` +
       `✅ Gratuito e open source\n` +
       `📦 Instale com 1 clique\n` +
       `🤝 Contribua publicando a sua base`,
-      {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+      { parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🛒 Abrir Marketplace", url }],
@@ -1633,13 +1628,12 @@ process.on('uncaughtException', (err) => {
     const sessionToken = genWebSession(chatId)
     const terminalUrl = `${DOMAIN}/terminal/${id}?s=${sessionToken}`
     const filesUrl = `${DOMAIN}/files/${id}?s=${sessionToken}`
-    return bot.editMessageText(
+    return safeEdit(chatId, msgId, 
       `🛠 *Gerenciar Bot*\n\n` +
       `ID: \`${id}\`\n` +
       `Status: ${isRunning ? "🟢 Online" : "🔴 Offline"}\n` +
       `Log: ${logSize}`,
-      {
-        chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+      { parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "📟 Terminal", url: terminalUrl }],
@@ -4669,7 +4663,9 @@ setInterval(checkDiskAlert, 30 * 60 * 1000)
 setTimeout(checkDiskAlert, 10 * 60 * 1000)
 
 process.on("uncaughtException", err => {
-  if (err.code !== "EADDRINUSE") console.error("Erro não tratado:", err)
+  if (err.code === "EADDRINUSE") return
+  if (err.code === "ETELEGRAM") return  // Telegram API errors são tratados localmente
+  console.error("Erro não tratado:", err.message || err)
 })
 
 process.on("SIGTERM", async () => {
