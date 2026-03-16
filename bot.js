@@ -725,24 +725,30 @@ const activatedCache = new Map()
 const CACHE_TTL = 5 * 60 * 1000
 
 async function isActivated(chatId) {
+  // Normaliza SEMPRE para String para evitar mismatch number/string no Map
+  const cid = String(chatId)
   try {
-    if (activatedCache.has(chatId)) {
-      const cached = activatedCache.get(chatId)
-      if (Date.now() - cached.timestamp < CACHE_TTL) {
+    if (activatedCache.has(cid)) {
+      const cached = activatedCache.get(cid)
+      const age = Date.now() - cached.timestamp
+      // Cache positivo (ativado) dura CACHE_TTL
+      // Cache negativo (não ativado) dura só 10s para refletir ativação rapidamente
+      const ttl = cached.activated ? CACHE_TTL : 10 * 1000
+      if (age < ttl) {
         return cached.activated
       }
     }
     if (!db) return false
-    const user = await db.collection(USERS_COLLECTION).findOne({ chatId: String(chatId) })
+    const user = await db.collection(USERS_COLLECTION).findOne({ chatId: cid })
     if (!user) {
-      activatedCache.set(chatId, { activated: false, timestamp: Date.now() })
+      activatedCache.set(cid, { activated: false, timestamp: Date.now() })
       return false
     }
     if (user.expiresAt && user.expiresAt < Date.now()) {
-      activatedCache.set(chatId, { activated: false, timestamp: Date.now() })
+      activatedCache.set(cid, { activated: false, timestamp: Date.now() })
       return false
     }
-    activatedCache.set(chatId, { activated: true, timestamp: Date.now() })
+    activatedCache.set(cid, { activated: true, timestamp: Date.now() })
     return true
   } catch (error) {
     console.error("Erro ao verificar ativação:", error)
@@ -767,6 +773,9 @@ async function activateUser(chatId, key, durationMs) {
       { $set: userData },
       { upsert: true }
     )
+    // Limpa qualquer cache negativo e força positivo
+    activatedCache.delete(String(chatId))
+    activatedCache.delete(Number(chatId))
     activatedCache.set(String(chatId), { activated: true, timestamp: Date.now() })
     console.log(`✅ Usuário ${chatId} ativado até ${new Date(expiresAt).toLocaleString()}`)
     return true
@@ -3604,22 +3613,17 @@ app.post("/activate-api/activate", async (req, res) => {
   await saveActiveKeys(keys)
   await activateUser(chatId, inputKey, keys[inputKey].durationMs || (30 * 24 * 60 * 60 * 1000))
   saveAccepted(chatId)
+  // Garante que o cache seja limpo para o próximo /start refletir imediatamente
+  activatedCache.delete(String(chatId))
+  activatedCache.delete(Number(chatId))
   try {
-    const keyData = keys[inputKey]
-    const expiresAt = Date.now() + (keyData.durationMs || (30 * 24 * 60 * 60 * 1000))
-    const s = getStats(chatId)
+    // Envia direto o menu desbloqueado — sem precisar de /start
+    const { caption, keyboard } = await buildHomeMenu(chatId, null)
     bot.sendMessage(chatId,
-      `✅ *Conta ativada!*\n\nBem-vindo ao ARES HOST.\n\n📅 Válido até: *${fmtExpiry(expiresAt)}* (${keyData.durationLabel || "30d"})\n🤖 Seus bots: *${s.total}*`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🚀 Abrir Menu", callback_data: "menu_home" }]
-          ]
-        }
-      }
+      `✅ *Conta ativada com sucesso!*\n\n🚀 *ARES HOST*\n\n` + caption,
+      { parse_mode: "Markdown", reply_markup: keyboard }
     )
-  } catch (e) {}
+  } catch (e) { console.error("Erro ao enviar menu pós-ativação:", e.message) }
   res.json({ ok: true })
 })
 
