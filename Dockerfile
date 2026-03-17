@@ -1,15 +1,17 @@
-# Usando a imagem oficial do Node.js
-FROM node:20
+# Usando a imagem oficial do Node.js 25 (latest)
+FROM node:25-alpine
 
-# Instalando o GIT e ferramentas essenciais
-RUN apt-get update && apt-get install -y git python3 make g++ && rm -rf /var/lib/apt/lists/*
+# Instalando o GIT e ferramentas essenciais (versão Alpine)
+RUN apk add --no-cache git python3 make g++ unzip
 
 # Criando o diretório do app
 WORKDIR /app
 
 # Copiando os arquivos do Ares
 COPY package*.json ./
-RUN npm install
+
+# Instalando dependências
+RUN npm install -g npm@latest && npm install
 
 COPY . .
 
