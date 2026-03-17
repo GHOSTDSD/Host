@@ -1239,13 +1239,63 @@ function safeRelPath(zipEntryPath, instancePath) {
 }
 
 async function extractZip(zipPath, destPath) {
+  // Tenta primeiro com o método nativo (mais confiável)
+  try {
+    await extractZipNative(zipPath, destPath)
+    return
+  } catch (e) {
+    console.warn("extractZipNative falhou, tentando unzipper:", e.message)
+  }
+  // Fallback: unzipper
+  await extractZipStream(zipPath, destPath)
+}
+
+// Método 1: usa o comando unzip do sistema (mais robusto)
+function extractZipNative(zipPath, destPath) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("Timeout na extração (60s)"))
+    }, 60 * 1000)
+
+    // tenta unzip nativo
+    const { spawn: spawnProc } = require("child_process")
+    const proc = spawnProc("unzip", ["-o", "-q", zipPath, "-d", destPath], {
+      timeout: 55000
+    })
+    let stderr = ""
+    proc.stderr.on("data", d => { stderr += d.toString() })
+    proc.on("close", code => {
+      clearTimeout(timeout)
+      if (code === 0 || code === 1) {
+        // code 1 = avisos menores (arquivos já existem etc) — ok
+        resolve()
+      } else {
+        reject(new Error("unzip saiu com código " + code + ": " + stderr.slice(0, 200)))
+      }
+    })
+    proc.on("error", err => {
+      clearTimeout(timeout)
+      reject(err)
+    })
+  })
+}
+
+// Método 2: unzipper stream com pending counter
+function extractZipStream(zipPath, destPath) {
   return new Promise((resolve, reject) => {
     const errors = []
-    let pending = 0       // arquivos ainda sendo escritos
-    let parseDone = false // o parse terminou de ler todas as entradas
+    let pending = 0
+    let parseDone = false
+    let resolved = false
+
+    const timeout = setTimeout(() => {
+      if (!resolved) { resolved = true; reject(new Error("Timeout na extração stream (90s)")) }
+    }, 90 * 1000)
 
     function tryResolve() {
-      if (parseDone && pending === 0) {
+      if (parseDone && pending === 0 && !resolved) {
+        resolved = true
+        clearTimeout(timeout)
         if (errors.length) console.warn("Avisos na extração:", errors)
         resolve()
       }
@@ -1256,15 +1306,12 @@ async function extractZip(zipPath, destPath) {
       .on("entry", entry => {
         const rawName = entry.path
         const type = entry.type
-
         const fullDest = safeRelPath(rawName, destPath)
         if (!fullDest) { entry.autodrain(); return }
-
         const rel = path.relative(destPath, fullDest)
         if (rel.startsWith("node_modules") || rel.startsWith(".git")) {
           entry.autodrain(); return
         }
-
         if (type === "Directory") {
           try { fs.mkdirSync(fullDest, { recursive: true, mode: 0o755 }) } catch {}
           entry.autodrain()
@@ -1279,11 +1326,8 @@ async function extractZip(zipPath, destPath) {
           entry.on("error", e => { errors.push(e.message); pending--; tryResolve() })
         }
       })
-      .on("error", reject)
-      .on("finish", () => {
-        parseDone = true
-        tryResolve()
-      })
+      .on("error", e => { if (!resolved) { resolved=true; clearTimeout(timeout); reject(e) } })
+      .on("finish", () => { parseDone = true; tryResolve() })
   })
 }
 
@@ -1308,14 +1352,21 @@ function flattenIfNeeded(instancePath) {
 }
 
 async function extractAndSpawnAsync(botId, instancePath, zipPath, name, loadingMsg) {
+  const edit = (txt) => bot.editMessageText(txt, {
+    chat_id: loadingMsg.chat.id,
+    message_id: loadingMsg.message_id,
+    parse_mode: "Markdown"
+  }).catch(() => {})
+
   try {
+    await edit(`⏳ *Extraindo arquivos...*\n\n📦 \`${name}\``)
     await extractZip(zipPath, instancePath)
+    await edit(`⏳ *Organizando arquivos...*\n\n📦 \`${name}\``)
     flattenIfNeeded(instancePath)
-    // Remove bot.zip após extração
     try { fs.unlinkSync(zipPath) } catch {}
-    // Remove node_modules se veio no ZIP
     const nm = path.join(instancePath, "node_modules")
     if (fs.existsSync(nm)) fs.rmSync(nm, { recursive: true, force: true })
+    await edit(`⏳ *Salvando no bucket...*\n\n📦 \`${name}\``)
     await saveBotFilesToBucket(botId)
     spawnBot(botId, instancePath)
     const sessionToken = genWebSession(loadingMsg.chat.id)
@@ -1340,10 +1391,11 @@ async function extractAndSpawnAsync(botId, instancePath, zipPath, name, loadingM
       }
     )
   } catch (err) {
-    bot.editMessageText(`❌ Erro ao extrair: ${err.message}`, {
-      chat_id: loadingMsg.chat.id,
-      message_id: loadingMsg.message_id
-    })
+    console.error("extractAndSpawnAsync erro:", err)
+    bot.editMessageText(
+      `❌ *Erro ao extrair:*\n\`${err.message}\``,
+      { chat_id: loadingMsg.chat.id, message_id: loadingMsg.message_id, parse_mode: "Markdown" }
+    ).catch(() => {})
   }
 }
 
