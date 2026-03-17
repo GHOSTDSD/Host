@@ -668,111 +668,28 @@ async function spawnBot(botId, instancePath) {
     try { activeBots[botId].process.kill() } catch {}
     delete activeBots[botId]
   }
-  
   const botPort = getFreePort()
   const env = {
     ...process.env,
     PORT: botPort.toString(),
     NODE_ENV: "production",
     FORCE_COLOR: "3",
-    TERM: "xterm-256color",
-    WHATSAPP_VERSION: "2.3000.1015901307",
-    // REMOVER NODE_TLS_REJECT_UNAUTHORIZED - pode causar problemas
+    TERM: "xterm-256color"
   }
-
-  writeLog(botId, instancePath, `🔍 Node.js version: ${process.version}\r\n`);
-  writeLog(botId, instancePath, `🔍 Platform: ${process.platform} ${process.arch}\r\n`);
-  
   updateMetaAccess(botId)
-  
-  // --- PATCH SIMPLIFICADO - APENAS MODIFICA O ARQUIVO DIRETAMENTE ---
-  try {
-    // Procura por connect.js em qualquer subpasta
-    const findConnectJs = (dir) => {
-      const files = fs.readdirSync(dir)
-      for (const file of files) {
-        if (file === 'node_modules' || file === '.git') continue
-        const fullPath = path.join(dir, file)
-        if (fs.statSync(fullPath).isDirectory()) {
-          const found = findConnectJs(fullPath)
-          if (found) return found
-        } else if (file === 'connect.js' || file === 'index.js' || file === 'main.js' || file === 'bot.js') {
-          return fullPath
-        }
-      }
-      return null
-    }
-
-    const mainFile = findConnectJs(instancePath)
-    if (mainFile && fs.existsSync(mainFile)) {
-      let content = fs.readFileSync(mainFile, 'utf8')
-      let modified = false
-
-      // APENAS adicionar a versão diretamente no makeWASocket
-      if (!content.includes('version: [2, 3000, 1015901307]')) {
-        content = content.replace(
-          /makeWASocket\(\s*\{/g, 
-          'makeWASocket({\n    version: [2, 3000, 1015901307],'
-        )
-        modified = true
-      }
-
-      // Corrigir browser
-      if (!content.includes("browser: ['Ubuntu', 'Chrome', '20.0.04']")) {
-        content = content.replace(
-          /browser:\s*\[[^\]]*\]/g,
-          "browser: ['Ubuntu', 'Chrome', '20.0.04']"
-        )
-        modified = true
-      }
-
-      // Adicionar keepAlive
-      if (!content.includes('keepAliveIntervalMs:')) {
-        content = content.replace(
-          /makeWASocket\(\s*\{/g,
-          'makeWASocket({\n    keepAliveIntervalMs: 25000,\n    defaultQueryTimeoutMs: 60000,'
-        )
-        modified = true
-      }
-
-      // Substituir logger problemático
-      if (content.includes('logger: LoggerB')) {
-        content = content.replace(
-          /logger:\s*LoggerB\.child\([^)]*\)/g,
-          "logger: require('pino')({ level: 'silent' })"
-        )
-        modified = true
-      }
-
-      if (modified) {
-        fs.writeFileSync(mainFile, content, 'utf8')
-        writeLog(botId, instancePath, `✅ Configurações anti-405 adicionadas diretamente em ${path.basename(mainFile)}\r\n`)
-      } else {
-        writeLog(botId, instancePath, `✅ Arquivo já estava configurado\r\n`)
-      }
-
-      // REMOVER patch.js se existir (pode estar causando o crash)
-      const patchPath = path.join(path.dirname(mainFile), 'patch.js')
-      if (fs.existsSync(patchPath)) {
-        fs.unlinkSync(patchPath)
-        writeLog(botId, instancePath, `✅ Removido patch.js que estava causando crash\r\n`)
-      }
-    }
-  } catch (err) {
-    writeLog(botId, instancePath, `⚠️ Erro ao configurar: ${err.message}\r\n`)
-  }
-
   const start = detectStart(instancePath)
   if (!start) {
     writeLog(botId, instancePath, "❌ Nenhum arquivo de entrada encontrado (index.js, main.js, bot.js...)\r\n")
     return
   }
 
+  // O cwd pode ser uma subpasta (ex: ARQUIVES/) onde está o package.json
   const workDir = start.cwd || instancePath
   if (workDir !== instancePath) {
     writeLog(botId, instancePath, `📁 Diretório de trabalho: ${path.relative(instancePath, workDir)}\r\n`)
   }
 
+  // node_modules pode estar na subpasta ou na raiz
   const nodeModulesPath = path.join(workDir, "node_modules")
   const pkgJsonPath = path.join(workDir, "package.json")
 
@@ -799,41 +716,25 @@ async function spawnBot(botId, instancePath) {
         }
       }
     }
-
+    // Lê todas as dependências do package.json e instala uma por uma
     let depsToInstall = []
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"))
-      
-      const allDeps = {
-        ...(pkg.dependencies || {}),
-        ...(pkg.devDependencies || {})
-      }
-      
-      depsToInstall = Object.entries(allDeps).map(([name, version]) => {
-        const cleanVersion = String(version).trim()
-        if (cleanVersion && !cleanVersion.startsWith('git') && 
-            !cleanVersion.startsWith('file') && !cleanVersion.startsWith('link') && 
-            !cleanVersion.startsWith('http')) {
-          return `${name}@${cleanVersion}`
+      const all = Object.assign({}, pkg.dependencies || {}, pkg.devDependencies || {})
+      depsToInstall = Object.entries(all).map(([name, ver]) => {
+        // versão limpa: remove ^ ~ >= <= etc mas mantém tags como "latest"
+        const clean = String(ver).replace(/^[\^~>=<]+/, "").trim()
+        // se ficou vazio, vazio com git:, file:, link: — usa só o nome
+        if (!clean || clean.startsWith("git") || clean.startsWith("file") || clean.startsWith("link") || clean.startsWith("http")) {
+          return name
         }
-        return name
+        return `${name}@${clean}`
       })
-
-      writeLog(botId, instancePath, `📦 Package.json encontrado com ${Object.keys(allDeps).length} dependência(s)\r\n`)
-      writeLog(botId, instancePath, `📋 Instalando versões específicas:\r\n`)
-      
-      Object.entries(allDeps).forEach(([name, ver]) => {
-        writeLog(botId, instancePath, `  • ${name}@${ver}\r\n`)
-      })
-      writeLog(botId, instancePath, `\r\n`)
-
     } catch (e) {
       writeLog(botId, instancePath, `⚠️ Erro ao ler package.json: ${e.message}\r\n`)
     }
 
-    if (fs.existsSync(nodeModulesPath)) {
-      fs.rmSync(nodeModulesPath, { recursive: true, force: true })
-    }
+    if (fs.existsSync(nodeModulesPath)) fs.rmSync(nodeModulesPath, { recursive: true, force: true })
 
     if (!depsToInstall.length) {
       writeLog(botId, instancePath, "⚠️ Nenhuma dependência encontrada no package.json\r\n")
@@ -841,42 +742,22 @@ async function spawnBot(botId, instancePath) {
       return
     }
 
-    writeLog(botId, instancePath, `📦 Instalando ${depsToInstall.length} dependência(s) com versões originais...\r\n`)
-    
-    const npm = os.platform() === "win32" ? "npm.cmd" : "npm"
-    
-    const installArgs = [
-      "install",
-      "--no-audit",
-      "--no-fund",
-      "--prefer-offline",
-      "--legacy-peer-deps",
-      ...depsToInstall
-    ]
-    
-    writeLog(botId, instancePath, `⚙️ Executando: npm ${installArgs.join(' ')}\r\n\r\n`)
+    writeLog(botId, instancePath, `📦 Instalando ${depsToInstall.length} dependência(s) individualmente...\r\n`)
+    writeLog(botId, instancePath, `📋 ${depsToInstall.join(", ")}\r\n\r\n`)
 
+    const npm = os.platform() === "win32" ? "npm.cmd" : "npm"
+    const installArgs = ["install", "--no-audit", "--no-fund", "--prefer-offline", "--legacy-peer-deps", ...depsToInstall]
     const install = pty.spawn(npm, installArgs, {
-      name: "xterm-color", 
-      cols: 160, 
-      rows: 48, 
-      cwd: workDir, 
-      env
+      name: "xterm-color", cols: 160, rows: 48, cwd: workDir, env
     })
-    
     install.onData(d => writeLog(botId, instancePath, d))
     install.onExit(async (code) => {
       if (code && code.exitCode !== 0) {
-        writeLog(botId, instancePath, `\r\n⚠️ Erro na instalação com versões específicas (código ${code.exitCode})\r\n`)
-        writeLog(botId, instancePath, `📦 Tentando instalar sem versões fixas...\r\n`)
-        
-        const namesOnly = depsToInstall.map(d => d.split('@')[0])
-        const fallback = pty.spawn(npm, ["install", "--no-audit", "--no-fund", "--legacy-peer-deps", ...namesOnly], {
-          name: "xterm-color", 
-          cols: 160, 
-          rows: 48, 
-          cwd: workDir, 
-          env
+        writeLog(botId, instancePath, `\r\n⚠️ npm install saiu com código ${code.exitCode}, tentando sem versões fixas...\r\n`)
+        // fallback: instala só os nomes sem versão
+        const names = depsToInstall.map(d => d.split("@")[0])
+        const fallback = pty.spawn(npm, ["install", "--no-audit", "--no-fund", "--legacy-peer-deps", ...names], {
+          name: "xterm-color", cols: 160, rows: 48, cwd: workDir, env
         })
         fallback.onData(d => writeLog(botId, instancePath, d))
         fallback.onExit(async () => {
@@ -890,6 +771,7 @@ async function spawnBot(botId, instancePath) {
     runInstance(botId, workDir, botPort, env, start)
   }
 }
+
 io.on("connection", socket => {
   socket.on("request-history", ({ botId }) => {
     const logPath = path.join(BASE_PATH, botId, "terminal.log")
