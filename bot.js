@@ -1241,16 +1241,25 @@ function safeRelPath(zipEntryPath, instancePath) {
 async function extractZip(zipPath, destPath) {
   return new Promise((resolve, reject) => {
     const errors = []
+    let pending = 0       // arquivos ainda sendo escritos
+    let parseDone = false // o parse terminou de ler todas as entradas
+
+    function tryResolve() {
+      if (parseDone && pending === 0) {
+        if (errors.length) console.warn("Avisos na extração:", errors)
+        resolve()
+      }
+    }
+
     fs.createReadStream(zipPath)
       .pipe(unzipper.Parse({ forceStream: true }))
       .on("entry", entry => {
         const rawName = entry.path
-        const type = entry.type  // "File" ou "Directory"
+        const type = entry.type
 
         const fullDest = safeRelPath(rawName, destPath)
         if (!fullDest) { entry.autodrain(); return }
 
-        // Pula node_modules e .git dentro do ZIP
         const rel = path.relative(destPath, fullDest)
         if (rel.startsWith("node_modules") || rel.startsWith(".git")) {
           entry.autodrain(); return
@@ -1260,17 +1269,20 @@ async function extractZip(zipPath, destPath) {
           try { fs.mkdirSync(fullDest, { recursive: true, mode: 0o755 }) } catch {}
           entry.autodrain()
         } else {
-          // Garante que a pasta pai existe
           const dir = path.dirname(fullDest)
           try { fs.mkdirSync(dir, { recursive: true, mode: 0o755 }) } catch {}
-          entry.pipe(fs.createWriteStream(fullDest))
-            .on("error", e => errors.push(e.message))
+          pending++
+          const ws = fs.createWriteStream(fullDest)
+          entry.pipe(ws)
+          ws.on("finish", () => { pending--; tryResolve() })
+          ws.on("error", e => { errors.push(e.message); pending--; tryResolve() })
+          entry.on("error", e => { errors.push(e.message); pending--; tryResolve() })
         }
       })
       .on("error", reject)
       .on("finish", () => {
-        if (errors.length) console.warn("Erros na extração:", errors)
-        resolve()
+        parseDone = true
+        tryResolve()
       })
   })
 }
