@@ -123,7 +123,7 @@ const PORT_START = 4000
 
 const LOG_CONFIG = {
   MAX_SIZE: 100 * 1024,
-  BUFFER_TIME: 5000
+  BUFFER_TIME: 100  // 100ms — rápido o suficiente para QR codes aparecerem
 }
 
 function saveMeta(botId, chatId, name) {
@@ -453,6 +453,16 @@ setInterval(async () => {
 }, 10 * 60 * 1000)
 
 function writeLog(botId, instancePath, data) {
+  // Emite imediatamente se parece ser QR code ou prompt interativo
+  const isImmediate = (
+    data.includes("█") || data.includes("▄") || data.includes("▀") ||
+    data.includes("▓") || data.includes("░") || data.includes("▒") ||
+    data.includes("QR") || data.includes("qr") ||
+    data.includes("╰━>") || data.includes("╚══") || data.includes("╔══") ||
+    data.includes("Scan") || data.includes("scan") ||
+    data.includes("\u001b[") // escape sequences ANSI
+  )
+
   if (!logBuffers[botId]) {
     logBuffers[botId] = []
     const interval = setInterval(() => {
@@ -476,7 +486,17 @@ function writeLog(botId, instancePath, data) {
       }
     }, LOG_CONFIG.BUFFER_TIME)
   }
+
   logBuffers[botId].push(data)
+
+  // Flush imediato para QR codes e prompts interativos
+  if (isImmediate && logBuffers[botId].length > 0) {
+    const logPath = path.join(instancePath, "terminal.log")
+    const content = logBuffers[botId].join("")
+    logBuffers[botId] = []
+    try { fs.appendFileSync(logPath, content) } catch {}
+    io.emit("log-" + botId, content)
+  }
 }
 
 // Busca o package.json mais próximo da raiz (BFS por nível)
@@ -600,7 +620,7 @@ function rebuildNativeModules(instancePath) {
     const rebuild = pty.spawn(
       os.platform() === "win32" ? "npm.cmd" : "npm",
       ["rebuild"],
-      { name: "xterm-color", cols: 80, rows: 40, cwd: instancePath, env }
+      { name: "xterm-color", cols: 160, rows: 48, cwd: instancePath, env }
     )
     rebuild.onData(d => { const botId = path.basename(instancePath); writeLog(botId, instancePath, d) })
     rebuild.onExit(resolve)
@@ -611,7 +631,7 @@ function runInstance(botId, workDir, botPort, env, start) {
   // cwd: subpasta se o start veio de lá, senão o próprio workDir
   const cwd = start.cwd || workDir
   const child = pty.spawn(start.cmd, start.args, {
-    name: "xterm-color", cols: 80, rows: 40, cwd, env
+    name: "xterm-color", cols: 160, rows: 48, cwd, env
   })
   activeBots[botId] = { process: child, port: botPort, path: workDir }
   child.onData(d => writeLog(botId, workDir, d))
@@ -728,7 +748,7 @@ async function spawnBot(botId, instancePath) {
     const npm = os.platform() === "win32" ? "npm.cmd" : "npm"
     const installArgs = ["install", "--no-audit", "--no-fund", "--prefer-offline", "--legacy-peer-deps", ...depsToInstall]
     const install = pty.spawn(npm, installArgs, {
-      name: "xterm-color", cols: 80, rows: 40, cwd: workDir, env
+      name: "xterm-color", cols: 160, rows: 48, cwd: workDir, env
     })
     install.onData(d => writeLog(botId, instancePath, d))
     install.onExit(async (code) => {
@@ -737,7 +757,7 @@ async function spawnBot(botId, instancePath) {
         // fallback: instala só os nomes sem versão
         const names = depsToInstall.map(d => d.split("@")[0])
         const fallback = pty.spawn(npm, ["install", "--no-audit", "--no-fund", "--legacy-peer-deps", ...names], {
-          name: "xterm-color", cols: 80, rows: 40, cwd: workDir, env
+          name: "xterm-color", cols: 160, rows: 48, cwd: workDir, env
         })
         fallback.onData(d => writeLog(botId, instancePath, d))
         fallback.onExit(async () => {
