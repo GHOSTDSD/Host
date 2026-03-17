@@ -668,15 +668,99 @@ async function spawnBot(botId, instancePath) {
     try { activeBots[botId].process.kill() } catch {}
     delete activeBots[botId]
   }
+  
   const botPort = getFreePort()
   const env = {
     ...process.env,
     PORT: botPort.toString(),
     NODE_ENV: "production",
     FORCE_COLOR: "3",
-    TERM: "xterm-256color"
+    TERM: "xterm-256color",
+    WHATSAPP_VERSION: "2.3000.1015901307"
   }
+  
   updateMetaAccess(botId)
+  
+  // --- PATCH ANTI-405: Modificar o arquivo connect.js antes de executar ---
+  try {
+    // Procura por connect.js em qualquer subpasta
+    const findConnectJs = (dir) => {
+      const files = fs.readdirSync(dir)
+      for (const file of files) {
+        if (file === 'node_modules' || file === '.git') continue
+        const fullPath = path.join(dir, file)
+        if (fs.statSync(fullPath).isDirectory()) {
+          const found = findConnectJs(fullPath)
+          if (found) return found
+        } else if (file === 'connect.js' || file === 'index.js' || file === 'main.js' || file === 'bot.js' || file === 'app.js' || file === 'server.js') {
+          return fullPath
+        }
+      }
+      return null
+    }
+
+    const mainFile = findConnectJs(instancePath)
+    if (mainFile && fs.existsSync(mainFile)) {
+      let content = fs.readFileSync(mainFile, 'utf8')
+      let modified = false
+
+      // Adicionar versão fixa no makeWASocket
+      if (!content.includes('version: [2, 3000, 1015901307]')) {
+        content = content.replace(
+          /makeWASocket\(\s*\{/g, 
+          'makeWASocket({\n    version: [2, 3000, 1015901307],'
+        )
+        modified = true
+      }
+
+      // Corrigir browser
+      if (!content.includes("browser: ['Ubuntu', 'Chrome', '20.0.04']")) {
+        content = content.replace(
+          /browser:\s*\[[^\]]*\]/g,
+          "browser: ['Ubuntu', 'Chrome', '20.0.04']"
+        )
+        modified = true
+      }
+
+      // Adicionar keepAlive
+      if (!content.includes('keepAliveIntervalMs:')) {
+        content = content.replace(
+          /makeWASocket\(\s*\{/g,
+          'makeWASocket({\n    keepAliveIntervalMs: 25000,\n    defaultQueryTimeoutMs: 60000,'
+        )
+        modified = true
+      }
+
+      // Remover logger problemático se existir
+      if (content.includes('logger: LoggerB')) {
+        content = content.replace(
+          /logger:\s*LoggerB\.child[^,]*/g,
+          "logger: require('pino')({ level: 'silent' })"
+        )
+        modified = true
+      }
+
+      if (modified) {
+        fs.writeFileSync(mainFile, content, 'utf8')
+        writeLog(botId, instancePath, `✅ Patch anti-405 aplicado em ${path.basename(mainFile)}\r\n`)
+      }
+
+      // Criar arquivo .env com configurações adicionais se não existir
+      const envPath = path.join(instancePath, '.env')
+      if (!fs.existsSync(envPath)) {
+        const envContent = `NODE_ENV=production
+WHATSAPP_VERSION=2.3000.1015901307
+FORCE_COLOR=3
+TERM=xterm-256color
+`
+        fs.writeFileSync(envPath, envContent)
+        writeLog(botId, instancePath, `✅ Arquivo .env criado\r\n`)
+      }
+    }
+  } catch (err) {
+    writeLog(botId, instancePath, `⚠️ Erro ao aplicar patch: ${err.message}\r\n`)
+  }
+
   const start = detectStart(instancePath)
   if (!start) {
     writeLog(botId, instancePath, "❌ Nenhum arquivo de entrada encontrado (index.js, main.js, bot.js...)\r\n")
@@ -715,37 +799,28 @@ async function spawnBot(botId, instancePath) {
       }
     }
 
-    // Lê o package.json e extrai TODAS as dependências com suas versões EXATAS
     let depsToInstall = []
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"))
       
-      // Junta dependencies e devDependencies
       const allDeps = {
         ...(pkg.dependencies || {}),
         ...(pkg.devDependencies || {})
       }
       
-      // Converte para array no formato "nome@versão" PRESERVANDO a versão original
       depsToInstall = Object.entries(allDeps).map(([name, version]) => {
-        // Limpa a versão mas MANTÉM o formato original (^, ~, etc)
         const cleanVersion = String(version).trim()
-        
-        // Se for uma versão normal (ex: ^1.2.3, ~2.0.0, 3.1.5)
         if (cleanVersion && !cleanVersion.startsWith('git') && 
             !cleanVersion.startsWith('file') && !cleanVersion.startsWith('link') && 
             !cleanVersion.startsWith('http')) {
           return `${name}@${cleanVersion}`
         }
-        
-        // Se for URL, git, etc, instala só o nome (o npm vai resolver)
         return name
       })
 
       writeLog(botId, instancePath, `📦 Package.json encontrado com ${Object.keys(allDeps).length} dependência(s)\r\n`)
       writeLog(botId, instancePath, `📋 Instalando versões específicas:\r\n`)
       
-      // Mostra as versões que serão instaladas (para debug)
       Object.entries(allDeps).forEach(([name, ver]) => {
         writeLog(botId, instancePath, `  • ${name}@${ver}\r\n`)
       })
@@ -769,7 +844,6 @@ async function spawnBot(botId, instancePath) {
     
     const npm = os.platform() === "win32" ? "npm.cmd" : "npm"
     
-    // Instalação com versões específicas do package.json
     const installArgs = [
       "install",
       "--no-audit",
@@ -795,7 +869,6 @@ async function spawnBot(botId, instancePath) {
         writeLog(botId, instancePath, `\r\n⚠️ Erro na instalação com versões específicas (código ${code.exitCode})\r\n`)
         writeLog(botId, instancePath, `📦 Tentando instalar sem versões fixas...\r\n`)
         
-        // Fallback: instala só os nomes (sem versão)
         const namesOnly = depsToInstall.map(d => d.split('@')[0])
         const fallback = pty.spawn(npm, ["install", "--no-audit", "--no-fund", "--legacy-peer-deps", ...namesOnly], {
           name: "xterm-color", 
@@ -816,7 +889,6 @@ async function spawnBot(botId, instancePath) {
     runInstance(botId, workDir, botPort, env, start)
   }
 }
-
 io.on("connection", socket => {
   socket.on("request-history", ({ botId }) => {
     const logPath = path.join(BASE_PATH, botId, "terminal.log")
