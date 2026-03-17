@@ -677,12 +677,12 @@ async function spawnBot(botId, instancePath) {
     FORCE_COLOR: "3",
     TERM: "xterm-256color",
     WHATSAPP_VERSION: "2.3000.1015901307",
-    NODE_TLS_REJECT_UNAUTHORIZED: "0",
+    // REMOVER NODE_TLS_REJECT_UNAUTHORIZED - pode causar problemas
   }
   
   updateMetaAccess(botId)
   
-  // --- PATCH CORRIGIDO - Cria o patch.js no local correto ---
+  // --- PATCH SIMPLIFICADO - APENAS MODIFICA O ARQUIVO DIRETAMENTE ---
   try {
     // Procura por connect.js em qualquer subpasta
     const findConnectJs = (dir) => {
@@ -702,104 +702,61 @@ async function spawnBot(botId, instancePath) {
 
     const mainFile = findConnectJs(instancePath)
     if (mainFile && fs.existsSync(mainFile)) {
-      const mainDir = path.dirname(mainFile)
       let content = fs.readFileSync(mainFile, 'utf8')
       let modified = false
 
-      // Criar o arquivo patch.js NO MESMO DIRETÓRIO do connect.js
-      const patchPath = path.join(mainDir, 'patch.js')
-      
-      // Conteúdo do patch.js
-      const patchCode = `
-// PATCH ANTI-405 - CORREÇÃO DEFINITIVA
-const originalMakeWASocket = require('@whiskeysockets/baileys').default;
-const { DisconnectReason } = require('@whiskeysockets/baileys');
-const pino = require('pino');
-
-// Configurações que funcionam comprovadamente
-const WORKING_VERSION = [2, 3000, 1015901307];
-const WORKING_BROWSER = ['Chrome', 'Linux', '10.0.0'];
-
-// Sobrescrever a função makeWASocket globalmente
-const makeWASocket = (config) => {
-  // Forçar versão correta
-  config.version = WORKING_VERSION;
-  config.browser = WORKING_BROWSER;
-  config.syncFullHistory = false;
-  config.markOnlineOnConnect = true;
-  config.keepAliveIntervalMs = 25000;
-  config.defaultQueryTimeoutMs = 60000;
-  config.generateHighQualityLinkPreview = false;
-  
-  // Substituir logger problemático
-  config.logger = pino({ level: 'silent' });
-  
-  // Tentar criar socket
-  try {
-    return originalMakeWASocket(config);
-  } catch (err) {
-    console.error('Erro ao criar socket:', err);
-    throw err;
-  }
-};
-
-// Substituir no module.exports
-const Baileys = require('@whiskeysockets/baileys');
-Baileys.default = makeWASocket;
-
-// Também substituir no cache do require
-const Module = require('module');
-const originalRequire = Module.prototype.require;
-Module.prototype.require = function(module) {
-  const result = originalRequire.call(this, module);
-  if (module.includes('@whiskeysockets/baileys') && result.default) {
-    result.default = makeWASocket;
-  }
-  return result;
-};
-
-console.log('✅ Patch anti-405 carregado com sucesso!');
-`
-      
-      fs.writeFileSync(patchPath, patchCode)
-      writeLog(botId, instancePath, `✅ Arquivo patch.js criado em ${path.relative(instancePath, patchPath)}\r\n`)
-
-      // Modificar o arquivo principal para usar o patch
-      // Verificar se já não foi patchado
-      if (!content.includes('require(\'./patch\')') && !content.includes('require("./patch")')) {
-        // Adicionar require no topo do arquivo
-        content = `// ARQUIVO PATCHADO PARA EVITAR ERRO 405
-require('./patch');
-
-${content}`
-        
-        fs.writeFileSync(mainFile, content, 'utf8')
-        writeLog(botId, instancePath, `✅ Arquivo ${path.basename(mainFile)} patchado com sucesso\r\n`)
+      // APENAS adicionar a versão diretamente no makeWASocket
+      if (!content.includes('version: [2, 3000, 1015901307]')) {
+        content = content.replace(
+          /makeWASocket\(\s*\{/g, 
+          'makeWASocket({\n    version: [2, 3000, 1015901307],'
+        )
         modified = true
       }
 
-      // Modificar o package.json para garantir que o patch seja carregado
-      const pkgPath = path.join(instancePath, 'package.json')
-      if (fs.existsSync(pkgPath)) {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-        
-        // Garantir que pino está nas dependências
-        if (!pkg.dependencies) pkg.dependencies = {}
-        if (!pkg.dependencies.pino) {
-          pkg.dependencies.pino = "^8.0.0"
-          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
-          writeLog(botId, instancePath, `✅ pino adicionado ao package.json\r\n`)
-        }
+      // Corrigir browser
+      if (!content.includes("browser: ['Ubuntu', 'Chrome', '20.0.04']")) {
+        content = content.replace(
+          /browser:\s*\[[^\]]*\]/g,
+          "browser: ['Ubuntu', 'Chrome', '20.0.04']"
+        )
+        modified = true
+      }
+
+      // Adicionar keepAlive
+      if (!content.includes('keepAliveIntervalMs:')) {
+        content = content.replace(
+          /makeWASocket\(\s*\{/g,
+          'makeWASocket({\n    keepAliveIntervalMs: 25000,\n    defaultQueryTimeoutMs: 60000,'
+        )
+        modified = true
+      }
+
+      // Substituir logger problemático
+      if (content.includes('logger: LoggerB')) {
+        content = content.replace(
+          /logger:\s*LoggerB\.child\([^)]*\)/g,
+          "logger: require('pino')({ level: 'silent' })"
+        )
+        modified = true
       }
 
       if (modified) {
-        writeLog(botId, instancePath, `✅ Patch anti-405 aplicado com sucesso\r\n`)
+        fs.writeFileSync(mainFile, content, 'utf8')
+        writeLog(botId, instancePath, `✅ Configurações anti-405 adicionadas diretamente em ${path.basename(mainFile)}\r\n`)
+      } else {
+        writeLog(botId, instancePath, `✅ Arquivo já estava configurado\r\n`)
       }
-    } else {
-      writeLog(botId, instancePath, `⚠️ Arquivo principal não encontrado para aplicar patch\r\n`)
+
+      // REMOVER patch.js se existir (pode estar causando o crash)
+      const patchPath = path.join(path.dirname(mainFile), 'patch.js')
+      if (fs.existsSync(patchPath)) {
+        fs.unlinkSync(patchPath)
+        writeLog(botId, instancePath, `✅ Removido patch.js que estava causando crash\r\n`)
+      }
     }
   } catch (err) {
-    writeLog(botId, instancePath, `⚠️ Erro ao aplicar patch: ${err.message}\r\n`)
+    writeLog(botId, instancePath, `⚠️ Erro ao configurar: ${err.message}\r\n`)
   }
 
   const start = detectStart(instancePath)
