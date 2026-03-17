@@ -479,25 +479,97 @@ function writeLog(botId, instancePath, data) {
   logBuffers[botId].push(data)
 }
 
-function detectStart(instancePath) {
-  const pkg = path.join(instancePath, "package.json")
-  if (fs.existsSync(pkg)) {
-    try {
-      const json = JSON.parse(fs.readFileSync(pkg))
-      if (json.scripts && json.scripts.start)
-        return { cmd: os.platform() === "win32" ? "npm.cmd" : "npm", args: ["start"] }
-    } catch {}
+// Busca o package.json mais próximo da raiz (BFS por nível)
+// Retorna { pkgDir, pkgJson } ou null
+function findPackageJson(instancePath, maxDepth) {
+  maxDepth = maxDepth || 3
+  const SKIP = new Set(["node_modules", ".git", ".github", "test", "tests", "__tests__", "coverage", "dist", "build"])
+  // BFS por nível
+  let queue = [{ dir: instancePath, depth: 0 }]
+  while (queue.length) {
+    const { dir, depth } = queue.shift()
+    const pkgPath = path.join(dir, "package.json")
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const json = JSON.parse(fs.readFileSync(pkgPath, "utf8"))
+        return { pkgDir: dir, pkgJson: json, pkgPath }
+      } catch {}
+    }
+    if (depth < maxDepth) {
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true })
+        for (const e of entries) {
+          if (e.isDirectory() && !SKIP.has(e.name) && !e.name.startsWith(".")) {
+            queue.push({ dir: path.join(dir, e.name), depth: depth + 1 })
+          }
+        }
+      } catch {}
+    }
   }
-  const files = fs.readdirSync(instancePath)
-  if (files.includes("index.js"))  return { cmd: "node",   args: ["index.js"] }
-  if (files.includes("main.js"))   return { cmd: "node",   args: ["main.js"] }
-  if (files.includes("bot.js"))    return { cmd: "node",   args: ["bot.js"] }
-  if (files.includes("server.js")) return { cmd: "node",   args: ["server.js"] }
-  if (files.includes("app.js"))    return { cmd: "node",   args: ["app.js"] }
-  if (files.includes("start.sh"))  return { cmd: "bash",   args: ["start.sh"] }
-  if (files.includes("run.sh"))    return { cmd: "bash",   args: ["run.sh"] }
-  if (files.includes("main.py"))   return { cmd: "python", args: ["main.py"] }
-  if (files.includes("bot.py"))    return { cmd: "python", args: ["bot.py"] }
+  return null
+}
+
+// Busca o arquivo de entrada (index.js, main.js, etc.) em um diretório
+function findEntryFile(dir) {
+  const ENTRY_FILES = ["index.js","main.js","bot.js","server.js","app.js","start.js","run.js","main.py","bot.py","start.sh","run.sh"]
+  try {
+    const files = fs.readdirSync(dir)
+    for (const entry of ENTRY_FILES) {
+      if (files.includes(entry)) return entry
+    }
+  } catch {}
+  return null
+}
+
+function detectStart(instancePath) {
+  // 1. Procura package.json (pode estar em subpasta)
+  const found = findPackageJson(instancePath)
+  if (found) {
+    const { pkgDir, pkgJson } = found
+    // Se tem script start, usa npm start no diretório do package.json
+    if (pkgJson.scripts && pkgJson.scripts.start) {
+      return {
+        cmd: os.platform() === "win32" ? "npm.cmd" : "npm",
+        args: ["start"],
+        cwd: pkgDir  // cwd pode ser subpasta
+      }
+    }
+    // Se tem main no package.json, usa ele
+    if (pkgJson.main) {
+      const mainFile = path.resolve(pkgDir, pkgJson.main)
+      if (fs.existsSync(mainFile)) {
+        return { cmd: "node", args: [pkgJson.main], cwd: pkgDir }
+      }
+    }
+    // Procura arquivo de entrada no mesmo dir do package.json
+    const entry = findEntryFile(pkgDir)
+    if (entry) {
+      const cmd = entry.endsWith(".py") ? "python" : entry.endsWith(".sh") ? "bash" : "node"
+      return { cmd, args: [entry], cwd: pkgDir }
+    }
+  }
+
+  // 2. Sem package.json — procura arquivo de entrada na raiz ou subpastas (BFS)
+  const SKIP = new Set(["node_modules", ".git", "dist", "build"])
+  let queue = [{ dir: instancePath, depth: 0 }]
+  while (queue.length) {
+    const { dir, depth } = queue.shift()
+    const entry = findEntryFile(dir)
+    if (entry) {
+      const cmd = entry.endsWith(".py") ? "python" : entry.endsWith(".sh") ? "bash" : "node"
+      return { cmd, args: [entry], cwd: dir }
+    }
+    if (depth < 2) {
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true })
+        for (const e of entries) {
+          if (e.isDirectory() && !SKIP.has(e.name) && !e.name.startsWith(".")) {
+            queue.push({ dir: path.join(dir, e.name), depth: depth + 1 })
+          }
+        }
+      } catch {}
+    }
+  }
   return null
 }
 
@@ -535,16 +607,19 @@ function rebuildNativeModules(instancePath) {
   })
 }
 
-function runInstance(botId, instancePath, botPort, env, start) {
+function runInstance(botId, workDir, botPort, env, start) {
+  // cwd: subpasta se o start veio de lá, senão o próprio workDir
+  const cwd = start.cwd || workDir
   const child = pty.spawn(start.cmd, start.args, {
-    name: "xterm-color", cols: 80, rows: 40, cwd: instancePath, env
+    name: "xterm-color", cols: 80, rows: 40, cwd, env
   })
-  activeBots[botId] = { process: child, port: botPort, path: instancePath }
-  child.onData(d => writeLog(botId, instancePath, d))
+  activeBots[botId] = { process: child, port: botPort, path: workDir }
+  child.onData(d => writeLog(botId, workDir, d))
   child.onExit(() => {
     releasePort(botPort)
     delete activeBots[botId]
-    const nmPath = path.join(instancePath, "node_modules")
+    // Limpa node_modules no diretório correto (pode ser subpasta)
+    const nmPath = path.join(cwd, "node_modules")
     if (fs.existsSync(nmPath)) {
       try { fs.rmSync(nmPath, { recursive: true, force: true }) } catch {}
     }
@@ -569,29 +644,39 @@ async function spawnBot(botId, instancePath) {
   updateMetaAccess(botId)
   const start = detectStart(instancePath)
   if (!start) {
-    writeLog(botId, instancePath, "❌ Nenhum start detectado\r\n")
+    writeLog(botId, instancePath, "❌ Nenhum arquivo de entrada encontrado (index.js, main.js, bot.js...)\r\n")
     return
   }
-  const nodeModulesPath = path.join(instancePath, "node_modules")
+
+  // O cwd pode ser uma subpasta (ex: ARQUIVES/) onde está o package.json
+  const workDir = start.cwd || instancePath
+  if (workDir !== instancePath) {
+    writeLog(botId, instancePath, `📁 Diretório de trabalho: ${path.relative(instancePath, workDir)}\r\n`)
+  }
+
+  // node_modules pode estar na subpasta ou na raiz
+  const nodeModulesPath = path.join(workDir, "node_modules")
+  const pkgJsonPath = path.join(workDir, "package.json")
+
   if (fs.existsSync(nodeModulesPath)) {
     writeLog(botId, instancePath, "✅ Usando node_modules existente\r\n")
-    runInstance(botId, instancePath, botPort, env, start)
+    runInstance(botId, workDir, botPort, env, start)
     return
   }
-  if (fs.existsSync(path.join(instancePath, "package.json"))) {
-    const packagePath = path.join(instancePath, "package.json")
-    const packageHash = getPackageHash(packagePath)
+
+  if (fs.existsSync(pkgJsonPath)) {
+    const packageHash = getPackageHash(pkgJsonPath)
     if (packageHash) {
       const exists = await checkNodeModulesInBucket(botId, packageHash)
       if (exists) {
         writeLog(botId, instancePath, "📥 Baixando node_modules do bucket...\r\n")
-        const downloaded = await downloadNodeModulesFromBucket(botId, instancePath, packageHash)
+        const downloaded = await downloadNodeModulesFromBucket(botId, workDir, packageHash)
         if (downloaded && fs.existsSync(nodeModulesPath)) {
           if (checkNativeModules(nodeModulesPath)) {
             writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n")
-            await rebuildNativeModules(instancePath)
+            await rebuildNativeModules(workDir)
           }
-          runInstance(botId, instancePath, botPort, env, start)
+          runInstance(botId, workDir, botPort, env, start)
           return
         }
       }
@@ -601,25 +686,25 @@ async function spawnBot(botId, instancePath) {
     const install = pty.spawn(
       os.platform() === "win32" ? "npm.cmd" : "npm",
       ["install", "--production", "--no-audit", "--no-fund"],
-      { name: "xterm-color", cols: 80, rows: 40, cwd: instancePath, env }
+      { name: "xterm-color", cols: 80, rows: 40, cwd: workDir, env }
     )
     install.onData(d => writeLog(botId, instancePath, d))
     install.onExit(async () => {
       if (fs.existsSync(nodeModulesPath)) {
         if (checkNativeModules(nodeModulesPath)) {
           writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n")
-          await rebuildNativeModules(instancePath)
+          await rebuildNativeModules(workDir)
         }
-        const packageHash = getPackageHash(path.join(instancePath, "package.json"))
+        const packageHash = getPackageHash(pkgJsonPath)
         if (packageHash) {
           writeLog(botId, instancePath, "📤 Salvando node_modules no bucket...\r\n")
           await uploadNodeModulesToBucket(botId, nodeModulesPath, packageHash)
         }
       }
-      runInstance(botId, instancePath, botPort, env, start)
+      runInstance(botId, workDir, botPort, env, start)
     })
   } else {
-    runInstance(botId, instancePath, botPort, env, start)
+    runInstance(botId, workDir, botPort, env, start)
   }
 }
 
@@ -947,6 +1032,8 @@ const termoCheck = {}
 // /start e /active — fluxo unificado (sem foto de perfil)
 // ─────────────────────────────────────────────────────────────
 async function handleStart(chatId, from) {
+  // Limpa qualquer estado pendente de upload/nome
+  delete userState[chatId]
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
     return sendTermos(chatId, false)
@@ -967,19 +1054,28 @@ bot.onText(/^\/active$/, msg => handleStart(msg.chat.id, msg.from))
 // ─────────────────────────────────────────────────────────────
 function parseDuration(str) {
   if (!str) return null
-  const re = /^(\d+(?:\.\d+)?)\s*(mn?|mo|mes|meses|y|yr|anos?|d|dias?|h|horas?|s|sec|w|semanas?)$/i
+  // Ordem importa: mn/min ANTES de m (mês), mo/mes ANTES de m
+  const re = /^(\d+(?:\.\d+)?)\s*(mn|min|minutos?|mo|mes(?:es)?|m|y|yr|anos?|d|dias?|h|horas?|s|sec|w|semanas?)$/i
   const m = String(str).trim().toLowerCase().match(re)
   if (!m) return null
   const n = parseFloat(m[1])
   const unit = m[2]
   let ms = 0
-  if (/^mn?$/.test(unit))       ms = n * 60 * 1000
-  else if (/^mo$|^mes/.test(unit)) ms = n * 30 * 24 * 60 * 60 * 1000
-  else if (/^y|^yr|^ano/.test(unit)) ms = n * 365 * 24 * 60 * 60 * 1000
-  else if (/^d/.test(unit))     ms = n * 24 * 60 * 60 * 1000
-  else if (/^h/.test(unit))     ms = n * 60 * 60 * 1000
-  else if (/^s/.test(unit))     ms = n * 1000
-  else if (/^w/.test(unit))     ms = n * 7 * 24 * 60 * 60 * 1000
+  // minutos: mn, min, minuto(s)
+  if (/^mn$|^min/.test(unit))            ms = n * 60 * 1000
+  // meses: mo, mes, meses  OU  m sozinho
+  else if (/^mo$|^mes/.test(unit))       ms = n * 30 * 24 * 60 * 60 * 1000
+  else if (/^m$/.test(unit))             ms = n * 30 * 24 * 60 * 60 * 1000
+  // anos
+  else if (/^y|^yr|^ano/.test(unit))     ms = n * 365 * 24 * 60 * 60 * 1000
+  // dias
+  else if (/^d/.test(unit))              ms = n * 24 * 60 * 60 * 1000
+  // horas
+  else if (/^h/.test(unit))              ms = n * 60 * 60 * 1000
+  // segundos
+  else if (/^s/.test(unit))              ms = n * 1000
+  // semanas
+  else if (/^w/.test(unit))              ms = n * 7 * 24 * 60 * 60 * 1000
   else return null
   if (ms <= 0) return null
   const totalSec = Math.round(ms / 1000)
@@ -1116,58 +1212,131 @@ function downloadFile(url, dest) {
   })
 }
 
+// ─────────────────────────────────────────────────────────────
+// Extração robusta: garante estrutura de pastas correta
+// ─────────────────────────────────────────────────────────────
+
+// Normaliza separadores de caminho do ZIP (pode vir com \ no Windows)
+function normZipPath(p) {
+  return p.replace(/\\/g, "/").replace(/\/+/g, "/")
+}
+
+// Sanitiza um segmento de caminho (remove caracteres perigosos)
+function sanitizeSeg(seg) {
+  return seg.replace(/[/\\:*?"<>|\x00-\x1f]/g, "_").trim()
+}
+
+// Converte path do ZIP em path seguro relativo ao instancePath
+function safeRelPath(zipEntryPath, instancePath) {
+  const norm = normZipPath(zipEntryPath)
+  const segs = norm.split("/").map(s => sanitizeSeg(s)).filter(s => s && s !== "..")
+  if (!segs.length) return null
+  const rel = path.join(...segs)
+  const full = path.resolve(instancePath, rel)
+  // Garante que ficou dentro da pasta
+  if (!full.startsWith(path.resolve(instancePath))) return null
+  return full
+}
+
+async function extractZip(zipPath, destPath) {
+  return new Promise((resolve, reject) => {
+    const errors = []
+    fs.createReadStream(zipPath)
+      .pipe(unzipper.Parse({ forceStream: true }))
+      .on("entry", entry => {
+        const rawName = entry.path
+        const type = entry.type  // "File" ou "Directory"
+
+        const fullDest = safeRelPath(rawName, destPath)
+        if (!fullDest) { entry.autodrain(); return }
+
+        // Pula node_modules e .git dentro do ZIP
+        const rel = path.relative(destPath, fullDest)
+        if (rel.startsWith("node_modules") || rel.startsWith(".git")) {
+          entry.autodrain(); return
+        }
+
+        if (type === "Directory") {
+          try { fs.mkdirSync(fullDest, { recursive: true, mode: 0o755 }) } catch {}
+          entry.autodrain()
+        } else {
+          // Garante que a pasta pai existe
+          const dir = path.dirname(fullDest)
+          try { fs.mkdirSync(dir, { recursive: true, mode: 0o755 }) } catch {}
+          entry.pipe(fs.createWriteStream(fullDest))
+            .on("error", e => errors.push(e.message))
+        }
+      })
+      .on("error", reject)
+      .on("finish", () => {
+        if (errors.length) console.warn("Erros na extração:", errors)
+        resolve()
+      })
+  })
+}
+
+// Achata se o ZIP contém uma única pasta raiz (ex: meubot-main/)
 function flattenIfNeeded(instancePath) {
-  const entries = fs.readdirSync(instancePath).filter(e => e !== "bot.zip")
+  const entries = fs.readdirSync(instancePath).filter(e => e !== "bot.zip" && e !== "meta.json")
   if (entries.length === 1) {
     const single = path.join(instancePath, entries[0])
-    const stat = fs.statSync(single)
-    if (stat.isDirectory()) {
-      const subEntries = fs.readdirSync(single)
-      for (const file of subEntries) {
-        fs.renameSync(path.join(single, file), path.join(instancePath, file))
+    try {
+      const stat = fs.statSync(single)
+      if (stat.isDirectory()) {
+        const subEntries = fs.readdirSync(single)
+        for (const file of subEntries) {
+          const src = path.join(single, file)
+          const dst = path.join(instancePath, file)
+          if (!fs.existsSync(dst)) fs.renameSync(src, dst)
+        }
+        try { fs.rmdirSync(single) } catch {}
       }
-      fs.rmdirSync(single)
-    }
+    } catch {}
+  }
+}
+
+async function extractAndSpawnAsync(botId, instancePath, zipPath, name, loadingMsg) {
+  try {
+    await extractZip(zipPath, instancePath)
+    flattenIfNeeded(instancePath)
+    // Remove bot.zip após extração
+    try { fs.unlinkSync(zipPath) } catch {}
+    // Remove node_modules se veio no ZIP
+    const nm = path.join(instancePath, "node_modules")
+    if (fs.existsSync(nm)) fs.rmSync(nm, { recursive: true, force: true })
+    await saveBotFilesToBucket(botId)
+    spawnBot(botId, instancePath)
+    const sessionToken = genWebSession(loadingMsg.chat.id)
+    const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
+    const filesUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
+    bot.editMessageText(
+      `✅ *Bot criado com sucesso!*\n\n` +
+      `📦 Nome: *${name}*\n` +
+      `🆔 ID: \`${botId}\`\n` +
+      `🟢 Status: *Iniciando...*`,
+      {
+        chat_id: loadingMsg.chat.id,
+        message_id: loadingMsg.message_id,
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "📟 Terminal", url: terminalUrl }],
+            [{ text: "📁 Arquivos", url: filesUrl }],
+            [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
+          ]
+        }
+      }
+    )
+  } catch (err) {
+    bot.editMessageText(`❌ Erro ao extrair: ${err.message}`, {
+      chat_id: loadingMsg.chat.id,
+      message_id: loadingMsg.message_id
+    })
   }
 }
 
 function extractAndSpawn(botId, instancePath, zipPath, name, loadingMsg) {
-  fs.createReadStream(zipPath)
-    .pipe(unzipper.Extract({ path: instancePath }))
-    .on("close", async () => {
-      flattenIfNeeded(instancePath)
-      const nm = path.join(instancePath, "node_modules")
-      if (fs.existsSync(nm)) fs.rmSync(nm, { recursive: true, force: true })
-      await saveBotFilesToBucket(botId)
-      spawnBot(botId, instancePath)
-      const sessionToken = genWebSession(loadingMsg.chat.id)
-      const terminalUrl = `${DOMAIN}/terminal/${botId}?s=${sessionToken}`
-      const filesUrl = `${DOMAIN}/files/${botId}?s=${sessionToken}`
-      bot.editMessageText(
-        `✅ *Bot criado com sucesso!*\n\n` +
-        `📦 Nome: *${name}*\n` +
-        `🆔 ID: \`${botId}\`\n` +
-        `🟢 Status: *Iniciando...*`,
-        {
-          chat_id: loadingMsg.chat.id,
-          message_id: loadingMsg.message_id,
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "📟 Terminal", url: terminalUrl }],
-              [{ text: "📁 Arquivos", url: filesUrl }],
-              [{ text: "📂 Meus Bots", callback_data: "menu_list" }]
-            ]
-          }
-        }
-      )
-    })
-    .on("error", err => {
-      bot.editMessageText(`❌ Erro ao extrair: ${err.message}`, {
-        chat_id: loadingMsg.chat.id,
-        message_id: loadingMsg.message_id
-      })
-    })
+  extractAndSpawnAsync(botId, instancePath, zipPath, name, loadingMsg)
 }
 
 bot.on("document", async msg => {
