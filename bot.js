@@ -123,7 +123,7 @@ const PORT_START = 4000
 
 const LOG_CONFIG = {
   MAX_SIZE: 100 * 1024,
-  BUFFER_TIME: 100  // 100ms — rápido o suficiente para QR codes aparecerem
+  BUFFER_TIME: 100
 }
 
 function saveMeta(botId, chatId, name) {
@@ -270,32 +270,15 @@ function getStats(chatId = null) {
   return { total, online, offline: total - online, ram, uptime: `${h}h ${m}m` }
 }
 
-// Função para obter a versão do Node.js
-function getNodeVersion() {
-  try {
-    return process.version
-  } catch {
-    return "desconhecida"
-  }
-}
-
 function aresBanner() {
   process.stdout.write("\x1Bc")
   const s = getStats()
-  const nodeVersion = getNodeVersion()
   let diskUsage = "N/A"
   try {
     const df = execSync("df -h / | tail -1").toString()
     const parts = df.split(/\s+/)
     diskUsage = `${parts[4]} (${parts[2]}/${parts[1]})`
   } catch {}
-  
-  // Verifica se a versão do Node.js é recente (>= 20.x.x)
-  const nodeMajorVersion = parseInt(nodeVersion.slice(1).split('.')[0])
-  const versionWarning = nodeMajorVersion >= 25 ? "✅ ULTRA NODE 25+" : 
-                         nodeMajorVersion >= 22 ? "✅ NODE 22+ ATUALIZADO" : 
-                         nodeMajorVersion >= 20 ? "✅ NODE ATUALIZADO" : "⚠️ NODE DESATUALIZADO!"
-  
   console.log(`\n🚀 ARES HOST (BACKBLAZE B2 + MONGODB)
 📦 BOTS: ${s.total}
 🟢 ONLINE: ${s.online}
@@ -304,18 +287,7 @@ function aresBanner() {
 ⏱ UPTIME: ${s.uptime}
 💿 DISCO: ${diskUsage}
 ☁️  BUCKET: ${BUCKET_CONFIG.bucketName}
-🍃 MONGODB: Conectado
-🟢 NODE: ${nodeVersion} ${versionWarning}\n`)
-  
-  if (nodeMajorVersion < 20) {
-    console.log("⚠️  ATENÇÃO: A versão do Node.js está desatualizada!")
-    console.log("   Versão atual:", nodeVersion)
-    console.log("   Versão recomendada: >= 22.x.x (última estável: 25.x.x)\n")
-  } else if (nodeMajorVersion >= 25) {
-    console.log("🎉 PARABÉNS! Você está usando a versão mais recente do Node.js (v25+)\n")
-  } else if (nodeMajorVersion >= 22) {
-    console.log("✅ Node.js 22+ detectado - versão LTS atual\n")
-  }
+🍃 MONGODB: Conectado\n`)
 }
 
 function getPackageHash(packagePath) {
@@ -481,14 +453,13 @@ setInterval(async () => {
 }, 10 * 60 * 1000)
 
 function writeLog(botId, instancePath, data) {
-  // Emite imediatamente se parece ser QR code ou prompt interativo
   const isImmediate = (
     data.includes("█") || data.includes("▄") || data.includes("▀") ||
     data.includes("▓") || data.includes("░") || data.includes("▒") ||
     data.includes("QR") || data.includes("qr") ||
     data.includes("╰━>") || data.includes("╚══") || data.includes("╔══") ||
     data.includes("Scan") || data.includes("scan") ||
-    data.includes("\u001b[") // escape sequences ANSI
+    data.includes("\u001b[")
   )
 
   if (!logBuffers[botId]) {
@@ -517,7 +488,6 @@ function writeLog(botId, instancePath, data) {
 
   logBuffers[botId].push(data)
 
-  // Flush imediato para QR codes e prompts interativos
   if (isImmediate && logBuffers[botId].length > 0) {
     const logPath = path.join(instancePath, "terminal.log")
     const content = logBuffers[botId].join("")
@@ -527,12 +497,9 @@ function writeLog(botId, instancePath, data) {
   }
 }
 
-// Busca o package.json mais próximo da raiz (BFS por nível)
-// Retorna { pkgDir, pkgJson } ou null
 function findPackageJson(instancePath, maxDepth) {
   maxDepth = maxDepth || 3
   const SKIP = new Set(["node_modules", ".git", ".github", "test", "tests", "__tests__", "coverage", "dist", "build"])
-  // BFS por nível
   let queue = [{ dir: instancePath, depth: 0 }]
   while (queue.length) {
     const { dir, depth } = queue.shift()
@@ -557,7 +524,6 @@ function findPackageJson(instancePath, maxDepth) {
   return null
 }
 
-// Busca o arquivo de entrada (index.js, main.js, etc.) em um diretório
 function findEntryFile(dir) {
   const ENTRY_FILES = ["index.js","main.js","bot.js","server.js","app.js","start.js","run.js","main.py","bot.py","start.sh","run.sh"]
   try {
@@ -570,26 +536,22 @@ function findEntryFile(dir) {
 }
 
 function detectStart(instancePath) {
-  // 1. Procura package.json (pode estar em subpasta)
   const found = findPackageJson(instancePath)
   if (found) {
     const { pkgDir, pkgJson } = found
-    // Se tem script start, usa npm start no diretório do package.json
     if (pkgJson.scripts && pkgJson.scripts.start) {
       return {
         cmd: os.platform() === "win32" ? "npm.cmd" : "npm",
         args: ["start"],
-        cwd: pkgDir  // cwd pode ser subpasta
+        cwd: pkgDir
       }
     }
-    // Se tem main no package.json, usa ele
     if (pkgJson.main) {
       const mainFile = path.resolve(pkgDir, pkgJson.main)
       if (fs.existsSync(mainFile)) {
         return { cmd: "node", args: [pkgJson.main], cwd: pkgDir }
       }
     }
-    // Procura arquivo de entrada no mesmo dir do package.json
     const entry = findEntryFile(pkgDir)
     if (entry) {
       const cmd = entry.endsWith(".py") ? "python" : entry.endsWith(".sh") ? "bash" : "node"
@@ -597,7 +559,6 @@ function detectStart(instancePath) {
     }
   }
 
-  // 2. Sem package.json — procura arquivo de entrada na raiz ou subpastas (BFS)
   const SKIP = new Set(["node_modules", ".git", "dist", "build"])
   let queue = [{ dir: instancePath, depth: 0 }]
   while (queue.length) {
@@ -656,7 +617,6 @@ function rebuildNativeModules(instancePath) {
 }
 
 function runInstance(botId, workDir, botPort, env, start) {
-  // cwd: subpasta se o start veio de lá, senão o próprio workDir
   const cwd = start.cwd || workDir
   const child = pty.spawn(start.cmd, start.args, {
     name: "xterm-color", cols: 160, rows: 48, cwd, env
@@ -666,7 +626,6 @@ function runInstance(botId, workDir, botPort, env, start) {
   child.onExit(() => {
     releasePort(botPort)
     delete activeBots[botId]
-    // Limpa node_modules no diretório correto (pode ser subpasta)
     const nmPath = path.join(cwd, "node_modules")
     if (fs.existsSync(nmPath)) {
       try { fs.rmSync(nmPath, { recursive: true, force: true }) } catch {}
@@ -711,13 +670,11 @@ async function spawnBot(botId, instancePath) {
     return
   }
 
-  // O cwd pode ser uma subpasta (ex: ARQUIVES/) onde está o package.json
   const workDir = start.cwd || instancePath
   if (workDir !== instancePath) {
     writeLog(botId, instancePath, `📁 Diretório de trabalho: ${path.relative(instancePath, workDir)}\r\n`)
   }
 
-  // node_modules pode estar na subpasta ou na raiz
   const nodeModulesPath = path.join(workDir, "node_modules")
   const pkgJsonPath = path.join(workDir, "package.json")
 
@@ -744,15 +701,13 @@ async function spawnBot(botId, instancePath) {
         }
       }
     }
-    // Lê todas as dependências do package.json e instala uma por uma
+    
     let depsToInstall = []
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"))
       const all = Object.assign({}, pkg.dependencies || {}, pkg.devDependencies || {})
       depsToInstall = Object.entries(all).map(([name, ver]) => {
-        // versão limpa: remove ^ ~ >= <= etc mas mantém tags como "latest"
         const clean = String(ver).replace(/^[\^~>=<]+/, "").trim()
-        // se ficou vazio, vazio com git:, file:, link: — usa só o nome
         if (!clean || clean.startsWith("git") || clean.startsWith("file") || clean.startsWith("link") || clean.startsWith("http")) {
           return name
         }
@@ -782,7 +737,6 @@ async function spawnBot(botId, instancePath) {
     install.onExit(async (code) => {
       if (code && code.exitCode !== 0) {
         writeLog(botId, instancePath, `\r\n⚠️ npm install saiu com código ${code.exitCode}, tentando sem versões fixas...\r\n`)
-        // fallback: instala só os nomes sem versão
         const names = depsToInstall.map(d => d.split("@")[0])
         const fallback = pty.spawn(npm, ["install", "--no-audit", "--no-fund", "--legacy-peer-deps", ...names], {
           name: "xterm-color", cols: 160, rows: 48, cwd: workDir, env
@@ -902,14 +856,11 @@ const activatedCache = new Map()
 const CACHE_TTL = 5 * 60 * 1000
 
 async function isActivated(chatId) {
-  // Normaliza SEMPRE para String para evitar mismatch number/string no Map
   const cid = String(chatId)
   try {
     if (activatedCache.has(cid)) {
       const cached = activatedCache.get(cid)
       const age = Date.now() - cached.timestamp
-      // Cache positivo (ativado) dura CACHE_TTL
-      // Cache negativo (não ativado) dura só 10s para refletir ativação rapidamente
       const ttl = cached.activated ? CACHE_TTL : 10 * 1000
       if (age < ttl) {
         return cached.activated
@@ -950,7 +901,6 @@ async function activateUser(chatId, key, durationMs) {
       { $set: userData },
       { upsert: true }
     )
-    // Limpa qualquer cache negativo e força positivo
     activatedCache.delete(String(chatId))
     activatedCache.delete(Number(chatId))
     activatedCache.set(String(chatId), { activated: true, timestamp: Date.now() })
@@ -976,7 +926,6 @@ function fmtExpiry(ts) {
   if (!ts) return "Sem expiração"
   const d = new Date(ts)
   const diff = ts - Date.now()
-  // menos de 1 dia: mostra data + hora
   if (diff < 24 * 60 * 60 * 1000 && diff > 0) {
     return d.toLocaleString("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
   }
@@ -1015,9 +964,6 @@ function generateKey(prefix) {
   return `${prefix}-${block1}-${block2}`
 }
 
-// ─────────────────────────────────────────────────────────────
-// HELPER CENTRAL: monta caption + teclado do menu principal
-// ─────────────────────────────────────────────────────────────
 async function buildHomeMenu(chatId, user) {
   const activated = await isActivated(chatId)
   const s = getStats(chatId)
@@ -1120,11 +1066,7 @@ function editTermos(chatId, msgId, checked) {
 
 const termoCheck = {}
 
-// ─────────────────────────────────────────────────────────────
-// /start e /active — fluxo unificado (sem foto de perfil)
-// ─────────────────────────────────────────────────────────────
 async function handleStart(chatId, from) {
-  // Limpa qualquer estado pendente de upload/nome
   delete userState[chatId]
   if (!hasAccepted(chatId)) {
     termoCheck[chatId] = false
@@ -1141,32 +1083,21 @@ async function handleStart(chatId, from) {
 bot.onText(/\/start/, msg => handleStart(msg.chat.id, msg.from))
 bot.onText(/^\/active$/, msg => handleStart(msg.chat.id, msg.from))
 
-// ─────────────────────────────────────────────────────────────
-// Parser de duração: "1d" "2m" "5mn" "1y" "30h" "15s" "1w" etc.
-// ─────────────────────────────────────────────────────────────
 function parseDuration(str) {
   if (!str) return null
-  // Ordem importa: mn/min ANTES de m (mês), mo/mes ANTES de m
   const re = /^(\d+(?:\.\d+)?)\s*(mn|min|minutos?|mo|mes(?:es)?|m|y|yr|anos?|d|dias?|h|horas?|s|sec|w|semanas?)$/i
   const m = String(str).trim().toLowerCase().match(re)
   if (!m) return null
   const n = parseFloat(m[1])
   const unit = m[2]
   let ms = 0
-  // minutos: mn, min, minuto(s)
   if (/^mn$|^min/.test(unit))            ms = n * 60 * 1000
-  // meses: mo, mes, meses  OU  m sozinho
   else if (/^mo$|^mes/.test(unit))       ms = n * 30 * 24 * 60 * 60 * 1000
   else if (/^m$/.test(unit))             ms = n * 30 * 24 * 60 * 60 * 1000
-  // anos
   else if (/^y|^yr|^ano/.test(unit))     ms = n * 365 * 24 * 60 * 60 * 1000
-  // dias
   else if (/^d/.test(unit))              ms = n * 24 * 60 * 60 * 1000
-  // horas
   else if (/^h/.test(unit))              ms = n * 60 * 60 * 1000
-  // segundos
   else if (/^s/.test(unit))              ms = n * 1000
-  // semanas
   else if (/^w/.test(unit))              ms = n * 7 * 24 * 60 * 60 * 1000
   else return null
   if (ms <= 0) return null
@@ -1304,52 +1235,40 @@ function downloadFile(url, dest) {
   })
 }
 
-// ─────────────────────────────────────────────────────────────
-// Extração robusta: garante estrutura de pastas correta
-// ─────────────────────────────────────────────────────────────
-
-// Normaliza separadores de caminho do ZIP (pode vir com \ no Windows)
 function normZipPath(p) {
   return p.replace(/\\/g, "/").replace(/\/+/g, "/")
 }
 
-// Sanitiza um segmento de caminho (remove caracteres perigosos)
 function sanitizeSeg(seg) {
   return seg.replace(/[/\\:*?"<>|\x00-\x1f]/g, "_").trim()
 }
 
-// Converte path do ZIP em path seguro relativo ao instancePath
 function safeRelPath(zipEntryPath, instancePath) {
   const norm = normZipPath(zipEntryPath)
   const segs = norm.split("/").map(s => sanitizeSeg(s)).filter(s => s && s !== "..")
   if (!segs.length) return null
   const rel = path.join(...segs)
   const full = path.resolve(instancePath, rel)
-  // Garante que ficou dentro da pasta
   if (!full.startsWith(path.resolve(instancePath))) return null
   return full
 }
 
 async function extractZip(zipPath, destPath) {
-  // Tenta primeiro com o método nativo (mais confiável)
   try {
     await extractZipNative(zipPath, destPath)
     return
   } catch (e) {
     console.warn("extractZipNative falhou, tentando unzipper:", e.message)
   }
-  // Fallback: unzipper
   await extractZipStream(zipPath, destPath)
 }
 
-// Método 1: usa o comando unzip do sistema (mais robusto)
 function extractZipNative(zipPath, destPath) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(new Error("Timeout na extração (60s)"))
     }, 60 * 1000)
 
-    // tenta unzip nativo
     const { spawn: spawnProc } = require("child_process")
     const proc = spawnProc("unzip", ["-o", "-q", zipPath, "-d", destPath], {
       timeout: 55000
@@ -1359,7 +1278,6 @@ function extractZipNative(zipPath, destPath) {
     proc.on("close", code => {
       clearTimeout(timeout)
       if (code === 0 || code === 1) {
-        // code 1 = avisos menores (arquivos já existem etc) — ok
         resolve()
       } else {
         reject(new Error("unzip saiu com código " + code + ": " + stderr.slice(0, 200)))
@@ -1372,7 +1290,6 @@ function extractZipNative(zipPath, destPath) {
   })
 }
 
-// Método 2: unzipper stream com pending counter
 function extractZipStream(zipPath, destPath) {
   return new Promise((resolve, reject) => {
     const errors = []
@@ -1423,7 +1340,6 @@ function extractZipStream(zipPath, destPath) {
   })
 }
 
-// Achata se o ZIP contém uma única pasta raiz (ex: meubot-main/)
 function flattenIfNeeded(instancePath) {
   const entries = fs.readdirSync(instancePath).filter(e => e !== "bot.zip" && e !== "meta.json")
   if (entries.length === 1) {
@@ -1580,7 +1496,6 @@ bot.on("callback_query", async query => {
   const id = colonIdx === -1 ? null : data.slice(colonIdx + 1)
   bot.answerCallbackQuery(query.id)
 
-  // ── Botão bloqueado (conta não ativada) ──
   if (action === "locked") {
     return bot.answerCallbackQuery(query.id, {
       text: "🔒 Ative sua conta para usar este recurso.",
@@ -1588,7 +1503,6 @@ bot.on("callback_query", async query => {
     })
   }
 
-  // ── Termos ──
   if (action === "termo_check") {
     const nowChecked = id === "1"
     termoCheck[chatId] = nowChecked
@@ -1610,7 +1524,6 @@ bot.on("callback_query", async query => {
     )
   }
 
-  // ── A partir daqui, verifica ativação ──
   const activated = await isActivated(chatId)
 
   if (!activated) {
@@ -1622,7 +1535,6 @@ bot.on("callback_query", async query => {
     )
   }
 
-  // ── Limpeza (owner) ──
   if (action === "limpar_local" || action === "owner_limpar_confirm") {
     if (OWNER_ID && String(chatId) !== String(OWNER_ID)) return
     bot.editMessageText("🧹 Parando bots e limpando disco...", { chat_id: chatId, message_id: msgId })
@@ -1743,7 +1655,6 @@ bot.on("callback_query", async query => {
     return bot.editMessageText("❌ Limpeza cancelada.", { chat_id: chatId, message_id: msgId })
   }
 
-  // ── Menu principal ──
   if (action === "menu_home") {
     const { caption, keyboard } = await buildHomeMenu(chatId, query.from)
     return bot.editMessageText(
@@ -2016,8 +1927,6 @@ process.on('uncaughtException', (err) => {
     )
   }
 })
-
-// ─── Rotas Express (terminal, upload, files, activate) ───────
 
 app.get("/terminal/:botId", authBot, (req, res) => {
   const botId = req.params.botId
@@ -2310,7 +2219,6 @@ function buildEditorHtml(botId, sessionToken, API) {
   --top:48px;--bot:56px;--r:10px
 }
 html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-family:"Inter",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
-/* ── Topbar ── */
 #topbar{height:var(--top);background:var(--bg2);border-bottom:1px solid var(--bd);display:flex;align-items:center;padding:0 10px;gap:6px;flex-shrink:0;z-index:30;padding-top:env(safe-area-inset-top,0)}
 .logo{color:var(--green);font-weight:800;font-size:15px;display:flex;align-items:center;gap:5px}
 .logo-dot{width:7px;height:7px;background:var(--green);border-radius:50%;animation:pulse 2s infinite;box-shadow:0 0 6px var(--green)}
@@ -2328,13 +2236,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 #status-wrap{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--tx3)}
 #mbtn{background:none;border:none;color:var(--tx2);cursor:pointer;padding:6px;border-radius:8px;display:flex;align-items:center;justify-content:center;touch-action:manipulation;min-width:38px;min-height:38px}
 #mbtn:active{background:var(--bg3);color:var(--tx)}
-/* ── Layout ── */
 #layout{display:flex;height:calc(100vh - var(--top));position:relative;overflow:hidden}
 #side{width:280px;background:var(--bg2);display:flex;flex-direction:column;flex-shrink:0;transition:transform .25s cubic-bezier(.4,0,.2,1);z-index:20;position:fixed;top:var(--top);bottom:0;left:0;transform:translateX(-100%);box-shadow:6px 0 40px rgba(0,0,0,.7);border-right:1px solid var(--bd)}
 #side.open{transform:translateX(0)}
 #side-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:19;backdrop-filter:blur(4px)}
 #side-ov.on{display:block}
-/* ── Side tabs ── */
 #stabs{display:flex;border-bottom:1px solid var(--bd);flex-shrink:0;padding:0 4px;gap:2px;padding-top:4px}
 .stab{flex:1;padding:9px 4px 8px;text-align:center;font-size:11px;font-weight:700;color:var(--tx3);cursor:pointer;border-radius:8px 8px 0 0;display:flex;align-items:center;justify-content:center;gap:4px;user-select:none;touch-action:manipulation;min-height:40px;border-bottom:2px solid transparent}
 .stab.on{color:var(--green);border-bottom-color:var(--green);background:rgba(34,211,165,.06)}
@@ -2345,7 +2251,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .pbtns{display:flex;gap:1px}
 .ib{background:none;border:none;color:var(--tx3);cursor:pointer;padding:7px;border-radius:7px;line-height:1;display:flex;align-items:center;justify-content:center;touch-action:manipulation;min-width:34px;min-height:34px}
 .ib:active{background:var(--bg4);color:var(--green)}
-/* ── File tree ── */
 #tree{flex:1;overflow-y:auto;overflow-x:hidden;padding:6px 4px 80px;user-select:none;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:var(--bd) transparent}
 #tree::-webkit-scrollbar{width:3px}
 #tree::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
@@ -2363,11 +2268,9 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .row-main{display:flex;align-items:center;flex:1;min-width:0;padding-right:4px}
 .row .lbl{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-family:"JetBrains Mono",monospace;color:var(--tx);margin-left:5px}
 .row .lbl.d{color:#93c5fd;font-weight:600}
-/* ── Mobile row actions — always visible on mobile, hover on desktop ── */
 .row-acts{display:flex;align-items:center;gap:1px;flex-shrink:0;padding-right:4px}
 .ra{background:none;border:none;border-radius:6px;padding:6px;cursor:pointer;color:var(--tx3);display:flex;align-items:center;justify-content:center;touch-action:manipulation;min-width:32px;min-height:32px}
 .ra:active{color:var(--green);background:var(--bg5)}
-/* Ctx menu */
 #ctx-menu{display:none;position:fixed;background:var(--bg2);border:1px solid var(--bd2);border-radius:14px;box-shadow:0 12px 48px rgba(0,0,0,.6);z-index:9999;min-width:185px;overflow:hidden;padding:6px}
 #ctx-menu.on{display:block}
 .ctx-item{display:flex;align-items:center;gap:10px;padding:11px 14px;font-size:14px;color:var(--tx);cursor:pointer;border-radius:8px;touch-action:manipulation}
@@ -2375,7 +2278,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .ctx-item svg{color:var(--tx3);flex-shrink:0}
 .ctx-item.danger{color:var(--red)}.ctx-item.danger svg{color:var(--red)}
 .ctx-sep{height:1px;background:var(--bd);margin:4px 6px}
-/* Packages */
 .pinput{width:100%;background:var(--bg3);border:1px solid var(--bd);border-radius:9px;padding:11px 14px;color:var(--tx);font-size:16px;outline:none;font-family:"Inter",sans-serif;-webkit-appearance:none}
 .pinput:focus{border-color:var(--green);background:var(--bg4)}
 #pib{flex:1;padding:11px;border-radius:9px;background:var(--green2);border:1px solid var(--green);color:#000;font-weight:700;font-size:13px;cursor:pointer;touch-action:manipulation}
@@ -2392,7 +2294,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 #pkg-term{background:var(--bg);border-top:1px solid var(--bd);font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--green);overflow-y:auto;max-height:150px;display:none;-webkit-overflow-scrolling:touch}
 #pkg-term.on{display:block}
 #pkg-term pre{padding:10px 12px;white-space:pre-wrap;word-break:break-all;margin:0}
-/* Search */
 .sr-item{padding:11px 14px;cursor:pointer;border-bottom:1px solid var(--bd);touch-action:manipulation}
 .sr-item:active{background:var(--bg3)}
 .sr-f{font-size:10px;color:var(--tx3);font-family:"JetBrains Mono",monospace;margin-bottom:3px}
@@ -2400,7 +2301,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 #sr-list{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
 #sr-list::-webkit-scrollbar{width:3px}
 #sr-list::-webkit-scrollbar-thumb{background:var(--bd)}
-/* Right panel */
 #right{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 #tabs-bar{background:var(--bg2);border-bottom:1px solid var(--bd);display:flex;overflow-x:auto;flex-shrink:0;min-height:40px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 #tabs-bar::-webkit-scrollbar{height:0}
@@ -2411,7 +2311,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .tab .tx{font-size:11px;padding:3px 5px;border-radius:4px;color:var(--tx3);cursor:pointer;display:flex;align-items:center;min-width:22px;min-height:22px;justify-content:center}
 .tab .tx:active{background:var(--bd);color:var(--tx)}
 .tdot{width:6px;height:6px;background:var(--orange);border-radius:50%;flex-shrink:0}
-/* Find bar */
 #findbar{display:none;background:var(--bg2);border-bottom:1px solid var(--bd);padding:7px 10px;align-items:center;gap:6px;flex-shrink:0}
 #findbar.on{display:flex}
 #find-in{background:var(--bg3);border:1px solid var(--bd);border-radius:8px;padding:8px 12px;color:var(--tx);font-size:15px;outline:none;flex:1;font-family:"JetBrains Mono",monospace;-webkit-appearance:none}
@@ -2422,7 +2321,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 #find-close:active{color:var(--tx)}
 #infobar{background:var(--bg);border-bottom:1px solid var(--bd);padding:0 12px;height:24px;display:flex;align-items:center;gap:12px;font-size:10px;color:var(--tx3);flex-shrink:0;font-family:"JetBrains Mono",monospace}
 #infobar span{color:var(--tx2)}#cur-pos{margin-left:auto}
-/* Edit toolbar (mobile keyboard) */
 #edit-toolbar{display:none;position:absolute;bottom:calc(var(--bot) + 4px);left:4px;right:4px;background:var(--bg2);border:1px solid var(--bd2);border-radius:12px;padding:6px 4px;z-index:15;flex-direction:row;align-items:center;gap:0;box-shadow:0 4px 24px rgba(0,0,0,.5);overflow-x:auto;scrollbar-width:none}
 #edit-toolbar::-webkit-scrollbar{height:0}
 #edit-toolbar.on{display:flex}
@@ -2430,7 +2328,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .et-btn:active{background:var(--bg4);color:var(--green)}
 .et-sep{width:1px;height:28px;background:var(--bd);flex-shrink:0;margin:0 2px}
 #editor-wrap{flex:1;overflow:hidden;position:relative}
-/* Welcome */
 #welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;color:var(--tx3);padding:24px;text-align:center;background:radial-gradient(ellipse at 50% 0%,rgba(34,211,165,.04) 0%,transparent 60%)}
 .wlogo{opacity:.08;margin-bottom:16px}
 .wtitle{font-size:20px;color:var(--tx);font-weight:700;margin-bottom:6px}
@@ -2445,16 +2342,13 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .wact-text{flex:1}
 .wact-title{font-size:13px;font-weight:600;color:var(--tx);margin-bottom:2px}
 .wact-desc{font-size:11px;color:var(--tx3)}
-/* Status */
 #statusbar{height:22px;background:#0a0e17;border-top:1px solid var(--bd);display:flex;align-items:center;padding:0 12px;gap:10px;font-size:10px;color:var(--tx3);flex-shrink:0;font-family:"JetBrains Mono",monospace}
 #statusbar .si{display:flex;align-items:center;gap:4px}#statusbar .si span{color:var(--tx2)}.ssep{width:1px;height:10px;background:var(--bd)}
-/* Mobile bottom bar */
 #mob-bar{display:none;height:var(--bot);background:var(--bg2);border-top:1px solid var(--bd);flex-shrink:0;align-items:stretch;padding-bottom:env(safe-area-inset-bottom,0);position:relative;z-index:10}
 .mob-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:none;background:none;color:var(--tx3);cursor:pointer;font-size:9px;font-weight:700;letter-spacing:.03em;touch-action:manipulation;padding:4px 2px;-webkit-user-select:none;user-select:none;border-top:2px solid transparent}
 .mob-btn:active{color:var(--green)}
 .mob-btn.active{color:var(--green);border-top-color:var(--green)}
 .mob-sep{width:1px;background:var(--bd);margin:10px 0;flex-shrink:0}
-/* Modals */
 .ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:999;align-items:flex-end;justify-content:center;backdrop-filter:blur(6px)}
 .ov.on{display:flex}
 @media(min-width:600px){.ov{align-items:center}}
@@ -2468,20 +2362,16 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .mbts button{flex:1;padding:14px;border-radius:11px;cursor:pointer;font-size:15px;font-weight:700;border:1px solid var(--bd);touch-action:manipulation}
 .mok{background:var(--green2);border-color:var(--green);color:#000}.mok:active{background:var(--green)}
 .mcancel{background:var(--bg3);color:var(--tx2);border-color:var(--bd)}.mcancel:active{background:var(--bg4)}
-/* Confirm dialog (substitui confirm() nativo) */
 #modal-confirm .mbox{text-align:center}
 #modal-confirm p{font-size:14px;color:var(--tx2);margin-bottom:20px;line-height:1.6}
 #modal-confirm .mbts button{padding:12px}
-/* Upload */
 .dz{border:2px dashed var(--bd);border-radius:12px;padding:28px 20px;text-align:center;margin-bottom:14px;cursor:pointer;font-size:14px;color:var(--tx3);touch-action:manipulation}
 .dz:active,.dz.over{border-color:var(--green);background:rgba(34,211,165,.06);color:var(--green)}
-/* Toast */
 .toast{position:fixed;bottom:calc(var(--bot) + 16px);left:50%;transform:translateX(-50%) translateY(10px);background:var(--bg2);border:1px solid var(--bd2);padding:10px 18px;border-radius:11px;font-size:13px;font-weight:500;z-index:9999;opacity:0;transition:.2s;pointer-events:none;white-space:nowrap;max-width:90vw;text-align:center}
 .toast.on{opacity:1;transform:translateX(-50%)}
 .toast.ok{border-color:var(--green);color:var(--green);background:rgba(10,14,23,.95)}
 .toast.err{border-color:var(--red);color:var(--red);background:rgba(10,14,23,.95)}
 .toast.info{border-color:var(--blue);color:var(--blue)}
-/* Desktop overrides */
 @media(min-width:768px){
   :root{--top:44px;--bot:0px}
   #side{position:relative;top:auto;bottom:auto;left:auto;transform:none!important;box-shadow:none;width:240px;border-right:1px solid var(--bd)}
@@ -2497,7 +2387,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   .tab .tx{opacity:0}.tab:hover .tx,.tab.on .tx{opacity:1}
   .tab:hover{background:var(--bg3)}
   .row:hover{background:var(--bg3)}
-  /* Desktop: row-acts hidden, show on hover */
   .row-acts{display:none}
   .row:hover .row-acts{display:flex}
   .toast{bottom:28px}
@@ -2518,9 +2407,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   #infobar{display:none!important}
   .tab .tx{opacity:1}
   #right{position:relative}
-  /* Mobile: row-acts sempre visíveis */
   .row-acts{display:flex}
-  /* Row menor para caber os botões */
   .row .lbl{font-size:12px}
 }
 </style>
@@ -2647,7 +2534,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
     Libs
   </button>
 </div>
-<!-- Context menu -->
 <div id="ctx-menu">
   <div class="ctx-item" id="ctx-open"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Abrir</div>
   <div class="ctx-item" id="ctx-nfi" style="display:none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg> Novo Arquivo Aqui</div>
@@ -2657,9 +2543,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   <div class="ctx-sep"></div>
   <div class="ctx-item danger" id="ctx-del"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg> Excluir</div>
 </div>
-<!-- Toast -->
 <div class="toast" id="toast"></div>
-<!-- Modal input -->
 <div class="ov" id="modal">
   <div class="mbox">
     <div class="mbox-handle"></div>
@@ -2671,7 +2555,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
     </div>
   </div>
 </div>
-<!-- Modal confirm (substitui confirm() nativo que pode não funcionar no WebView) -->
 <div class="ov" id="modal-confirm">
   <div class="mbox" style="text-align:center">
     <div class="mbox-handle"></div>
@@ -2683,7 +2566,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
     </div>
   </div>
 </div>
-<!-- Modal upload -->
 <div class="ov" id="modal-upload">
   <div class="mbox">
     <div class="mbox-handle"></div>
@@ -2717,7 +2599,6 @@ var ctxTarget = null;
 var longPressTimer = null;
 var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-// ── Confirm nativo substituído por modal (WebView Telegram não suporta confirm()) ──
 function appConfirm(msg, cb) {
   document.getElementById('confirm-msg').textContent = msg;
   document.getElementById('confirm-title').textContent = 'Confirmar';
@@ -2871,7 +2752,6 @@ function iconAdd()   { return '<svg width="13" height="13" viewBox="0 0 11 11" f
 function iconTrash() { return '<svg width="13" height="13" viewBox="0 0 11 11" fill="none"><path d="M1.5 3h8M4 3V2h3v1M2.5 3l.5 6h5l.5-6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
 function iconEdit()  { return '<svg width="13" height="13" viewBox="0 0 11 11" fill="none"><path d="M7.5 1.5l2 2L4 9H2V7L7.5 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
 
-// ── Build tree rows ──
 function buildRows(items, depth, parentGuides) {
   var h = '';
   for (var i = 0; i < items.length; i++) {
@@ -2893,7 +2773,6 @@ function buildRows(items, depth, parentGuides) {
       h += '<span style="flex-shrink:0;display:flex;align-items:center">'+folderIcon(o)+'</span>';
       h += '<span class="lbl d">'+hn+'</span>';
       h += '</div>';
-      // Ações da pasta — sempre visíveis no mobile
       h += '<div class="row-acts">';
       h += '<button class="ra" data-act="nfi" data-p="'+hp+'" title="Novo arquivo aqui">'+iconAdd()+'</button>';
       h += '<button class="ra" data-act="delf" data-p="'+hp+'" title="Excluir pasta">'+iconTrash()+'</button>';
@@ -2912,7 +2791,6 @@ function buildRows(items, depth, parentGuides) {
       h += '<span style="flex-shrink:0;display:flex;align-items:center">'+fileIcon(it.name)+'</span>';
       h += '<span class="lbl">'+hn+'</span>';
       h += '</div>';
-      // Ações do arquivo — sempre visíveis no mobile
       h += '<div class="row-acts">';
       h += '<button class="ra" data-act="qren" data-p="'+hp+'" title="Renomear">'+iconEdit()+'</button>';
       h += '<button class="ra" data-act="del1" data-p="'+hp+'" title="Excluir">'+iconTrash()+'</button>';
@@ -3020,11 +2898,9 @@ async function openFile(p) {
   renderTree();
   renderTabs();
   closeSide();
-  // No mobile, força focus e habilita seleção de texto
   setTimeout(function() {
     ed.focus();
     if (isMobile) {
-      // Habilita seleção de texto no Monaco mobile
       var edDom = document.querySelector('.monaco-editor .inputarea');
       if (edDom) {
         edDom.style.userSelect = 'text';
@@ -3308,7 +3184,6 @@ function initMonaco() {
       bracketPairColorization:{enabled:true},
       formatOnPaste:true,
       tabSize:2,
-      // Mobile: permite seleção e gestos nativos
       selectionClipboard: true,
       dragAndDrop: !isMobile,
       scrollbar:{
@@ -3323,7 +3198,6 @@ function initMonaco() {
       folding:!isMobile,
       overviewRulerLanes: isMobile?0:3,
       hideCursorInOverviewRuler:isMobile,
-      // Mobile: touch enabled
       mouseWheelZoom:false,
     });
     ed.onDidChangeCursorPosition(function(){ updateInfo(); });
@@ -3331,7 +3205,6 @@ function initMonaco() {
     ed.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS, doSave);
     ed.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyF, openFindBar);
 
-    // Mobile: habilita seleção de texto e colar
     if (isMobile) {
       var area = document.querySelector('.monaco-editor .inputarea');
       if (area) {
@@ -3342,9 +3215,8 @@ function initMonaco() {
         area.style.userSelect = 'text';
         area.style.webkitUserSelect = 'text';
         area.style.opacity = '1';
-        area.style.fontSize = '16px'; // evita zoom automático no iOS
+        area.style.fontSize = '16px';
       }
-      // Limpeza de overflow que bloqueia toque no Monaco
       var edContainer = document.querySelector('.monaco-editor');
       if (edContainer) {
         edContainer.style.userSelect = 'text';
@@ -3360,7 +3232,6 @@ document.addEventListener('DOMContentLoaded', function() {
   socket.on('connect', function(){ setStatus('Conectado','ok'); });
   socket.on('disconnect', function(){ setStatus('Desconectado','err'); });
 
-  // Fecha ctx menu ao clicar fora
   document.addEventListener('click', function(e) {
     if (!document.getElementById('ctx-menu').contains(e.target)) hideCtxMenu();
   });
@@ -3368,7 +3239,6 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!document.getElementById('ctx-menu').contains(e.target)) hideCtxMenu();
   }, {passive:true});
 
-  // Context menu actions
   document.getElementById('ctx-open').addEventListener('click', function(){ if(ctxTarget&&!ctxTarget.isDir) openFile(ctxTarget.p); hideCtxMenu(); });
   document.getElementById('ctx-nfi').addEventListener('click', function(){ if(ctxTarget&&ctxTarget.isDir) doNewFileIn(ctxTarget.p); hideCtxMenu(); });
   document.getElementById('ctx-ren').addEventListener('click', function(){ if(ctxTarget){ if(ctxTarget.isDir){openModal('Renomear pasta',ctxTarget.p.split('/').pop(),function(nn){var parts=ctxTarget.p.split('/');renFile(ctxTarget.p,parts.slice(0,-1).concat(nn).join('/'));});}else qRename(ctxTarget.p);} hideCtxMenu(); });
@@ -3385,7 +3255,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   });
 
-  // Tree: long press → ctx menu, click → ação
   var touchMoved = false;
   document.getElementById('tree').addEventListener('touchstart', function(e) {
     touchMoved = false;
@@ -3394,7 +3263,6 @@ document.addEventListener('DOMContentLoaded', function() {
     var p = row.dataset.p;
     var isDir = row.dataset.act === 'dir';
     if (!p) return;
-    // Não inicia long press se clicou num botão de ação
     if (e.target.closest('.row-acts')) return;
     var touch = e.touches[0];
     longPressTimer = setTimeout(function() {
@@ -3413,9 +3281,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer=null; }
   }, {passive:true});
 
-  // Tree click handler (funciona para touch e mouse)
   document.getElementById('tree').addEventListener('click', function(e) {
-    // Botões de ação inline (.ra)
     var ra = e.target.closest('.ra');
     if (ra) {
       e.stopPropagation();
@@ -3434,7 +3300,6 @@ document.addEventListener('DOMContentLoaded', function() {
       }
       return;
     }
-    // Clique na linha
     var row = e.target.closest('.row');
     if (!row) return;
     var a = row.dataset.act;
@@ -3444,7 +3309,6 @@ document.addEventListener('DOMContentLoaded', function() {
     else if (a==='open') openFile(p);
   });
 
-  // Tabs
   document.getElementById('tabs-bar').addEventListener('click', function(e) {
     var c = e.target.closest('[data-tc]');
     if (c) { e.stopPropagation(); closeTab(c.dataset.tc); return; }
@@ -3452,25 +3316,21 @@ document.addEventListener('DOMContentLoaded', function() {
     if (o) switchTo(o.dataset.to);
   });
 
-  // Packages
   document.getElementById('pkg-list').addEventListener('click', function(e) {
     var b = e.target.closest('[data-del]');
     if (b) uninstallPkg(b.dataset.del);
   });
 
-  // Search results
   document.getElementById('sr-list').addEventListener('click', function(e) {
     var b = e.target.closest('[data-sr]');
     if (b) openFile(b.dataset.sr);
   });
 
-  // Find bar
   document.getElementById('find-in').addEventListener('keydown', function(e) {
     if (e.key==='Enter') { e.shiftKey?findPrev():findNext(); }
     if (e.key==='Escape') closeFindBar();
   });
 
-  // Modals
   document.getElementById('modal-in').addEventListener('keydown', function(e) {
     if (e.key==='Enter') confirmModal();
     if (e.key==='Escape') closeModal();
@@ -3478,10 +3338,8 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('modal').addEventListener('click', function(e){ if(e.target===this) closeModal(); });
   document.getElementById('modal-upload').addEventListener('click', function(e){ if(e.target===this) closeUploadModal(); });
 
-  // Packages input
   document.getElementById('pkg-in').addEventListener('keydown', function(e){ if(e.key==='Enter') installPkg(); });
 
-  // Search
   var srT = null;
   document.getElementById('search-in').addEventListener('input', function() {
     clearTimeout(srT);
@@ -3492,7 +3350,6 @@ document.addEventListener('DOMContentLoaded', function() {
     srT = setTimeout(function(){ doSearch(q); }, 300);
   });
 
-  // Upload
   document.getElementById('upl2').addEventListener('change', function(e){
     uploadFiles(Array.from(e.target.files)); e.target.value='';
   });
@@ -3820,11 +3677,9 @@ app.post("/activate-api/activate", async (req, res) => {
   await saveActiveKeys(keys)
   await activateUser(chatId, inputKey, keys[inputKey].durationMs || (30 * 24 * 60 * 60 * 1000))
   saveAccepted(chatId)
-  // Garante que o cache seja limpo para o próximo /start refletir imediatamente
   activatedCache.delete(String(chatId))
   activatedCache.delete(Number(chatId))
   try {
-    // Envia direto o menu desbloqueado — sem precisar de /start
     const { caption, keyboard } = await buildHomeMenu(chatId, null)
     bot.sendMessage(chatId,
       `✅ *Conta ativada com sucesso!*\n\n🚀 *ARES HOST*\n\n` + caption,
@@ -3897,18 +3752,13 @@ function checkDiskAlert() {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// SISTEMA DE EXPIRAÇÃO EM TEMPO REAL
-// Verifica a cada 30s quem expirou → para bots → notifica
-// ─────────────────────────────────────────────────────────────
-const notifiedExpiry = new Set()   // evita spam de notificação
-const notifiedWarning = new Set()  // aviso de "vai expirar em breve"
+const notifiedExpiry = new Set()
+const notifiedWarning = new Set()
 
 async function checkExpirations() {
   if (!db) return
   try {
     const now = Date.now()
-    // Busca usuários que expiraram ou vão expirar em breve
     const users = await db.collection(USERS_COLLECTION).find({
       expiresAt: { $gt: 0 }
     }).toArray()
@@ -3917,7 +3767,6 @@ async function checkExpirations() {
       const cid = String(user.chatId)
       const left = user.expiresAt - now
 
-      // ── Aviso 1h antes da expiração ──
       const warnKey = `${cid}:${user.expiresAt}`
       if (left > 0 && left < 60 * 60 * 1000 && !notifiedWarning.has(warnKey)) {
         notifiedWarning.add(warnKey)
@@ -3928,14 +3777,11 @@ async function checkExpirations() {
         ).catch(() => {})
       }
 
-      // ── Conta expirada ──
       if (left <= 0) {
         const expKey = `${cid}:expired`
-        // Invalida cache
         activatedCache.delete(cid)
         activatedCache.delete(Number(cid))
 
-        // Para todos os bots do usuário
         const userBots = getUserBots(cid)
         let stopped = 0
         for (const botId of userBots) {
@@ -3946,7 +3792,6 @@ async function checkExpirations() {
           }
         }
 
-        // Notifica o usuário (apenas uma vez por expiração)
         if (!notifiedExpiry.has(expKey)) {
           notifiedExpiry.add(expKey)
           const activateUrl = `${DOMAIN}/activate?chatId=${cid}`
@@ -3966,7 +3811,6 @@ async function checkExpirations() {
           console.log(`⛔ Conta expirada: ${cid} — ${stopped} bot(s) parados`)
         }
 
-        // Notifica o owner se configurado
         const ownerId = OWNER_ID || ADMIN_ID
         if (ownerId && !notifiedExpiry.has(`owner:${expKey}`)) {
           notifiedExpiry.add(`owner:${expKey}`)
@@ -3982,7 +3826,6 @@ async function checkExpirations() {
   }
 }
 
-// Roda a cada 30 segundos
 setInterval(checkExpirations, 30 * 1000)
 setTimeout(checkExpirations, 5 * 1000)
 
