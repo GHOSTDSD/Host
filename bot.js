@@ -677,14 +677,12 @@ async function spawnBot(botId, instancePath) {
     FORCE_COLOR: "3",
     TERM: "xterm-256color",
     WHATSAPP_VERSION: "2.3000.1015901307",
-    NODE_TLS_REJECT_UNAUTHORIZED: "0", // Ignorar erros de SSL
-    HTTPS_PROXY: "", // Se tiver um proxy, coloque aqui
-    HTTP_PROXY: ""
+    NODE_TLS_REJECT_UNAUTHORIZED: "0",
   }
   
   updateMetaAccess(botId)
   
-  // --- PATCH SUPER AGGRESSIVO ---
+  // --- PATCH CORRIGIDO - Cria o patch.js no local correto ---
   try {
     // Procura por connect.js em qualquer subpasta
     const findConnectJs = (dir) => {
@@ -704,23 +702,25 @@ async function spawnBot(botId, instancePath) {
 
     const mainFile = findConnectJs(instancePath)
     if (mainFile && fs.existsSync(mainFile)) {
+      const mainDir = path.dirname(mainFile)
       let content = fs.readFileSync(mainFile, 'utf8')
       let modified = false
 
-      // SUBSTITUIÇÃO COMPLETA da criação do socket
-      if (content.includes('makeWASocket') || content.includes('makeWASocketDefault')) {
-        // Versão do patch que força configurações corretas
-        const patchCode = `
-// PATCH ANTI-405 - VERSÃO FORÇADA
+      // Criar o arquivo patch.js NO MESMO DIRETÓRIO do connect.js
+      const patchPath = path.join(mainDir, 'patch.js')
+      
+      // Conteúdo do patch.js
+      const patchCode = `
+// PATCH ANTI-405 - CORREÇÃO DEFINITIVA
 const originalMakeWASocket = require('@whiskeysockets/baileys').default;
 const { DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
-// Configurações que funcionam
+// Configurações que funcionam comprovadamente
 const WORKING_VERSION = [2, 3000, 1015901307];
 const WORKING_BROWSER = ['Chrome', 'Linux', '10.0.0'];
 
-// Substituir a função original
+// Sobrescrever a função makeWASocket globalmente
 const makeWASocket = (config) => {
   // Forçar versão correta
   config.version = WORKING_VERSION;
@@ -731,49 +731,72 @@ const makeWASocket = (config) => {
   config.defaultQueryTimeoutMs = 60000;
   config.generateHighQualityLinkPreview = false;
   
-  // Desabilitar logger se for o LoggerB problemático
-  if (config.logger && config.logger.constructor && config.logger.constructor.name === 'LoggerB') {
-    config.logger = pino({ level: 'silent' });
-  }
+  // Substituir logger problemático
+  config.logger = pino({ level: 'silent' });
   
-  // Tentar com e sem keepAlive
-  return originalMakeWASocket(config);
+  // Tentar criar socket
+  try {
+    return originalMakeWASocket(config);
+  } catch (err) {
+    console.error('Erro ao criar socket:', err);
+    throw err;
+  }
 };
 
-// Exportar a função patchada
-module.exports = { makeWASocket };
+// Substituir no module.exports
+const Baileys = require('@whiskeysockets/baileys');
+Baileys.default = makeWASocket;
+
+// Também substituir no cache do require
+const Module = require('module');
+const originalRequire = Module.prototype.require;
+Module.prototype.require = function(module) {
+  const result = originalRequire.call(this, module);
+  if (module.includes('@whiskeysockets/baileys') && result.default) {
+    result.default = makeWASocket;
+  }
+  return result;
+};
+
+console.log('✅ Patch anti-405 carregado com sucesso!');
 `
-        // Salvar como patch.js
-        const patchPath = path.join(instancePath, 'patch.js')
-        fs.writeFileSync(patchPath, patchCode)
-        
-        // Modificar o arquivo principal para usar o patch
+      
+      fs.writeFileSync(patchPath, patchCode)
+      writeLog(botId, instancePath, `✅ Arquivo patch.js criado em ${path.relative(instancePath, patchPath)}\r\n`)
+
+      // Modificar o arquivo principal para usar o patch
+      // Verificar se já não foi patchado
+      if (!content.includes('require(\'./patch\')') && !content.includes('require("./patch")')) {
+        // Adicionar require no topo do arquivo
         content = `// ARQUIVO PATCHADO PARA EVITAR ERRO 405
 require('./patch');
+
 ${content}`
         
         fs.writeFileSync(mainFile, content, 'utf8')
-        writeLog(botId, instancePath, `✅ Patch agressivo aplicado\r\n`)
+        writeLog(botId, instancePath, `✅ Arquivo ${path.basename(mainFile)} patchado com sucesso\r\n`)
         modified = true
       }
 
-      // Também modificar o package.json para garantir que o patch seja executado
+      // Modificar o package.json para garantir que o patch seja carregado
       const pkgPath = path.join(instancePath, 'package.json')
       if (fs.existsSync(pkgPath)) {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-        if (pkg.scripts && pkg.scripts.start) {
-          // Se o start for "node connect.js", mudar para "node patch.js"
-          if (pkg.scripts.start.includes('connect.js')) {
-            pkg.scripts.start = 'node patch.js'
-            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
-            writeLog(botId, instancePath, `✅ Script start modificado para usar patch\r\n`)
-          }
+        
+        // Garantir que pino está nas dependências
+        if (!pkg.dependencies) pkg.dependencies = {}
+        if (!pkg.dependencies.pino) {
+          pkg.dependencies.pino = "^8.0.0"
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
+          writeLog(botId, instancePath, `✅ pino adicionado ao package.json\r\n`)
         }
       }
 
       if (modified) {
         writeLog(botId, instancePath, `✅ Patch anti-405 aplicado com sucesso\r\n`)
       }
+    } else {
+      writeLog(botId, instancePath, `⚠️ Arquivo principal não encontrado para aplicar patch\r\n`)
     }
   } catch (err) {
     writeLog(botId, instancePath, `⚠️ Erro ao aplicar patch: ${err.message}\r\n`)
@@ -835,12 +858,6 @@ ${content}`
         }
         return name
       })
-
-      // Garantir que pino está instalado (necessário para o patch)
-      if (!allDeps.pino) {
-        depsToInstall.push('pino@^8.0.0')
-        writeLog(botId, instancePath, `📦 Adicionando pino como dependência\r\n`)
-      }
 
       writeLog(botId, instancePath, `📦 Package.json encontrado com ${Object.keys(allDeps).length} dependência(s)\r\n`)
       writeLog(botId, instancePath, `📋 Instalando versões específicas:\r\n`)
