@@ -683,13 +683,11 @@ async function spawnBot(botId, instancePath) {
     return
   }
 
-  // O cwd pode ser uma subpasta (ex: ARQUIVES/) onde está o package.json
   const workDir = start.cwd || instancePath
   if (workDir !== instancePath) {
     writeLog(botId, instancePath, `📁 Diretório de trabalho: ${path.relative(instancePath, workDir)}\r\n`)
   }
 
-  // node_modules pode estar na subpasta ou na raiz
   const nodeModulesPath = path.join(workDir, "node_modules")
   const pkgJsonPath = path.join(workDir, "package.json")
 
@@ -716,25 +714,50 @@ async function spawnBot(botId, instancePath) {
         }
       }
     }
-    // Lê todas as dependências do package.json e instala uma por uma
+
+    // Lê o package.json e extrai TODAS as dependências com suas versões EXATAS
     let depsToInstall = []
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"))
-      const all = Object.assign({}, pkg.dependencies || {}, pkg.devDependencies || {})
-      depsToInstall = Object.entries(all).map(([name, ver]) => {
-        // versão limpa: remove ^ ~ >= <= etc mas mantém tags como "latest"
-        const clean = String(ver).replace(/^[\^~>=<]+/, "").trim()
-        // se ficou vazio, vazio com git:, file:, link: — usa só o nome
-        if (!clean || clean.startsWith("git") || clean.startsWith("file") || clean.startsWith("link") || clean.startsWith("http")) {
-          return name
+      
+      // Junta dependencies e devDependencies
+      const allDeps = {
+        ...(pkg.dependencies || {}),
+        ...(pkg.devDependencies || {})
+      }
+      
+      // Converte para array no formato "nome@versão" PRESERVANDO a versão original
+      depsToInstall = Object.entries(allDeps).map(([name, version]) => {
+        // Limpa a versão mas MANTÉM o formato original (^, ~, etc)
+        const cleanVersion = String(version).trim()
+        
+        // Se for uma versão normal (ex: ^1.2.3, ~2.0.0, 3.1.5)
+        if (cleanVersion && !cleanVersion.startsWith('git') && 
+            !cleanVersion.startsWith('file') && !cleanVersion.startsWith('link') && 
+            !cleanVersion.startsWith('http')) {
+          return `${name}@${cleanVersion}`
         }
-        return `${name}@${clean}`
+        
+        // Se for URL, git, etc, instala só o nome (o npm vai resolver)
+        return name
       })
+
+      writeLog(botId, instancePath, `📦 Package.json encontrado com ${Object.keys(allDeps).length} dependência(s)\r\n`)
+      writeLog(botId, instancePath, `📋 Instalando versões específicas:\r\n`)
+      
+      // Mostra as versões que serão instaladas (para debug)
+      Object.entries(allDeps).forEach(([name, ver]) => {
+        writeLog(botId, instancePath, `  • ${name}@${ver}\r\n`)
+      })
+      writeLog(botId, instancePath, `\r\n`)
+
     } catch (e) {
       writeLog(botId, instancePath, `⚠️ Erro ao ler package.json: ${e.message}\r\n`)
     }
 
-    if (fs.existsSync(nodeModulesPath)) fs.rmSync(nodeModulesPath, { recursive: true, force: true })
+    if (fs.existsSync(nodeModulesPath)) {
+      fs.rmSync(nodeModulesPath, { recursive: true, force: true })
+    }
 
     if (!depsToInstall.length) {
       writeLog(botId, instancePath, "⚠️ Nenhuma dependência encontrada no package.json\r\n")
@@ -742,22 +765,44 @@ async function spawnBot(botId, instancePath) {
       return
     }
 
-    writeLog(botId, instancePath, `📦 Instalando ${depsToInstall.length} dependência(s) individualmente...\r\n`)
-    writeLog(botId, instancePath, `📋 ${depsToInstall.join(", ")}\r\n\r\n`)
-
+    writeLog(botId, instancePath, `📦 Instalando ${depsToInstall.length} dependência(s) com versões originais...\r\n`)
+    
     const npm = os.platform() === "win32" ? "npm.cmd" : "npm"
-    const installArgs = ["install", "--no-audit", "--no-fund", "--prefer-offline", "--legacy-peer-deps", ...depsToInstall]
+    
+    // Instalação com versões específicas do package.json
+    const installArgs = [
+      "install",
+      "--no-audit",
+      "--no-fund",
+      "--prefer-offline",
+      "--legacy-peer-deps",
+      ...depsToInstall
+    ]
+    
+    writeLog(botId, instancePath, `⚙️ Executando: npm ${installArgs.join(' ')}\r\n\r\n`)
+
     const install = pty.spawn(npm, installArgs, {
-      name: "xterm-color", cols: 160, rows: 48, cwd: workDir, env
+      name: "xterm-color", 
+      cols: 160, 
+      rows: 48, 
+      cwd: workDir, 
+      env
     })
+    
     install.onData(d => writeLog(botId, instancePath, d))
     install.onExit(async (code) => {
       if (code && code.exitCode !== 0) {
-        writeLog(botId, instancePath, `\r\n⚠️ npm install saiu com código ${code.exitCode}, tentando sem versões fixas...\r\n`)
-        // fallback: instala só os nomes sem versão
-        const names = depsToInstall.map(d => d.split("@")[0])
-        const fallback = pty.spawn(npm, ["install", "--no-audit", "--no-fund", "--legacy-peer-deps", ...names], {
-          name: "xterm-color", cols: 160, rows: 48, cwd: workDir, env
+        writeLog(botId, instancePath, `\r\n⚠️ Erro na instalação com versões específicas (código ${code.exitCode})\r\n`)
+        writeLog(botId, instancePath, `📦 Tentando instalar sem versões fixas...\r\n`)
+        
+        // Fallback: instala só os nomes (sem versão)
+        const namesOnly = depsToInstall.map(d => d.split('@')[0])
+        const fallback = pty.spawn(npm, ["install", "--no-audit", "--no-fund", "--legacy-peer-deps", ...namesOnly], {
+          name: "xterm-color", 
+          cols: 160, 
+          rows: 48, 
+          cwd: workDir, 
+          env
         })
         fallback.onData(d => writeLog(botId, instancePath, d))
         fallback.onExit(async () => {
