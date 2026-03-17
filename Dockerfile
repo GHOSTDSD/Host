@@ -1,4 +1,4 @@
-# Usando a versão específica do Node.js 24.13.1
+# Usando a versão específica do Node.js 24.13.1 (NÃO alpine)
 FROM node:24.13.1
 
 # Instalando o GIT e ferramentas essenciais
@@ -28,17 +28,5 @@ RUN mkdir -p instances && chmod 755 instances
 # Expondo a porta
 EXPOSE 3000
 
-# Comando para iniciar o Ares com informações de versão
-CMD ["sh", "-c", "\
-    echo '🚀 ARES HOST - Inicializando...' && \
-    echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' && \
-    echo '📌 Node.js version:' && \
-    node --version && \
-    echo '📦 NPM version:' && \
-    npm --version && \
-    echo '💻 Sistema:' && \
-    uname -a && \
-    echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' && \
-    echo '▶️  Iniciando servidor...' && \
-    node bot.js \
-"]
+# Comando para iniciar
+CMD ["sh", "-c", "echo '🚀 Node.js version:' && node --version && echo '▶️ Iniciando...' && node bot.js"]
