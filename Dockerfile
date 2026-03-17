@@ -1,5 +1,5 @@
-# Usando Node.js 24 LTS (Alpine - mais leve)
-FROM node:24-alpine
+# Usando Node.js 22 LTS (Alpine - mais leve)
+FROM node:22-alpine
 
 # Instalando dependências do sistema necessárias para compilar módulos nativos
 # Incluindo py3-setuptools para resolver o erro 'distutils'
@@ -19,7 +19,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Instalando dependências do Node.js
-RUN npm ci --only=production || npm install
+RUN npm install
 
 # Copiando o código fonte
 COPY . .
@@ -27,5 +27,5 @@ COPY . .
 # Expondo a porta
 EXPOSE 3000
 
-# Comando para iniciar a aplicação
+# Comando para iniciar o bot
 CMD ["node", "bot.js"]
