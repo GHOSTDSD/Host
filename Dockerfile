@@ -1,18 +1,19 @@
-# Usando a imagem oficial do Node.js 25 (latest)
-FROM node:25-alpine
+# Usando a imagem oficial do Node.js 24 LTS (Alpine - mais leve)
+FROM node:24-alpine
 
-# Instalando o GIT e ferramentas essenciais (versão Alpine)
+# Instalando o GIT e ferramentas essenciais para compilar módulos nativos
 RUN apk add --no-cache git python3 make g++ unzip
 
 # Criando o diretório do app
 WORKDIR /app
 
-# Copiando os arquivos do Ares
+# Copiando os arquivos de dependência primeiro (otimiza o cache do Docker)
 COPY package*.json ./
 
-# Instalando dependências
-RUN npm install -g npm@latest && npm install
+# Instalando dependências (sem necessidade de --build-from-source para a maioria)
+RUN npm install
 
+# Copiando o resto do código
 COPY . .
 
 # Expondo a porta
