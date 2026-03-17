@@ -679,6 +679,9 @@ async function spawnBot(botId, instancePath) {
     WHATSAPP_VERSION: "2.3000.1015901307",
     // REMOVER NODE_TLS_REJECT_UNAUTHORIZED - pode causar problemas
   }
+
+  writeLog(botId, instancePath, `🔍 Node.js version: ${process.version}\r\n`);
+  writeLog(botId, instancePath, `🔍 Platform: ${process.platform} ${process.arch}\r\n`);
   
   updateMetaAccess(botId)
   
