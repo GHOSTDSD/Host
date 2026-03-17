@@ -270,15 +270,32 @@ function getStats(chatId = null) {
   return { total, online, offline: total - online, ram, uptime: `${h}h ${m}m` }
 }
 
+// Função para obter a versão do Node.js
+function getNodeVersion() {
+  try {
+    return process.version
+  } catch {
+    return "desconhecida"
+  }
+}
+
 function aresBanner() {
   process.stdout.write("\x1Bc")
   const s = getStats()
+  const nodeVersion = getNodeVersion()
   let diskUsage = "N/A"
   try {
     const df = execSync("df -h / | tail -1").toString()
     const parts = df.split(/\s+/)
     diskUsage = `${parts[4]} (${parts[2]}/${parts[1]})`
   } catch {}
+  
+  // Verifica se a versão do Node.js é recente (>= 20.x.x)
+  const nodeMajorVersion = parseInt(nodeVersion.slice(1).split('.')[0])
+  const versionWarning = nodeMajorVersion >= 25 ? "✅ ULTRA NODE 25+" : 
+                         nodeMajorVersion >= 22 ? "✅ NODE 22+ ATUALIZADO" : 
+                         nodeMajorVersion >= 20 ? "✅ NODE ATUALIZADO" : "⚠️ NODE DESATUALIZADO!"
+  
   console.log(`\n🚀 ARES HOST (BACKBLAZE B2 + MONGODB)
 📦 BOTS: ${s.total}
 🟢 ONLINE: ${s.online}
@@ -287,7 +304,18 @@ function aresBanner() {
 ⏱ UPTIME: ${s.uptime}
 💿 DISCO: ${diskUsage}
 ☁️  BUCKET: ${BUCKET_CONFIG.bucketName}
-🍃 MONGODB: Conectado\n`)
+🍃 MONGODB: Conectado
+🟢 NODE: ${nodeVersion} ${versionWarning}\n`)
+  
+  if (nodeMajorVersion < 20) {
+    console.log("⚠️  ATENÇÃO: A versão do Node.js está desatualizada!")
+    console.log("   Versão atual:", nodeVersion)
+    console.log("   Versão recomendada: >= 22.x.x (última estável: 25.x.x)\n")
+  } else if (nodeMajorVersion >= 25) {
+    console.log("🎉 PARABÉNS! Você está usando a versão mais recente do Node.js (v25+)\n")
+  } else if (nodeMajorVersion >= 22) {
+    console.log("✅ Node.js 22+ detectado - versão LTS atual\n")
+  }
 }
 
 function getPackageHash(packagePath) {
@@ -2507,7 +2535,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
   <span id="unsaved" style="display:none;font-size:10px;color:var(--orange);margin:0 4px">&#9679;</span>
   <button class="tbtn" id="btn-ren" style="display:none" onclick="doRename()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg><span>Renomear</span></button>
   <button class="tbtn r" id="btn-del" style="display:none" onclick="doDel()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg><span>Excluir</span></button>
-  <button class="tbtn g" id="btn-save" style="display:none" onclick="doSave()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2 2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Salvar</button>
+  <button class="tbtn g" id="btn-save" style="display:none" onclick="doSave()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Salvar</button>
 </div>
 <div id="layout">
   <div id="side-ov" onclick="closeSide()"></div>
