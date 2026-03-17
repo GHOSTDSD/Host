@@ -1,31 +1,44 @@
-# Usando Node.js 22 LTS (Alpine - mais leve)
-FROM node:22-alpine
+# Usando a versão específica do Node.js 24.13.1
+FROM node:24.13.1
 
-# Instalando dependências do sistema necessárias para compilar módulos nativos
-# Incluindo py3-setuptools para resolver o erro 'distutils'
-RUN apk add --no-cache \
+# Instalando o GIT e ferramentas essenciais
+RUN apt-get update && apt-get install -y \
     git \
     python3 \
-    py3-setuptools \
     make \
     g++ \
     unzip \
-    && rm -rf /var/cache/apk/*
+    && rm -rf /var/lib/apt/lists/*
 
-# Criando diretório da aplicação
+# Criando o diretório do app
 WORKDIR /app
 
-# Copiando arquivos de dependência primeiro (otimiza cache do Docker)
+# Copiando os arquivos de dependências
 COPY package*.json ./
 
-# Instalando dependências do Node.js
+# Instalando dependências
 RUN npm install
 
 # Copiando o código fonte
 COPY . .
 
+# Criando diretórios necessários
+RUN mkdir -p instances && chmod 755 instances
+
 # Expondo a porta
 EXPOSE 3000
 
-# Comando para iniciar o bot
-CMD ["node", "bot.js"]
+# Comando para iniciar o Ares com informações de versão
+CMD ["sh", "-c", "\
+    echo '🚀 ARES HOST - Inicializando...' && \
+    echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' && \
+    echo '📌 Node.js version:' && \
+    node --version && \
+    echo '📦 NPM version:' && \
+    npm --version && \
+    echo '💻 Sistema:' && \
+    uname -a && \
+    echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' && \
+    echo '▶️  Iniciando servidor...' && \
+    node bot.js \
+"]
