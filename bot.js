@@ -628,6 +628,21 @@ function runInstance(botId, workDir, botPort, env, start) {
   aresBanner()
 }
 
+async function afterInstall(botId, instancePath, workDir, nodeModulesPath, pkgJsonPath, botPort, env, start) {
+  if (fs.existsSync(nodeModulesPath)) {
+    if (checkNativeModules(nodeModulesPath)) {
+      writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n")
+      await rebuildNativeModules(workDir)
+    }
+    const packageHash = getPackageHash(pkgJsonPath)
+    if (packageHash) {
+      writeLog(botId, instancePath, "📤 Salvando node_modules no bucket...\r\n")
+      await uploadNodeModulesToBucket(botId, nodeModulesPath, packageHash)
+    }
+  }
+  runInstance(botId, workDir, botPort, env, start)
+}
+
 async function spawnBot(botId, instancePath) {
   if (activeBots[botId]) {
     try { activeBots[botId].process.kill() } catch {}
@@ -681,27 +696,56 @@ async function spawnBot(botId, instancePath) {
         }
       }
     }
-    writeLog(botId, instancePath, "📦 Instalando dependencias...\r\n")
+    // Lê todas as dependências do package.json e instala uma por uma
+    let depsToInstall = []
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"))
+      const all = Object.assign({}, pkg.dependencies || {}, pkg.devDependencies || {})
+      depsToInstall = Object.entries(all).map(([name, ver]) => {
+        // versão limpa: remove ^ ~ >= <= etc mas mantém tags como "latest"
+        const clean = String(ver).replace(/^[\^~>=<]+/, "").trim()
+        // se ficou vazio, vazio com git:, file:, link: — usa só o nome
+        if (!clean || clean.startsWith("git") || clean.startsWith("file") || clean.startsWith("link") || clean.startsWith("http")) {
+          return name
+        }
+        return `${name}@${clean}`
+      })
+    } catch (e) {
+      writeLog(botId, instancePath, `⚠️ Erro ao ler package.json: ${e.message}\r\n`)
+    }
+
     if (fs.existsSync(nodeModulesPath)) fs.rmSync(nodeModulesPath, { recursive: true, force: true })
-    const install = pty.spawn(
-      os.platform() === "win32" ? "npm.cmd" : "npm",
-      ["install", "--production", "--no-audit", "--no-fund"],
-      { name: "xterm-color", cols: 80, rows: 40, cwd: workDir, env }
-    )
-    install.onData(d => writeLog(botId, instancePath, d))
-    install.onExit(async () => {
-      if (fs.existsSync(nodeModulesPath)) {
-        if (checkNativeModules(nodeModulesPath)) {
-          writeLog(botId, instancePath, "🔄 Recompilando módulos nativos...\r\n")
-          await rebuildNativeModules(workDir)
-        }
-        const packageHash = getPackageHash(pkgJsonPath)
-        if (packageHash) {
-          writeLog(botId, instancePath, "📤 Salvando node_modules no bucket...\r\n")
-          await uploadNodeModulesToBucket(botId, nodeModulesPath, packageHash)
-        }
-      }
+
+    if (!depsToInstall.length) {
+      writeLog(botId, instancePath, "⚠️ Nenhuma dependência encontrada no package.json\r\n")
       runInstance(botId, workDir, botPort, env, start)
+      return
+    }
+
+    writeLog(botId, instancePath, `📦 Instalando ${depsToInstall.length} dependência(s) individualmente...\r\n`)
+    writeLog(botId, instancePath, `📋 ${depsToInstall.join(", ")}\r\n\r\n`)
+
+    const npm = os.platform() === "win32" ? "npm.cmd" : "npm"
+    const installArgs = ["install", "--no-audit", "--no-fund", "--prefer-offline", "--legacy-peer-deps", ...depsToInstall]
+    const install = pty.spawn(npm, installArgs, {
+      name: "xterm-color", cols: 80, rows: 40, cwd: workDir, env
+    })
+    install.onData(d => writeLog(botId, instancePath, d))
+    install.onExit(async (code) => {
+      if (code && code.exitCode !== 0) {
+        writeLog(botId, instancePath, `\r\n⚠️ npm install saiu com código ${code.exitCode}, tentando sem versões fixas...\r\n`)
+        // fallback: instala só os nomes sem versão
+        const names = depsToInstall.map(d => d.split("@")[0])
+        const fallback = pty.spawn(npm, ["install", "--no-audit", "--no-fund", "--legacy-peer-deps", ...names], {
+          name: "xterm-color", cols: 80, rows: 40, cwd: workDir, env
+        })
+        fallback.onData(d => writeLog(botId, instancePath, d))
+        fallback.onExit(async () => {
+          await afterInstall(botId, instancePath, workDir, nodeModulesPath, pkgJsonPath, botPort, env, start)
+        })
+        return
+      }
+      await afterInstall(botId, instancePath, workDir, nodeModulesPath, pkgJsonPath, botPort, env, start)
     })
   } else {
     runInstance(botId, workDir, botPort, env, start)
