@@ -1,24 +1,31 @@
-# Usando a imagem oficial do Node.js 24 LTS (Alpine - mais leve)
+# Usando Node.js 24 LTS (Alpine - mais leve)
 FROM node:24-alpine
 
-# Instalando o GIT e ferramentas essenciais para compilar módulos nativos
-# Incluindo py3-setuptools que fornece o módulo 'distutils' necessário
-RUN apk add --no-cache git python3 py3-setuptools make g++ unzip
+# Instalando dependências do sistema necessárias para compilar módulos nativos
+# Incluindo py3-setuptools para resolver o erro 'distutils'
+RUN apk add --no-cache \
+    git \
+    python3 \
+    py3-setuptools \
+    make \
+    g++ \
+    unzip \
+    && rm -rf /var/cache/apk/*
 
-# Criando o diretório do app
+# Criando diretório da aplicação
 WORKDIR /app
 
-# Copiando os arquivos de dependência primeiro (otimiza o cache do Docker)
+# Copiando arquivos de dependência primeiro (otimiza cache do Docker)
 COPY package*.json ./
 
-# Instalando dependências
-RUN npm install
+# Instalando dependências do Node.js
+RUN npm ci --only=production || npm install
 
-# Copiando o resto do código
+# Copiando o código fonte
 COPY . .
 
 # Expondo a porta
 EXPOSE 3000
 
-# Comando para iniciar o Ares
+# Comando para iniciar a aplicação
 CMD ["node", "bot.js"]
