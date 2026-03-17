@@ -676,12 +676,15 @@ async function spawnBot(botId, instancePath) {
     NODE_ENV: "production",
     FORCE_COLOR: "3",
     TERM: "xterm-256color",
-    WHATSAPP_VERSION: "2.3000.1015901307"
+    WHATSAPP_VERSION: "2.3000.1015901307",
+    NODE_TLS_REJECT_UNAUTHORIZED: "0", // Ignorar erros de SSL
+    HTTPS_PROXY: "", // Se tiver um proxy, coloque aqui
+    HTTP_PROXY: ""
   }
   
   updateMetaAccess(botId)
   
-  // --- PATCH ANTI-405: Modificar o arquivo connect.js antes de executar ---
+  // --- PATCH SUPER AGGRESSIVO ---
   try {
     // Procura por connect.js em qualquer subpasta
     const findConnectJs = (dir) => {
@@ -692,7 +695,7 @@ async function spawnBot(botId, instancePath) {
         if (fs.statSync(fullPath).isDirectory()) {
           const found = findConnectJs(fullPath)
           if (found) return found
-        } else if (file === 'connect.js' || file === 'index.js' || file === 'main.js' || file === 'bot.js' || file === 'app.js' || file === 'server.js') {
+        } else if (file === 'connect.js' || file === 'index.js' || file === 'main.js' || file === 'bot.js') {
           return fullPath
         }
       }
@@ -704,57 +707,72 @@ async function spawnBot(botId, instancePath) {
       let content = fs.readFileSync(mainFile, 'utf8')
       let modified = false
 
-      // Adicionar versão fixa no makeWASocket
-      if (!content.includes('version: [2, 3000, 1015901307]')) {
-        content = content.replace(
-          /makeWASocket\(\s*\{/g, 
-          'makeWASocket({\n    version: [2, 3000, 1015901307],'
-        )
+      // SUBSTITUIÇÃO COMPLETA da criação do socket
+      if (content.includes('makeWASocket') || content.includes('makeWASocketDefault')) {
+        // Versão do patch que força configurações corretas
+        const patchCode = `
+// PATCH ANTI-405 - VERSÃO FORÇADA
+const originalMakeWASocket = require('@whiskeysockets/baileys').default;
+const { DisconnectReason } = require('@whiskeysockets/baileys');
+const pino = require('pino');
+
+// Configurações que funcionam
+const WORKING_VERSION = [2, 3000, 1015901307];
+const WORKING_BROWSER = ['Chrome', 'Linux', '10.0.0'];
+
+// Substituir a função original
+const makeWASocket = (config) => {
+  // Forçar versão correta
+  config.version = WORKING_VERSION;
+  config.browser = WORKING_BROWSER;
+  config.syncFullHistory = false;
+  config.markOnlineOnConnect = true;
+  config.keepAliveIntervalMs = 25000;
+  config.defaultQueryTimeoutMs = 60000;
+  config.generateHighQualityLinkPreview = false;
+  
+  // Desabilitar logger se for o LoggerB problemático
+  if (config.logger && config.logger.constructor && config.logger.constructor.name === 'LoggerB') {
+    config.logger = pino({ level: 'silent' });
+  }
+  
+  // Tentar com e sem keepAlive
+  return originalMakeWASocket(config);
+};
+
+// Exportar a função patchada
+module.exports = { makeWASocket };
+`
+        // Salvar como patch.js
+        const patchPath = path.join(instancePath, 'patch.js')
+        fs.writeFileSync(patchPath, patchCode)
+        
+        // Modificar o arquivo principal para usar o patch
+        content = `// ARQUIVO PATCHADO PARA EVITAR ERRO 405
+require('./patch');
+${content}`
+        
+        fs.writeFileSync(mainFile, content, 'utf8')
+        writeLog(botId, instancePath, `✅ Patch agressivo aplicado\r\n`)
         modified = true
       }
 
-      // Corrigir browser
-      if (!content.includes("browser: ['Ubuntu', 'Chrome', '20.0.04']")) {
-        content = content.replace(
-          /browser:\s*\[[^\]]*\]/g,
-          "browser: ['Ubuntu', 'Chrome', '20.0.04']"
-        )
-        modified = true
-      }
-
-      // Adicionar keepAlive
-      if (!content.includes('keepAliveIntervalMs:')) {
-        content = content.replace(
-          /makeWASocket\(\s*\{/g,
-          'makeWASocket({\n    keepAliveIntervalMs: 25000,\n    defaultQueryTimeoutMs: 60000,'
-        )
-        modified = true
-      }
-
-      // Remover logger problemático se existir
-      if (content.includes('logger: LoggerB')) {
-        content = content.replace(
-          /logger:\s*LoggerB\.child[^,]*/g,
-          "logger: require('pino')({ level: 'silent' })"
-        )
-        modified = true
+      // Também modificar o package.json para garantir que o patch seja executado
+      const pkgPath = path.join(instancePath, 'package.json')
+      if (fs.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+        if (pkg.scripts && pkg.scripts.start) {
+          // Se o start for "node connect.js", mudar para "node patch.js"
+          if (pkg.scripts.start.includes('connect.js')) {
+            pkg.scripts.start = 'node patch.js'
+            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
+            writeLog(botId, instancePath, `✅ Script start modificado para usar patch\r\n`)
+          }
+        }
       }
 
       if (modified) {
-        fs.writeFileSync(mainFile, content, 'utf8')
-        writeLog(botId, instancePath, `✅ Patch anti-405 aplicado em ${path.basename(mainFile)}\r\n`)
-      }
-
-      // Criar arquivo .env com configurações adicionais se não existir
-      const envPath = path.join(instancePath, '.env')
-      if (!fs.existsSync(envPath)) {
-        const envContent = `NODE_ENV=production
-WHATSAPP_VERSION=2.3000.1015901307
-FORCE_COLOR=3
-TERM=xterm-256color
-`
-        fs.writeFileSync(envPath, envContent)
-        writeLog(botId, instancePath, `✅ Arquivo .env criado\r\n`)
+        writeLog(botId, instancePath, `✅ Patch anti-405 aplicado com sucesso\r\n`)
       }
     }
   } catch (err) {
@@ -817,6 +835,12 @@ TERM=xterm-256color
         }
         return name
       })
+
+      // Garantir que pino está instalado (necessário para o patch)
+      if (!allDeps.pino) {
+        depsToInstall.push('pino@^8.0.0')
+        writeLog(botId, instancePath, `📦 Adicionando pino como dependência\r\n`)
+      }
 
       writeLog(botId, instancePath, `📦 Package.json encontrado com ${Object.keys(allDeps).length} dependência(s)\r\n`)
       writeLog(botId, instancePath, `📋 Instalando versões específicas:\r\n`)
