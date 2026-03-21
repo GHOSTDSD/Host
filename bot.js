@@ -617,7 +617,7 @@ function rebuildNativeModules(instancePath) {
 }
 
 const crashCounters = {}
-const CRASH_RESET_MS = 60 * 1000 // reseta contador após 1 minuto sem crash
+const CRASH_RESET_MS = 60 * 1000
 
 function runInstance(botId, workDir, botPort, env, start) {
   const cwd = start.cwd || workDir
@@ -635,26 +635,30 @@ function runInstance(botId, workDir, botPort, env, start) {
       try { fs.rmSync(nmPath, { recursive: true, force: true }) } catch {}
     }
 
-    // Backoff exponencial para evitar loop de crashes
+    // Backoff exponencial — evita loop de crashes infinito
     const uptime = Date.now() - startedAt
     if (!crashCounters[botId]) crashCounters[botId] = { count: 0, lastCrash: 0 }
     const counter = crashCounters[botId]
 
-    if (Date.now() - counter.lastCrash > CRASH_RESET_MS) {
-      counter.count = 0
-    }
+    if (Date.now() - counter.lastCrash > CRASH_RESET_MS) counter.count = 0
     counter.count++
     counter.lastCrash = Date.now()
 
-    // Delays: 3s, 10s, 30s, 60s, 120s (máximo)
+    // 3s → 10s → 30s → 60s → 120s (máximo)
     const delays = [3000, 10000, 30000, 60000, 120000]
-    const delay = uptime < 5000
+    const delay = uptime < 8000
       ? delays[Math.min(counter.count - 1, delays.length - 1)]
       : 3000
 
-    if (counter.count > 1) {
-      writeLog(botId, workDir, `\r\n⚠️ Bot crashou (${counter.count}x). Reiniciando em ${delay/1000}s...\r\n`)
-    }
+    writeLog(botId, workDir, `\r\n⚠️ Bot encerrado (tentativa ${counter.count}). Reiniciando em ${delay/1000}s...\r\n`)
+
+    // Reinicia automaticamente após o delay
+    setTimeout(() => {
+      const instancePath = path.join(BASE_PATH, botId)
+      if (fs.existsSync(instancePath) && !activeBots[botId]) {
+        spawnBot(botId, instancePath)
+      }
+    }, delay)
 
     aresBanner()
   })
@@ -682,12 +686,21 @@ async function spawnBot(botId, instancePath) {
     delete activeBots[botId]
   }
   const botPort = getFreePort()
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.PROXY_URL || ""
   const env = {
     ...process.env,
     PORT: botPort.toString(),
     NODE_ENV: "production",
     FORCE_COLOR: "3",
-    TERM: "xterm-256color"
+    TERM: "xterm-256color",
+    ...(proxyUrl ? {
+      HTTPS_PROXY: proxyUrl,
+      HTTP_PROXY: proxyUrl,
+      https_proxy: proxyUrl,
+      http_proxy: proxyUrl,
+      GLOBAL_AGENT_HTTP_PROXY: proxyUrl,
+      GLOBAL_AGENT_HTTPS_PROXY: proxyUrl,
+    } : {})
   }
   updateMetaAccess(botId)
   const start = detectStart(instancePath)
